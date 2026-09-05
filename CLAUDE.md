@@ -18,9 +18,10 @@ Code blocks, tables and technical names are exempt from the vocabulary rules.
 
 ## Tools
 
-The repository holds the `caveman` and `ponytail` skills in `.claude/skills/`. Each skill directory has its MIT license.
+The repository holds the `caveman`, `ponytail` and `ms-rust` skills in `.claude/skills/`. Each skill directory has its MIT license. The files in `.claude/skills/` come from other projects. The Simplified Technical English rule does not apply to them.
 
 - `caveman` makes the assistant replies short. Type `/caveman` to start it.
 - `ponytail` makes the assistant write the smallest code that does the work. Type `/ponytail` to start it.
+- `ms-rust` applies the Microsoft Pragmatic Rust Guidelines to each `.rs` file. The skill starts on its own before Rust work.
 
-Upstream sources: [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) and [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail).
+Upstream sources: [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman), [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail) and [lx-industries/ms-rust-skill](https://gitlab.com/lx-industries/ms-rust-skill).
