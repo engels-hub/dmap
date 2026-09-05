@@ -63,7 +63,7 @@ The grid is a separate overlay layer (`GridLayer`). A fragment shader draws the 
 GridConfig {
     kind:      Square | HexPointyTop | HexFlatTop | None,
     cell_size: f32,         // inches; square: edge length, hex: flat-to-flat width (default 1.0)
-    offset:    Vec2,        // world inches, aligns with the printed grid of a map
+    offset:    Vec2,        // world inches
     line_width: f32,        // TV pixels, so lines stay sharp at any zoom
     color:     Rgba,
     opacity:   f32,
@@ -74,7 +74,7 @@ GridConfig {
 
 - **Look**: the line width, the color, the opacity, the style, and the screen that shows the grid. Use "DM only" when the map has a printed grid and the DM wants the snap and the cell count.
 - **Size**: `cell_size` in inches. The default is 1.0, so one cell is one real inch at 100 % zoom. All values are permitted, for example 0.5 or 1.5.
-- **Alignment**: the action "align to map" sets `offset` and `cell_size` from the `grid_px` and the transform of the selected map. Then the overlay lines are on the printed lines of the map. The DM can also drag the offset by hand.
+- **Alignment**: the DM places each map on the canvas by hand. The program does not move the grid or the map to align them.
 - **Hex**: pointy-top and flat-top. The hex math uses cube and axial coordinates in `core::grid`. The shader and the snap use the same math. Foundry hex scenes give the type (`grid.type` 2 to 5) and the size. Foundry measures a hex differently from flat-to-flat, so the importer converts the value.
 - **Snap** is a `Grid` trait in `core`:
   ```rust
@@ -229,7 +229,7 @@ Each milestone ends with a program that works at the table.
 
 **M1: canvas and TV box (2 weeks)**
 - The DM camera with pan and zoom.
-- The square grid with look settings and align-to-map.
+- The square grid with look settings and a canvas background color.
 - PNG and JPEG import.
 - The map transform tool: move, turn, scale, flip, snap.
 - The TV config with the calibration overlay.
