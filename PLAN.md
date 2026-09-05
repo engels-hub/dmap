@@ -1,70 +1,70 @@
-# TableMap — DnD TV map display: implementation plan
+# dmap: implementation plan
 
-## 1. Goals and constraints
+## 1. Goals and limits
 
-- Linux native first, Windows by recompile. No web stack, no Electron.
-- Two windows from one process: **DM window** (editor UI) and **TV window** (borderless fullscreen on the table display).
-- Infinite canvas holding many maps; DM chooses what the TV shows by moving a "TV box".
-- Physical calibration: 1 world unit = 1 real inch on the TV, so a 5 ft grid square is exactly 1 inch and minis fit.
-- Lighting simulated on the GPU with walls from Foundry / Universal VTT scenes.
-- Performance first, extension points second, features third.
+- The program runs on Linux. A new build of the same code runs on Windows. The program does not use a web stack or Electron.
+- One process opens two windows. The DM window is the editor. The TV window has no border and fills the TV.
+- The canvas has no limits and holds many maps. The DM moves a "TV box" to select what the TV shows.
+- The program uses the real size of the TV. One world unit is one real inch on the TV. One 5 ft grid cell is one inch, so miniatures fit the cells.
+- The GPU calculates the light. The walls come from Foundry scenes or Universal VTT files.
+- Performance is the first priority. Extension points are the second priority. Features are the third priority.
 
 ## 2. Stack decision
 
-**Rust + wgpu + winit + egui.**
+The stack is **Rust + wgpu + winit + egui**.
 
-| Concern | Choice | Why |
+| Item | Choice | Reason |
 |---|---|---|
-| Language | Rust | Cross-compiles to Windows with no code changes; memory safety around a threaded video decoder and GPU uploads. |
-| GPU | wgpu | Vulkan on Linux, DX12/Vulkan on Windows, same shader source (WGSL). Compute shaders for lighting. |
-| Windowing | winit | Multi-window, multi-monitor, fullscreen on a chosen monitor, works on X11 and Wayland. |
-| DM UI | egui (`egui-wgpu`, `egui-winit`) | Immediate-mode, renders into the same wgpu device, trivial to add panels as features grow. |
-| Images | `image` crate (PNG/JPEG/WebP) | Decode on a worker thread, upload as mipmapped textures. |
-| Vector strokes | `lyon` | Tessellates polylines/shapes to triangles; strokes become GPU meshes. |
-| Video | `ffmpeg-next` behind a cargo feature | Decode on a thread, upload frames as textures. Optional, so a build without ffmpeg still works. |
-| Serialization | `serde` + JSON (project file) | Foundry and UVTT are JSON anyway. |
+| Language | Rust | The same code compiles for Windows. Rust prevents memory errors around the video thread and the GPU uploads. |
+| GPU | wgpu | Vulkan on Linux, DX12 or Vulkan on Windows, one shader source (WGSL). Compute shaders calculate the light. |
+| Windows | winit | Many windows, many monitors, full screen on a selected monitor. Works on X11 and Wayland. |
+| DM UI | egui (`egui-wgpu`, `egui-winit`) | Immediate mode. Draws with the same wgpu device. New panels are easy to add. |
+| Images | `image` crate (PNG, JPEG, WebP) | A worker thread decodes the file. The program uploads the image as a texture with mipmaps. |
+| Vector strokes | `lyon` | Converts lines and shapes to triangles. Strokes become GPU meshes. |
+| Video | `ffmpeg-next` behind a cargo feature | A thread decodes the video. The program uploads each frame as a texture. The feature is optional. |
+| Files | `serde` + JSON | Foundry and UVTT files are also JSON. |
 
-Rejected alternatives, briefly:
-- **Bevy**: gives multi-window, ECS and plugins for free, but custom lighting still means custom render graph nodes, and version churn plus compile times are a tax on a one-person project. Revisit only if the custom renderer becomes a burden.
-- **C++ + SDL2 + OpenGL/Vulkan**: fully viable, but the Windows build story (deps, CMake, vcpkg) costs more than it returns here.
+Other options and the reasons against them:
+- **Bevy** gives many windows, ECS and plugins. Custom light still needs custom render graph nodes. Version changes and compile times cost too much for one person. Use Bevy only if the custom renderer becomes too large.
+- **C++ with SDL2 and OpenGL or Vulkan** works. The Windows build with CMake and vcpkg costs more than it gives.
 
-## 3. Coordinate model, cameras and calibration
+## 3. Coordinates, cameras and TV calibration
 
-- **World space**: 2D, f64 origin offset + f32 local coordinates on the GPU to avoid precision loss far from origin. Unit = **inches**.
-- **Map scale**: each map stores `grid_px` (pixels per grid square). World scale = `1 / grid_px` so one square = 1 inch. Foundry and UVTT provide this; for plain PNG/JPEG the DM sets it with a "click two grid corners" tool or types it.
-- **TV calibration** (stored in project):
-  - Resolution `W x H` in pixels.
-  - One of: pixels per inch (PPI), or diagonal in inches → `PPI = sqrt(W² + H²) / diagonal`, or physical width/height in mm.
-  - TV box world size at 100 % zoom = `(W / PPI, H / PPI)` inches.
-  - A calibration overlay draws a 1-inch grid and a 6-inch ruler on the TV so the DM can check with a real ruler.
+- **World space** is 2D. The camera has an f64 offset. The GPU gets f32 coordinates relative to the camera. This prevents precision loss far from the origin. The unit is the **inch**.
+- **Map scale**: each map stores `grid_px`, the number of pixels in one grid cell. The world scale is `1 / grid_px`, so one cell is one inch. Foundry and UVTT files give this value. For a PNG or a JPEG, the DM clicks two grid corners or types the value.
+- **TV calibration** is stored in the project file:
+  - The resolution `W x H` in pixels.
+  - One of these values: pixels per inch (PPI), the diagonal in inches, or the width and height in mm. The formula for the diagonal is `PPI = sqrt(W² + H²) / diagonal`.
+  - At 100 % zoom the TV box is `(W / PPI, H / PPI)` inches in world space.
+  - A calibration overlay shows a 1 inch grid and a 6 inch ruler on the TV. The DM compares this with a real ruler.
 
 ### 3.1 Two independent cameras
 
-| Camera | What it is | Controlled by |
+| Camera | Description | Controls |
 |---|---|---|
-| **DM camera** | Pan/zoom of the editor viewport. Pure editor state, never saved to the TV. | Scroll to zoom, space+drag / middle-drag to pan, Home to frame everything, `T` to frame the TV box. |
-| **TV camera** | The **TV box**: a rectangle in world space with position, rotation and zoom. | Dragging, rotating and scaling the box on the DM screen. Arrow keys nudge by one grid cell. |
+| **DM camera** | The pan and the zoom of the editor. This is editor state only. The TV does not get it. | Scroll to zoom. Space+drag or middle drag to pan. Home shows all. `T` shows the TV box. |
+| **TV camera** | The **TV box**: a rectangle in world space with a position, a rotation and a zoom. | Drag, turn and scale the box on the DM screen. The arrow keys move the box one grid cell. |
 
-The DM camera and the TV box are unrelated: the DM can zoom out to see the whole canvas while the TV keeps showing a 1:1 room, or zoom into a corner while the TV shows the wide map. Optional "follow TV" toggle locks the DM camera to the box for the DM who prefers to see what the players see.
+The DM camera and the TV box are not related. The DM can zoom out to see the full canvas while the TV shows one room at 1:1. The DM can zoom in to one corner while the TV shows the full map. A "follow TV" option locks the DM camera to the TV box.
 
-### 3.2 TV zoom and snapping
+### 3.2 TV zoom and snap
 
-- Zoom is a scalar on the TV box. `zoom = 1.0` (100 %) means the box is exactly `W/PPI × H/PPI` inches and a grid cell is one physical inch on the TV.
-- Scaling the box with its corner handles changes zoom. Bigger box → more world on screen → zoom below 100 %; smaller box → zoom above 100 %. Aspect ratio always locked to the TV.
-- **Snap to 100 %**: when a handle drag ends (or during the drag, configurable) with zoom within `snap_threshold` of 1.0, it snaps to exactly 1.0. `snap_threshold` lives in settings (default 8 %) together with an optional list of extra snap levels (50 %, 200 %) and the modifier key that suppresses snapping (`Alt` by default). The box outline changes color while snapped so the DM can see 1:1 is active.
-- Zoom is also editable as a number and via `Ctrl`+scroll while the TvBox tool is active. The zoom value is shown next to the box.
-- Scaling the box never changes map scale; it only changes how much world the TV shows.
+- The zoom is one number on the TV box. At `zoom = 1.0` (100 %) the box is `W/PPI × H/PPI` inches. One grid cell is one real inch on the TV.
+- The corner handles of the box change the zoom. A larger box shows more world, so the zoom is less than 100 %. A smaller box gives a zoom of more than 100 %. The aspect ratio is always the ratio of the TV.
+- **Snap to 100 %**: the drag stops. If the zoom is in `snap_threshold` of 1.0, the zoom snaps to 1.0. A setting also permits the snap during the drag. The setting `snap_threshold` has a default of 8 %. Settings also hold an optional list of other snap levels (50 %, 200 %). Settings hold the key that stops the snap. The default key is `Alt`. The box outline changes color when the zoom is at 100 %.
+- The DM can type the zoom as a number. `Ctrl`+scroll changes the zoom when the TvBox tool is active. The zoom value is shown next to the box.
+- A change of the box size does not change the map scale. It changes only the area that the TV shows.
 
 ## 4. Grid
 
-The grid is its own overlay layer (`GridLayer`), drawn procedurally in a fragment shader in world space, so it is infinite and costs one fullscreen pass regardless of size. It is independent of any map's `grid_px`; maps carry their pixel scale, the grid overlay carries how the table looks.
+The grid is a separate overlay layer (`GridLayer`). A fragment shader draws the grid in world space. The grid has no limits and costs one full-screen pass. The grid is not related to the `grid_px` of a map. A map holds its pixel scale. The grid overlay holds the look of the table.
 
 ```
 GridConfig {
     kind:      Square | HexPointyTop | HexFlatTop | None,
     cell_size: f32,         // inches; square: edge length, hex: flat-to-flat width (default 1.0)
-    offset:    Vec2,        // world inches, to align with a map's own printed grid
-    line_width: f32,        // in TV pixels, so it stays crisp at any zoom
+    offset:    Vec2,        // world inches, aligns with the printed grid of a map
+    line_width: f32,        // TV pixels, so lines stay sharp at any zoom
     color:     Rgba,
     opacity:   f32,
     style:     Solid | Dashed | Dots,   // dots = only cell corners
@@ -72,26 +72,26 @@ GridConfig {
 }
 ```
 
-- **Appearance**: line width, color, opacity, style, and which screen shows it. DM-only is handy when the map already has a printed grid but the DM wants snapping and cell counting.
-- **Size**: `cell_size` in inches. Default 1.0 so one cell is one physical inch at 100 % zoom. Any value is allowed (e.g. 0.5 for gridless-feel or 1.5 for large minis).
-- **Alignment**: an "align to map" action sets `offset` and `cell_size` from the selected map's `grid_px` and transform, so the overlay lines fall on the map's printed lines. Manual offset drag as fallback.
-- **Hex** (nice to have, but cheap because it is only shader math): pointy-top and flat-top variants. Hex math in cube/axial coordinates lives in `core::grid` and is used for both the shader's distance-to-edge function and for snapping. Foundry hex scenes import their type (`grid.type` 2–5 → row/column hexes) and size; Foundry measures hex size differently from flat-to-flat, so the importer converts.
-- **Snapping** is a `Grid` trait in `core`:
+- **Look**: the line width, the color, the opacity, the style, and the screen that shows the grid. Use "DM only" when the map has a printed grid and the DM wants the snap and the cell count.
+- **Size**: `cell_size` in inches. The default is 1.0, so one cell is one real inch at 100 % zoom. All values are permitted, for example 0.5 or 1.5.
+- **Alignment**: the action "align to map" sets `offset` and `cell_size` from the `grid_px` and the transform of the selected map. Then the overlay lines are on the printed lines of the map. The DM can also drag the offset by hand.
+- **Hex**: pointy-top and flat-top. The hex math uses cube and axial coordinates in `core::grid`. The shader and the snap use the same math. Foundry hex scenes give the type (`grid.type` 2 to 5) and the size. Foundry measures a hex differently from flat-to-flat, so the importer converts the value.
+- **Snap** is a `Grid` trait in `core`:
   ```rust
   trait Grid { fn snap(&self, p: Vec2) -> Vec2; fn cell_center(&self, p: Vec2) -> Vec2; fn cell_polygon(&self, p: Vec2) -> Vec<Vec2>; }
   ```
-  Implemented by `SquareGrid` and `HexGrid`; tools and the TV box nudge use it, so every tool works with both grid kinds without knowing which.
-- Per-scene grid, with a global default in settings. A later extension is per-region grids (e.g. one hex map next to a square map) by attaching a `GridConfig` to a map object; the shader takes a small list of regions, so the design allows it.
+  `SquareGrid` and `HexGrid` implement the trait. The tools and the TV box use the trait. Each tool works with both grid kinds.
+- Each scene has one grid. The settings hold a default grid. A later extension can give a grid to one map object. The shader then gets a short list of regions.
 
 ## 5. Architecture
 
-Cargo workspace, four crates, dependencies only flowing downward:
+The project is a cargo workspace with four crates. The dependencies go in one direction only:
 
 ```
 crates/
-  core/     scene model, math, commands (undo/redo), project file I/O   — no GPU, no windowing
+  core/     scene model, math, commands (undo/redo), project file I/O   — no GPU, no windows
   import/   Importer trait + png/jpeg, foundry, uvtt, (video) importers  — depends on core
-  render/   wgpu renderer, layer passes, lighting backends              — depends on core
+  render/   wgpu renderer, layer passes, light backends                  — depends on core
   app/      winit windows, egui DM UI, tools, event loop                 — depends on all
 ```
 
@@ -107,16 +107,16 @@ Scene
  │    ├─ DrawLayer  { strokes: Vec<Stroke>, shapes: Vec<Shape> }
  │    ├─ WallLayer  { walls: Vec<Wall> }        // segments, door flag, blocks_light/blocks_sight
  │    └─ LightLayer { lights: Vec<Light>, ambient: Color, darkness: f32 }
- └─ assets: AssetStore          // id -> path, hash; resolves relative to project dir
+ └─ assets: AssetStore          // id -> path, hash; paths are relative to the project directory
 
-MapObject { asset: AssetId, transform: Transform2D (pos, rot, scale.xy — negative for flip), grid_px, opacity }
+MapObject { asset: AssetId, transform: Transform2D (pos, rot, scale.xy — negative to flip), grid_px, opacity }
 Light     { pos, bright_radius, dim_radius, color, intensity, cone_angle, rotation, animation }
 Wall      { a, b, kind: Wall | Door(open/closed) | Invisible, blocks_light, blocks_sight }
 ```
 
-- Every mutation is a `Command` (`apply`, `revert`) on an undo stack. Tools emit commands; UI never mutates the scene directly. This is also the extension seam for scripting later.
-- Scene is plain data with `serde`. Project file = `project.json` + `assets/` directory, relative paths.
-- Spatial index: a uniform grid over walls and objects for hit testing, view culling (§8.1) and the lighting raycasts. Every object caches its world AABB, refreshed by the command that moves it.
+- Each change is a `Command` with `apply` and `revert` on an undo stack. The tools make commands. The UI never changes the scene directly. This is also the extension point for scripts.
+- The scene is plain data with `serde`. The project file is `project.json` plus an `assets/` directory with relative paths.
+- A uniform grid is the spatial index. It holds walls and objects. The program uses it for hit tests, view culling (§8.1) and the light rays. Each object keeps its world AABB. The command that moves the object updates the AABB.
 
 ### 5.2 Importers (`import`)
 
@@ -127,40 +127,47 @@ trait Importer {
 }
 ```
 
-- **Image**: PNG/JPEG/WebP → one `MapObject`, grid_px unknown until set.
-- **Foundry VTT scene**: accepts a scene JSON (from "Export Data" on a scene, or a line from `scenes.db`). Reads `background.src` / `img`, `width`, `height`, `grid.size`, `padding`, `walls[].c/door/light/sight/move`, `lights[].x/y/config.{bright,dim,color,angle,rotation,alpha}`. Asset paths resolve against a user-configured Foundry `Data/` directory. Coordinates are in scene pixels, converted by `grid_px`.
-- **Universal VTT** (`.dd2vtt`, Dungeondraft/Arkenforge): base64 image, `resolution.pixels_per_grid`, `line_of_sight` polylines, `portals`, `lights`. Cheap to add next to Foundry and covers most map-maker exports.
-- **Video** (feature `video`): registers an `mp4/webm` importer producing a `MapObject` whose asset is a `VideoSource`.
+- **Image**: PNG, JPEG or WebP makes one `MapObject`. The value `grid_px` is unknown until the DM sets it.
+- **Foundry VTT scene**: the importer reads a scene JSON. The JSON comes from "Export Data" on a scene, or from one line of `scenes.db`. The importer reads `background.src` or `img`, `width`, `height`, `grid.size`, `padding`, `walls[].c/door/light/sight/move`, and `lights[].x/y/config.{bright,dim,color,angle,rotation,alpha}`. Asset paths are relative to a Foundry `Data/` directory that the DM sets. The coordinates are scene pixels. The importer divides them by `grid_px`.
+- **Universal VTT** (`.dd2vtt` from Dungeondraft or Arkenforge): the file holds a base64 image, `resolution.pixels_per_grid`, `line_of_sight` lines, `portals` and `lights`. This importer is small and covers most map tools.
+- **Video** (feature `video`): the importer registers `mp4` and `webm`. The `MapObject` gets a `VideoSource` asset.
 
-Importers are registered in a list at startup, so a new format is one file and one `register()` line.
+The program registers the importers in a list at start. A new format is one file and one `register()` line.
 
 ### 5.3 Renderer (`render`)
 
-One `Renderer` owns the wgpu device and per-window surfaces. Each frame, for each window, it builds a `View` (camera, viewport size, audience = Dm | Tv) and runs the pass list:
+One `Renderer` owns the wgpu device and one surface for each window. For each frame and each window, the renderer makes a `View`. The `View` holds the camera, the viewport size and the audience (`Dm` or `Tv`). Then the renderer runs the pass list:
 
-1. **Background pass**: clear + optional backdrop color.
-2. **Map pass**: textured quads, instanced, sorted by layer order. Mipmapped, anisotropic sampling so zoomed-out maps do not shimmer. Textures larger than the device limit (8192 or 16384) are split into tiles at load.
-3. **Grid pass**: procedural square/hex grid shader from `GridConfig`, honoring `show_on` per audience. Drawn above maps so it stays visible; opacity keeps it unobtrusive.
-3b. **Drawing pass**: lyon-tessellated meshes, cached per stroke, rebuilt only when the stroke changes. Active stroke drawn incrementally.
-4. **Lighting pass**: produces a light texture at the view's resolution (see §6), composited multiplicatively over maps with ambient floor. Walls rendered for the DM view only.
-5. **Overlay pass** (DM only): TV box outline, selection handles, gizmos, wall/light icons.
-6. **egui pass** (DM only).
+1. **Background pass**: clear and an optional background color.
+2. **Map pass**: instanced textured quads in layer order. The textures have mipmaps and anisotropic filters, so maps do not flicker at small zoom. The program cuts textures larger than the device limit (8192 or 16384) into tiles at load time.
+3. **Grid pass**: the square or hex grid shader from `GridConfig`. The pass obeys `show_on` for each audience. The grid is above the maps. The opacity keeps it soft.
+4. **Drawing pass**: lyon meshes. The program keeps one mesh for each stroke and rebuilds it only when the stroke changes. The active stroke grows step by step.
+5. **Light pass**: makes a light texture at the resolution of the view (see §6). The renderer multiplies it over the maps with an ambient floor. The walls are visible only in the DM view.
+6. **Overlay pass** (DM only): the TV box outline, the selection handles, the gizmos, the wall and light icons.
+7. **egui pass** (DM only).
 
-Redraw policy: request a redraw only on input, scene change, animation tick or video frame. Idle scenes cost nothing. Animated lights and videos drive a fixed 60 Hz tick.
+The renderer requests a new frame only after an input, a scene change, an animation tick or a video frame. A scene without changes costs nothing. Animated lights and videos run a fixed tick at 60 Hz.
 
-Extension seam: `trait RenderPass { fn prepare(&mut self, scene, view); fn render(&self, encoder, view); }` with an ordered list per audience.
+Extension point: `trait RenderPass { fn prepare(&mut self, scene, view); fn render(&self, encoder, view); }`. Each audience has an ordered list of passes.
 
 ### 5.4 App (`app`)
 
-- Event loop owns two `Window`s. TV window: borderless fullscreen on a monitor the DM picks from a list; DM window: normal.
+- The event loop owns two `Window` values. The TV window has no border and fills a monitor that the DM selects from a list. The DM window is a normal window.
 - `Tool` trait: `on_pointer_down/move/up`, `on_key`, `draw_overlay`. Tools: Select/Transform, Pan, Pen, Line, Rect/Ellipse, Eraser, Wall, Light, TvBox, Calibrate-grid.
-- egui panels: layer list, object properties, TV settings, lighting settings, import dialog, tool bar.
-- Settings (app-level, not per project): TV snap threshold and extra snap levels, snap-suppress modifier, default grid config, hotkeys.
-- Hotkeys: space+drag pan, scroll zoom (DM camera only), F to flip, R rotate 90°, arrows nudge TV box by one cell, `T` frame TV box, Tab hide all DM overlays.
+- egui panels: the layer list, the object properties, the TV settings, the light settings, the import dialog, the tool bar.
+- Settings are for the app, not for the project. They hold the TV snap threshold, the other snap levels, the snap stop key, the default grid config and the hotkeys.
+- Hotkeys:
+  - Space+drag: pan.
+  - Scroll: zoom (DM camera only).
+  - F: flip.
+  - R: turn 90°.
+  - Arrows: move the TV box one cell.
+  - `T`: show the TV box.
+  - Tab: hide all DM overlays.
 
-## 6. Lighting
+## 6. Light
 
-Walls are segments; lights are point/cone emitters. Two backends behind one trait so they can coexist and be compared:
+Walls are segments. Lights are point or cone emitters. Two backends share one trait, so both exist at the same time:
 
 ```rust
 trait LightingBackend {
@@ -169,88 +176,118 @@ trait LightingBackend {
 }
 ```
 
-**v1 — Hard shadows, per-light 1D shadow map (GPU, fast)**
-- For each light: render wall segments into a 1D polar depth texture (angle → nearest distance), 1024–2048 samples. Then a fullscreen pass computes, per pixel, angle and distance to the light and compares against the shadow map for occlusion. Distance falloff bright→dim→0, colored, additive blend into the light texture. 50+ lights at 4K is fine.
-- Doors toggle walls; door state changes just re-render.
+**v1: hard shadows with a 1D shadow map for each light (GPU, fast)**
+- For each light, the pass draws the wall segments into a 1D polar depth texture (angle to nearest distance) with 1024 to 2048 samples. Then a full-screen pass calculates the angle and the distance from each pixel to the light. The pass compares the distance with the shadow map. The light falls off from bright to dim to zero. The pass adds the colored result to the light texture. This runs 50 or more lights at 4K.
+- A door toggles a wall. A door change draws the scene again.
 
-**v2 — Ray traced soft shadows and bounce (the "ray/path tracing" item)**
-- Walls uploaded to a GPU uniform grid. A compute shader, per pixel, shoots N rays (stratified, temporal jitter) toward each light's disc radius → soft penumbra, and optionally one bounce sample for indirect light. Temporal accumulation over frames when the scene is static (which it usually is at the table) gives a converged, noise-free result within a second.
-- Alternative for the same slot: **2D radiance cascades**, which give GI and soft shadows from an occluder texture without ray/segment tests. Pick after v1 is stable; the trait boundary means either drops in.
+**v2: ray traced soft shadows and bounce light**
+- The program uploads the walls to a uniform grid on the GPU. For each pixel, a compute shader sends N rays to the disc of each light. The rays are stratified with temporal jitter. This gives a soft penumbra. One bounce sample gives indirect light. When the scene does not change, the shader accumulates over frames. The image converges without noise in one second.
+- **2D radiance cascades** is the other option for the same slot. It gives global illumination and soft shadows from an occluder texture. It does not need ray and segment tests. Select the method after v1 is stable. Both fit the trait.
 
-Both write the same light texture, so composition, darkness slider, and DM preview do not change between backends.
+Both backends write the same light texture. The composition, the darkness slider and the DM preview stay the same.
 
-Extras on top of lighting: fog of war (explored/unexplored texture painted by revealing brush or by light reach), and DM-only "vision" preview from a token position.
+Two additions come on top of the light. Fog of war is a texture with explored and unexplored areas. A brush or the light reach paints it. A DM-only "vision" preview shows the view from a token position.
 
-## 7. Video maps (feature-gated)
+## 7. Video maps (cargo feature)
 
-- `ffmpeg-next` decoder on a dedicated thread, outputs frames into a triple-buffered ring of RGBA (or NV12 + shader conversion for less bandwidth). Render thread uploads the newest frame per tick.
-- Loop seamlessly, pause/play from DM UI, no audio.
-- Windows: ffmpeg via vcpkg or prebuilt shared libs; the feature is off by default in CI so the main build never depends on it.
+- The `ffmpeg-next` decoder runs on its own thread. It writes frames into a ring of three RGBA buffers. NV12 with a shader conversion is an option with less bandwidth. The render thread uploads the newest frame on each tick.
+- The video loops without a gap. The DM can pause and play from the UI. There is no audio.
+- Windows: ffmpeg comes from vcpkg or from prebuilt shared libraries. The feature is off by default in CI, so the main build never depends on it.
 
 ## 8. Performance rules
 
-- World coordinates: f64 camera offset, f32 GPU vertices relative to the camera. No precision drift on an "infinite" canvas.
-- Textures: decode off-thread, upload with mipmaps, BC7/ASTC compression optional later. Tiles for maps beyond device limits, culled and budgeted individually; virtual texturing only if 20k+ px maps show up.
-- Lighting computed at TV resolution once; DM view samples the same light texture when its camera overlaps, otherwise at DM resolution.
-- Stroke meshes cached; drawing layer batched into one buffer per layer.
-- Nothing allocates per frame in the hot path; scene → GPU instance buffers rebuilt only on change (dirty flags per layer) and only for objects that survive culling (§8.1).
-- Profile with `tracy` (`tracing-tracy`) from the start.
+- World coordinates: the camera offset is f64. The GPU vertices are f32 relative to the camera. The precision does not drift on the canvas.
+- Textures: a worker thread decodes the file. The upload includes mipmaps. BC7 or ASTC compression is an option for later. Maps beyond the device limit become tiles. Each tile is culled and budgeted on its own. Virtual textures are for maps above 20k pixels only.
+- The light is calculated once at the TV resolution. The DM view samples the same light texture when the two cameras overlap. Otherwise the DM view gets its own resolution.
+- Stroke meshes are cached. The drawing layer is one buffer for each layer.
+- The hot path does not allocate memory in a frame. The instance buffers are rebuilt only after a change. Dirty flags mark each layer. Only the objects that pass the culling (§8.1) go into the buffers.
+- Use `tracy` (`tracing-tracy`) from the start.
 
 ### 8.1 Culling
 
-Everything is culled per view against that view's world-space rectangle (the DM camera's frustum or the TV box, rotated box → use its AABB, then exact test for the few borderline objects). Culling happens on the CPU in `render::prepare`, before any GPU buffer is written, so offscreen content costs neither upload nor draw calls.
+The program culls each view against the world rectangle of that view. This is the DM camera frustum or the TV box. A rotated box uses its AABB first and then an exact test for the few border objects. The culling runs on the CPU in `render::prepare` before any GPU buffer is written. Content off the screen costs no upload and no draw call.
 
-- **Objects**: each `MapObject`, stroke, shape, light and wall keeps a cached world AABB, updated by the command that moves it (dirty flag), never recomputed per frame. The scene's uniform-grid spatial index returns candidates for a view rect in O(cells touched); the candidates' AABBs are tested exactly. Only survivors go into the instance buffers.
-- **Map tiles**: large maps are already split into tiles at load (§8). Tiles are culled individually, so a 16k map with only one corner in the TV box uploads and draws only that corner's tiles. Tiles far outside any view can also drop their GPU texture (LRU budget, default 2 GB) and reload from the decoded CPU copy or disk when they come back.
-- **Strokes**: cached meshes are per stroke, so a stroke off both screens is skipped whole. Very long strokes (a 500-inch path) are split into chunks of ~256 segments with their own AABBs.
-- **Lights**: a light contributes only if its dim-radius disc intersects the view rect. Walls feed the lighting backend only if they intersect the union of visible lights' discs (they can occlude a visible light while being offscreen themselves), which keeps the shadow-map and ray passes proportional to what is on screen rather than to the whole campaign canvas.
-- **Video**: a video map that is culled from *both* views pauses decoding (keeps its position so it resumes in sync). Decoding for a video visible only on the DM screen continues at reduced rate (e.g. 10 fps) since it is a preview.
-- **Grid** is a fullscreen shader and needs no culling; it is skipped entirely when `show_on` excludes the audience.
-- **Two views share one prepare**: candidates are gathered once for the union rect, then tagged with a bitmask (`DM | TV`) so each window's draw uses its own subset without a second scene traversal.
-- **Debug overlay** (`F3`): shows culled/drawn counts, tile residency and draw-call totals per window, so regressions are visible immediately.
+- **Objects**: each `MapObject`, stroke, shape, light and wall keeps a world AABB. The command that moves the object updates the AABB (dirty flag). The frame does not calculate it again. The uniform grid returns candidates for a view rectangle in O(cells touched). The exact test runs on the AABBs of the candidates. Only the objects that pass go into the instance buffers.
+- **Map tiles**: large maps are already tiles at load time (§8). Each tile is culled on its own. A 16k map with one corner in the TV box uploads and draws only the tiles in that corner. Tiles far outside all views can drop their GPU texture. An LRU budget (default 2 GB) controls this. The tile comes back from the CPU copy or from disk.
+- **Strokes**: each stroke has its own mesh. A stroke that is off both screens is skipped as one unit. The program cuts a very long stroke (a 500 inch path) into pieces of about 256 segments. Each piece has its own AABB.
+- **Lights**: a light counts only if its dim radius disc touches the view rectangle. A wall goes to the light backend only if it touches the disc of a visible light. A wall off the screen can still make a visible shadow. The shadow map pass and the ray pass then scale with the screen content, not with the full canvas.
+- **Video**: a video map that both views cull stops the decoder. The video keeps its position and continues in sync later. A video that only the DM view shows decodes at a lower rate, for example 10 fps.
+- **Grid**: the grid is a full-screen shader and needs no culling. The pass is skipped when `show_on` excludes the audience.
+- **One prepare for two views**: the program collects candidates once for the union rectangle. Each candidate gets a bitmask (`DM | TV`). Each window draws its own subset without a second scene walk.
+- **Debug overlay** (`F3`): shows the culled and drawn counts, the resident tiles and the draw call totals for each window. A regression is visible at once.
 
 ## 9. Milestones
 
-Each milestone ends in something usable at the table.
+Each milestone ends with a program that works at the table.
 
-**M0 — Skeleton (1 week)**
-Workspace, two winit windows, wgpu clear color in both, egui panel in DM window, monitor picker, fullscreen TV. Windows build verified once in CI (GitHub Actions matrix: ubuntu, windows).
+**M0: skeleton (1 week)**
+- The cargo workspace.
+- Two winit windows with a wgpu clear color in both.
+- An egui panel in the DM window.
+- A monitor picker and a full-screen TV window.
+- The Windows build runs once in CI (GitHub Actions matrix: ubuntu, windows).
 
-**M1 — Canvas and TV box (2 weeks)**
-DM camera (pan/zoom), infinite square grid with appearance settings, PNG/JPEG import, map transform tool (move, rotate, scale, flip, snap), TV config + calibration overlay, TV box tool with zoom snap and independent DM camera, TV window renders the box. Grid align-to-map. Object AABBs + spatial index + per-view culling with the F3 debug overlay. Project save/load.
-→ Already replaces a static image viewer at the table.
+**M1: canvas and TV box (2 weeks)**
+- The DM camera with pan and zoom.
+- The square grid with look settings and align-to-map.
+- PNG and JPEG import.
+- The map transform tool: move, turn, scale, flip, snap.
+- The TV config with the calibration overlay.
+- The TV box tool with the zoom snap. The DM camera stays independent.
+- The TV window shows the box.
+- Object AABBs, the spatial index, and the culling for each view with the F3 debug overlay.
+- Project save and load.
 
-**M2 — Drawing and hex grid (1–2 weeks)**
-Pen/line/rect/ellipse/eraser, colors and widths, DM-only vs shared layers, undo/redo through the command stack. Hex grid variants in shader and `HexGrid` snapping.
+After M1 the program replaces a static image viewer at the table.
 
-**M3 — Foundry and UVTT import (1–2 weeks)**
-Walls and lights imported and drawn as DM overlays, `grid_px` auto scale, hex grid type/size from Foundry scenes, basic wall editor (add, delete, toggle door), light placement tool.
+**M2: drawing and hex grid (1 to 2 weeks)**
+- Pen, line, rect, ellipse and eraser tools with colors and widths.
+- DM-only and shared layers.
+- Undo and redo through the command stack.
+- Hex grid variants in the shader and `HexGrid` snap.
 
-**M4 — Lighting v1 (2 weeks)**
-Shadow-map backend with light/wall culling per view, ambient/darkness controls, light animations (flicker, pulse), doors block/unblock light.
+**M3: Foundry and UVTT import (1 to 2 weeks)**
+- Walls and lights are imported and drawn as DM overlays.
+- `grid_px` sets the scale.
+- The hex grid type and size come from Foundry scenes.
+- A basic wall editor: add, delete, toggle door.
+- A light placement tool.
 
-**M5 — Lighting v2 (2–4 weeks, open-ended)**
-Ray traced soft shadows with temporal accumulation, or radiance cascades. Fog of war. Choose after measuring v1.
+**M4: light v1 (2 weeks)**
+- The shadow map backend with light and wall culling for each view.
+- The ambient and darkness controls.
+- Light animations: flicker, pulse.
+- Doors block or unblock the light.
 
-**M6 — Video maps (1–2 weeks)**
-ffmpeg decode thread, looping, feature flag, Windows deps documented.
+**M5: light v2 (2 to 4 weeks, open)**
+- Ray traced soft shadows with temporal accumulation, or radiance cascades.
+- Fog of war.
+- Select the method after v1 is measured.
 
-**M7 — Polish**
-Asset library panel, hotkey overlay, multiple scenes per project, packaged builds (AppImage / .msi).
+**M6: video maps (1 to 2 weeks)**
+- The ffmpeg decoder thread and the loop.
+- The cargo feature.
+- The Windows dependencies in the documentation.
+
+**M7: polish**
+- An asset library panel.
+- A hotkey overlay.
+- Many scenes in one project.
+- Packaged builds: AppImage, .msi.
 
 ## 10. Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Fullscreen on a specific monitor under Wayland | winit `Fullscreen::Borderless(Some(monitor))`; fall back to a borderless window positioned by monitor geometry on X11. Test both early in M0. |
-| Two swapchains, one vsync each → frame pacing hitches | Present TV with vsync (`Fifo`), DM window with `Mailbox`/`Immediate`; render TV first. |
-| Maps above texture limits | Tile at load (M1), not later. |
-| Foundry format drifts between versions | Importer reads with `serde_json::Value` and tolerant field lookup (`background.src` or `img`), tests with fixtures from v10, v11, v12. |
-| ffmpeg on Windows | Feature-gated; never on the critical path. |
-| Lighting v2 scope creep | Trait boundary; v1 ships first and is good enough for play. |
+| Full screen on one specific monitor under Wayland | Use winit `Fullscreen::Borderless(Some(monitor))`. On X11, use a window without a border at the monitor position. Test both in M0. |
+| Two swapchains with vsync cause frame stutter | Present the TV with vsync (`Fifo`). Present the DM window with `Mailbox` or `Immediate`. Render the TV first. |
+| Maps above the texture limit | Cut into tiles at load time (M1), not later. |
+| The Foundry format changes between versions | Read with `serde_json::Value` and a tolerant field lookup (`background.src` or `img`). Test with fixtures from v10, v11 and v12. |
+| ffmpeg on Windows | Keep it behind a cargo feature. Never put it on the critical path. |
+| Light v2 grows too large | Keep the trait boundary. Ship v1 first. v1 is sufficient for play. |
 
 ## 11. First steps
 
-1. `cargo new --lib` the four crates in a workspace; pin wgpu/winit/egui versions that are known to match each other.
-2. M0: two windows, both clearing to a color, egui "Hello" in the DM window, monitor list in a combo box.
-3. Write the `Scene` structs and the `Command` trait before any rendering of content, so M1 tools are built on undo from the start.
+1. Run `cargo new --lib` for the four crates in a workspace. Pin wgpu, winit and egui versions that match each other.
+2. M0: two windows that clear to a color. An egui "Hello" in the DM window. A monitor list in a combo box.
+3. Write the `Scene` structs and the `Command` trait before any content is drawn. Then the M1 tools have undo from the start.

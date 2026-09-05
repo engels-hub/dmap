@@ -1,11 +1,13 @@
 # dmap
 
-Map display for a tabletop RPG table built around a TV.
+dmap shows maps for a tabletop role-playing game on a TV.
 
-- Infinite canvas with many maps, driven from a DM window; a second borderless window shows the players' view on the TV.
-- Physical calibration: one grid cell is one real inch on the TV.
-- Square and hex grids, drawing tools, PNG/JPEG/Foundry VTT/Universal VTT import, video maps.
-- GPU lighting with walls, doors and soft shadows.
-- Linux native, Windows by recompile. Rust + wgpu + winit + egui.
+- The program has one canvas with no limits. The canvas holds many maps.
+- The game master controls the canvas in one window. A second window shows the players' view on the TV.
+- The program uses the real size of the TV. One grid cell is one inch on the TV.
+- The program has square grids, hex grids, tools to draw, and video maps.
+- The program reads PNG, JPEG, Foundry VTT scenes and Universal VTT files.
+- The GPU calculates the light. Walls and doors make shadows.
+- The program runs on Linux. A new build runs on Windows. The code is Rust with wgpu, winit and egui.
 
-See [PLAN.md](PLAN.md) for the design and milestones.
+Read [PLAN.md](PLAN.md) for the design and the milestones.
