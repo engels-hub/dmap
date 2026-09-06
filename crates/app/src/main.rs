@@ -26,7 +26,7 @@ use egui_winit::winit::{
 
 use crate::gpu::{Gpu, Pane};
 use crate::project::Project;
-use crate::tv::{placement_for, resolve_tv_display};
+use crate::tv::{dm_move_target, placement_for, resolve_tv_display};
 use crate::ui::{DmUi, Settings};
 
 /// Size the DM window opens with. The design mockups use this frame.
@@ -108,6 +108,7 @@ impl Running {
                     .with_fullscreen(fullscreen_on(&displays, tv_display)),
             )?,
         );
+        move_dm_off_tv(&dm_window, &displays, tv_display);
         let gpu = Gpu::new(&dm_window)?;
         let dm = gpu.pane(dm_window)?;
         let tv = gpu.pane(tv_window)?;
@@ -150,6 +151,7 @@ impl Running {
             self.tv
                 .window
                 .set_fullscreen(fullscreen_on(&self.displays, self.settings.tv_display));
+            move_dm_off_tv(&self.dm.window, &self.displays, self.settings.tv_display);
         }
         Ok(changed)
     }
@@ -158,6 +160,16 @@ impl Running {
     fn update_project(&self, project: &mut Project) {
         project.tv_display =
             placement_for(self.settings.tv_display, &display_names(&self.displays));
+    }
+}
+
+/// Moves the DM window to another display when the TV took its display.
+fn move_dm_off_tv(dm_window: &Window, displays: &[MonitorHandle], tv_display: Option<usize>) {
+    let dm_display = dm_window
+        .current_monitor()
+        .and_then(|current| displays.iter().position(|display| *display == current));
+    if let Some(target) = dm_move_target(tv_display, dm_display, displays.len()) {
+        dm_window.set_outer_position(displays[target].position());
     }
 }
 

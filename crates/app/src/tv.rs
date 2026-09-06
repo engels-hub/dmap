@@ -43,10 +43,6 @@ pub fn resolve_tv_display<S: AsRef<str>>(
 ///
 /// Returns the index of a free display when the TV and the DM window share a
 /// display and another one exists. Otherwise `None`: nothing moves.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into the app in the next commit")
-)]
 pub fn dm_move_target(
     tv_display: Option<usize>,
     dm_display: Option<usize>,
