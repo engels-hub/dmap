@@ -54,3 +54,7 @@ multiple_crate_versions = "allow"
 cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
+
+# Image decoding and the GPU stack are far too slow unoptimized.
+[profile.dev.package."*"]
+opt-level = 3
