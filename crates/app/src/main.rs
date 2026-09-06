@@ -12,10 +12,7 @@
 mod camera;
 mod color;
 mod gpu;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the map layer in a later commit")
-)]
+#[expect(dead_code, reason = "used by the map layer in a later commit")]
 mod images;
 mod pointer;
 mod project;

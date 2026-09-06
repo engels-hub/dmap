@@ -3,7 +3,7 @@
 // Rust guideline compliant 2026-02-21
 
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 /// A decoded image: RGBA8 rows, top row first.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,10 +85,7 @@ impl Loader {
 
     /// The next finished file, if any.
     pub fn poll(&self) -> Option<(PathBuf, Result<Decoded, String>)> {
-        match self.results.try_recv() {
-            Ok(done) => Some(done),
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
-        }
+        self.results.try_recv().ok()
     }
 }
 
