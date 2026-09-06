@@ -5,14 +5,18 @@
 
 // Rust guideline compliant 2026-02-21
 
+mod camera;
 mod color;
 mod gpu;
+mod images;
+mod maps;
 mod pointer;
 mod project;
+mod scene;
 mod tv;
 mod ui;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
@@ -25,9 +29,13 @@ use egui_winit::winit::{
     window::{Fullscreen, Window, WindowId},
 };
 
+use crate::camera::Camera;
 use crate::gpu::{Gpu, Pane};
+use crate::images::Loader;
+use crate::maps::{MapLayer, relative_path};
 use crate::pointer::PointerDisc;
 use crate::project::Project;
+use crate::scene::MapObject;
 use crate::tv::{display_at, dm_move_target, placement_for, resolve_tv_display};
 use crate::ui::{DmUi, Settings};
 
@@ -39,6 +47,19 @@ const TV_FALLBACK_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 540.0);
 
 /// Project file used when no path is given on the command line.
 const DEFAULT_PROJECT: &str = "project.json";
+
+/// The DM camera at start: the origin in the middle, 50 pixels per inch.
+const DM_CAMERA: Camera = Camera {
+    center: (0.0, 0.0),
+    pixels_per_inch: 50.0,
+};
+
+/// The TV camera until the TV box exists: the origin at 80 pixels per inch,
+/// about true size on a 4K 55 inch TV.
+const TV_CAMERA: Camera = Camera {
+    center: (0.0, 0.0),
+    pixels_per_inch: 80.0,
+};
 
 fn main() -> Result<()> {
     let path = std::env::args_os()
@@ -57,7 +78,7 @@ fn main() -> Result<()> {
 }
 
 /// Reads the project file, or starts a new project when there is none.
-fn load_project(path: &std::path::Path) -> Result<Project> {
+fn load_project(path: &Path) -> Result<Project> {
     match std::fs::read_to_string(path) {
         Ok(json) => {
             Project::from_json(&json).with_context(|| format!("{}: broken project", path.display()))
@@ -90,10 +111,16 @@ struct Running {
     placed: bool,
     /// Where the pointer is over the TV window, in pixels, or `None` when outside.
     tv_pointer: Option<(f32, f32)>,
+    /// Folder of the project file; map paths are relative to it.
+    project_dir: PathBuf,
+    maps: Vec<MapObject>,
+    map_layer: MapLayer,
+    loader: Loader,
+    camera: Camera,
 }
 
 impl Running {
-    fn new(event_loop: &ActiveEventLoop, project: &Project) -> Result<Self> {
+    fn new(event_loop: &ActiveEventLoop, project: &Project, project_dir: PathBuf) -> Result<Self> {
         let dm_window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
@@ -120,6 +147,14 @@ impl Running {
         let tv = gpu.pane(tv_window)?;
         let ui = DmUi::new(&gpu, &dm);
         let pointer = PointerDisc::new(&gpu.device, tv.config.format);
+        let map_layer = MapLayer::new(&gpu.device, dm.config.format);
+        let wake_window = Arc::clone(&dm.window);
+        let loader = Loader::spawn(gpu.device.limits().max_texture_dimension_2d, move || {
+            wake_window.request_redraw();
+        });
+        for map in &project.maps {
+            loader.request(project_dir.join(&map.path));
+        }
         Ok(Self {
             gpu,
             dm,
@@ -133,12 +168,20 @@ impl Running {
             },
             placed: false,
             tv_pointer: None,
+            project_dir,
+            maps: project.maps.clone(),
+            map_layer,
+            loader,
+            camera: DM_CAMERA,
         })
     }
 
     /// Handles a window event. Returns `true` when the DM changed a setting.
     fn window_event(&mut self, id: WindowId, event: &WindowEvent) -> Result<bool> {
         let is_dm = id == self.dm.window.id();
+        if let (true, WindowEvent::DroppedFile(path)) = (is_dm, event) {
+            return Ok(self.add_map(path));
+        }
         if is_dm && self.ui.on_event(&self.dm, event) {
             return Ok(false);
         }
@@ -157,10 +200,12 @@ impl Running {
             WindowEvent::RedrawRequested if is_dm => return self.redraw_dm(),
             WindowEvent::RedrawRequested => {
                 let viewport = (pane.config.width, pane.config.height);
-                let (queue, pointer, tv_pointer) =
-                    (&self.gpu.queue, &self.pointer, self.tv_pointer);
+                let (device, queue) = (&self.gpu.device, &self.gpu.queue);
+                let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
+                let (map_layer, maps) = (&mut self.map_layer, &self.maps);
                 self.gpu
                     .clear(pane, color::linear_color(color::CANVAS), |pass| {
+                        map_layer.draw(device, queue, pass, maps, &TV_CAMERA, viewport);
                         if let Some(center) = tv_pointer {
                             pointer.draw(queue, pass, center, viewport);
                         }
@@ -179,12 +224,54 @@ impl Running {
         Ok(false)
     }
 
+    /// Adds a map file at the middle of the DM view. Returns `true`: the project changed.
+    fn add_map(&mut self, file: &Path) -> bool {
+        let stored = relative_path(&self.project_dir, file);
+        self.loader.request(self.project_dir.join(&stored));
+        self.maps.push(MapObject::new(stored, self.camera.center));
+        true
+    }
+
+    /// Asks for an image file and adds it. Returns `true` when a file was added.
+    fn pick_map_file(&mut self) -> bool {
+        let picked = rfd::FileDialog::new()
+            .add_filter("Images", &["png", "jpg", "jpeg"])
+            .set_directory(&self.project_dir)
+            .pick_file();
+        picked.is_some_and(|file| self.add_map(&file))
+    }
+
+    /// Moves finished image files to the GPU.
+    fn upload_loaded_images(&mut self) {
+        while let Some((file, result)) = self.loader.poll() {
+            let stored = relative_path(&self.project_dir, &file);
+            match result {
+                Ok(decoded) => {
+                    self.map_layer
+                        .upload(&self.gpu.device, &self.gpu.queue, stored, &decoded);
+                    self.tv.window.request_redraw();
+                }
+                Err(message) => eprintln!("{}: {message}", file.display()),
+            }
+        }
+    }
+
     /// Runs a DM frame. Returns `true` when the DM changed a setting.
     fn redraw_dm(&mut self) -> Result<bool> {
+        self.upload_loaded_images();
         let before = self.settings.clone();
-        self.ui
-            .frame(&self.gpu, &mut self.dm, &self.displays, &mut self.settings)?;
-        let changed = self.settings != before;
+        let viewport = (self.dm.config.width, self.dm.config.height);
+        let (device, queue) = (&self.gpu.device, &self.gpu.queue);
+        let (map_layer, maps, camera) = (&mut self.map_layer, &self.maps, &self.camera);
+        let add_map = self.ui.frame(
+            &self.gpu,
+            &mut self.dm,
+            &self.displays,
+            &mut self.settings,
+            |pass| map_layer.draw(device, queue, pass, maps, camera, viewport),
+        )?;
+        let added = add_map && self.pick_map_file();
+        let changed = added || self.settings != before;
         if changed || !self.placed {
             self.placed = true;
             // Swap first: the swap decides which window is the TV.
@@ -240,6 +327,7 @@ impl Running {
         project.tv_display =
             placement_for(self.settings.tv_display, &display_names(&self.displays));
         project.swap_windows = self.settings.swap_windows;
+        project.maps.clone_from(&self.maps);
     }
 }
 
@@ -304,7 +392,12 @@ impl ApplicationHandler for App {
         if self.running.is_some() {
             return;
         }
-        match Running::new(event_loop, &self.project) {
+        let project_dir = self
+            .path
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        match Running::new(event_loop, &self.project, project_dir) {
             Ok(running) => self.running = Some(running),
             Err(error) => {
                 self.error = Some(error);
