@@ -14,6 +14,8 @@ mod color;
 mod gpu;
 #[expect(dead_code, reason = "used by the map layer in a later commit")]
 mod images;
+#[expect(dead_code, reason = "used by the map layer in the next commit")]
+mod maps;
 mod pointer;
 mod project;
 #[cfg_attr(
