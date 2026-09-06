@@ -12,4 +12,25 @@ dmap shows maps for a tabletop role-playing game on a TV.
 - The GPU calculates the light. Walls and doors make shadows.
 - The program runs on Linux. A new build runs on Windows. The code is Rust with wgpu, winit and egui.
 
+## Setup
+
+You need Rust 1.95 or later and a GPU with a Vulkan driver on Linux or a DirectX 12 driver on Windows.
+
+1. Clone the repository.
+2. Build and start the program:
+
+```bash
+cargo run --release
+```
+
+The first build takes some minutes. The DM window opens on your display. If a second display is connected, the TV window fills it. With one display, the TV window opens as a normal window.
+
+The program reads and writes `project.json` in the current folder. To use another file, give its path:
+
+```bash
+cargo run --release -- path/to/project.json
+```
+
+Pick the TV display in the Settings panel. The choice is saved in the project file.
+
 Read [PLAN.md](PLAN.md) for the architecture and the milestones. Read [DESIGN.md](DESIGN.md) for the visual language of the DM window.
