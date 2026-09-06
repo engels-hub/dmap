@@ -343,16 +343,25 @@ fn place_tv(tv_window: &Window, displays: &[MonitorHandle], tv_display: Option<u
     tv_window.set_fullscreen(fullscreen_on(displays, tv_display));
 }
 
-/// The display that holds the window's top-left corner.
+/// The display that holds the window's center.
 ///
 /// winit's own lookup reports the wrong display on some X11 setups, so this
-/// compares the window position with the display rectangles. Where the
+/// compares the window position with the display rectangles. It uses the
+/// center rather than the top-left corner: on Windows a maximized window's
+/// outer rectangle starts a few pixels off its own monitor (an invisible
+/// resize border), which misclassified a maximized DM window as sitting on
+/// the neighboring display and sent it into a move-resize loop. Where the
 /// position is unknown, as on Wayland, winit's lookup is used instead.
 fn display_of(window: &Window, displays: &[MonitorHandle]) -> Option<usize> {
     let Ok(position) = window.outer_position() else {
         let current = window.current_monitor()?;
         return displays.iter().position(|display| *display == current);
     };
+    let size = window.inner_size();
+    let center = (
+        position.x + (size.width / 2).cast_signed(),
+        position.y + (size.height / 2).cast_signed(),
+    );
     let rects: Vec<_> = displays
         .iter()
         .map(|display| {
@@ -361,7 +370,7 @@ fn display_of(window: &Window, displays: &[MonitorHandle]) -> Option<usize> {
             ((position.x, position.y), (size.width, size.height))
         })
         .collect();
-    display_at((position.x, position.y), &rects)
+    display_at(center, &rects)
 }
 
 /// Moves the DM window to another display when the TV took its display.
