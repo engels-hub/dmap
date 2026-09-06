@@ -109,6 +109,23 @@ mod tests {
         assert_eq!(display_at((4480, 0), &rects), None);
         assert_eq!(display_at((0, 1200), &rects), None);
     }
+
+    /// A landscape primary display next to a portrait one, offset so it
+    /// covers negative coordinates. Reproduces a real two-monitor layout
+    /// where a maximized window's outer top-left corner (an invisible
+    /// resize border puts it a few pixels off its own monitor on Windows)
+    /// landed inside the portrait display's rectangle, misclassifying the
+    /// window and sending it into a move-resize loop. The window's center
+    /// stays correctly on its own display, which is why `display_of` in
+    /// `main.rs` classifies by the window's center rather than its corner.
+    #[test]
+    fn a_maximized_windows_corner_can_land_on_the_next_display_but_its_center_does_not() {
+        let rects = [((0, 0), (1920, 1080)), ((-1080, -495), (1080, 1920))];
+        let maximized_outer_corner = (-8, -8);
+        assert_eq!(display_at(maximized_outer_corner, &rects), Some(1));
+        let maximized_center = (1920 / 2, 1080 / 2);
+        assert_eq!(display_at(maximized_center, &rects), Some(0));
+    }
     use crate::project::TvPlacement;
 
     #[test]
