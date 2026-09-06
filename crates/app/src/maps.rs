@@ -61,6 +61,7 @@ impl std::fmt::Debug for MapLayer {
 /// Bytes of one map's six vertices.
 const QUAD_BYTES: u64 = std::mem::size_of::<[MapVertex; 6]>() as u64;
 
+#[hotpath::measure_all]
 impl MapLayer {
     /// Builds the pipeline for surfaces of `format`.
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {

@@ -3,7 +3,11 @@
 // Rust guideline compliant 2026-02-21
 
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::channel;
+
+// These aliases are the instrumented endpoints when the `hotpath` feature is
+// on, and the plain `std::sync::mpsc` types when it is off.
+use hotpath::wrap::std::sync::mpsc::{Receiver, Sender};
 
 /// A decoded image: RGBA8 rows, top row first.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +21,7 @@ pub struct Decoded {
 /// # Errors
 ///
 /// Returns the decoder's message when `bytes` is not an image it can read.
+#[hotpath::measure]
 pub fn decode(bytes: &[u8], max_side: u32) -> Result<Decoded, String> {
     let image = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
     let size = (image.width(), image.height());
@@ -60,8 +65,9 @@ impl std::fmt::Debug for Loader {
 impl Loader {
     /// Starts the worker. It calls `wake` after each file, done or failed.
     pub fn spawn(max_side: u32, wake: impl Fn() + Send + 'static) -> Self {
-        let (requests, request_rx) = channel::<PathBuf>();
-        let (result_tx, results) = channel();
+        let (requests, request_rx) =
+            hotpath::channel!(channel::<PathBuf>(), label = "load-requests");
+        let (result_tx, results) = hotpath::channel!(channel(), label = "load-results");
         std::thread::spawn(move || {
             for path in request_rx {
                 let result = std::fs::read(&path)
