@@ -26,14 +26,14 @@ mod tests {
 
     #[test]
     fn maps_black_and_white_to_the_ends() {
-        assert_eq!(linear_from_srgb(0), 0.0);
-        assert_eq!(linear_from_srgb(255), 1.0);
+        assert!(linear_from_srgb(0).abs() < 1e-9);
+        assert!((linear_from_srgb(255) - 1.0).abs() < 1e-9);
     }
 
     #[test]
     fn follows_the_srgb_curve() {
         // Reference values from the sRGB transfer function.
-        assert!((linear_from_srgb(0xe3) - 0.760).abs() < 0.002);
+        assert!((linear_from_srgb(0xe3) - 0.768).abs() < 0.002);
         assert!((linear_from_srgb(0x80) - 0.216).abs() < 0.002);
         assert!((linear_from_srgb(0x0a) - 0.003).abs() < 0.001);
     }
