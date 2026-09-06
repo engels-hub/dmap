@@ -20,13 +20,9 @@ pub fn pick_tv_display<T: PartialEq>(displays: &[T], dm_display: Option<&T>) -> 
 /// `names` are the connected displays in order. `dm_display` is the index of
 /// the DM's display. A saved name that is no longer connected falls back to
 /// the automatic choice. `None` means a normal window.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into the app in the next commit")
-)]
-pub fn resolve_tv_display(
+pub fn resolve_tv_display<S: AsRef<str>>(
     placement: &TvPlacement,
-    names: &[Option<&str>],
+    names: &[Option<S>],
     dm_display: Option<usize>,
 ) -> Option<usize> {
     let auto = || {
@@ -38,8 +34,21 @@ pub fn resolve_tv_display(
         TvPlacement::Window => None,
         TvPlacement::Display(wanted) => names
             .iter()
-            .position(|name| *name == Some(wanted.as_str()))
+            .position(|name| name.as_ref().is_some_and(|name| name.as_ref() == wanted))
             .or_else(auto),
+    }
+}
+
+/// Turns the picker's choice into what the project file stores.
+///
+/// A display without a name cannot be found again by name, so it is saved
+/// as the automatic choice.
+pub fn placement_for<S: AsRef<str>>(index: Option<usize>, names: &[Option<S>]) -> TvPlacement {
+    match index {
+        None => TvPlacement::Window,
+        Some(i) => names[i].as_ref().map_or(TvPlacement::Auto, |name| {
+            TvPlacement::Display(name.as_ref().to_owned())
+        }),
     }
 }
 
@@ -50,8 +59,24 @@ pub fn display_label(name: Option<&str>, width: u32, height: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_label, pick_tv_display, resolve_tv_display};
+    use super::{display_label, pick_tv_display, placement_for, resolve_tv_display};
     use crate::project::TvPlacement;
+
+    #[test]
+    fn saves_a_picked_display_by_name() {
+        let names = [Some("a"), None];
+        assert_eq!(
+            placement_for(Some(0), &names),
+            TvPlacement::Display("a".to_owned())
+        );
+        assert_eq!(placement_for(None, &names), TvPlacement::Window);
+    }
+
+    #[test]
+    fn saves_an_unnamed_display_as_auto() {
+        let names = [Some("a"), None];
+        assert_eq!(placement_for(Some(1), &names), TvPlacement::Auto);
+    }
 
     #[test]
     fn resolves_auto_to_a_free_display() {

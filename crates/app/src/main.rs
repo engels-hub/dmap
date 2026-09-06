@@ -7,17 +7,14 @@
 
 mod color;
 mod gpu;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into the app in the next commit")
-)]
 mod project;
 mod tv;
 mod ui;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use egui_winit::winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -28,7 +25,8 @@ use egui_winit::winit::{
 };
 
 use crate::gpu::{Gpu, Pane};
-use crate::tv::pick_tv_display;
+use crate::project::Project;
+use crate::tv::{placement_for, resolve_tv_display};
 use crate::ui::{DmUi, Settings};
 
 /// Size the DM window opens with. The design mockups use this frame.
@@ -37,16 +35,41 @@ const DM_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(1440.0, 900.0);
 /// Size of the TV window when no display is free for it.
 const TV_FALLBACK_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 540.0);
 
+/// Project file used when no path is given on the command line.
+const DEFAULT_PROJECT: &str = "project.json";
+
 fn main() -> Result<()> {
+    let path = std::env::args_os()
+        .nth(1)
+        .map_or_else(|| PathBuf::from(DEFAULT_PROJECT), PathBuf::from);
+    let project = load_project(&path)?;
     let event_loop = EventLoop::new()?;
-    let mut app = App::default();
+    let mut app = App {
+        path,
+        project,
+        running: None,
+        error: None,
+    };
     event_loop.run_app(&mut app)?;
     app.error.map_or(Ok(()), Err)
 }
 
+/// Reads the project file, or starts a new project when there is none.
+fn load_project(path: &std::path::Path) -> Result<Project> {
+    match std::fs::read_to_string(path) {
+        Ok(json) => {
+            Project::from_json(&json).with_context(|| format!("{}: broken project", path.display()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Project::default()),
+        Err(error) => Err(error).with_context(|| format!("{}: cannot read", path.display())),
+    }
+}
+
 /// Application state across the event loop.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 struct App {
+    path: PathBuf,
+    project: Project,
     running: Option<Running>,
     error: Option<anyhow::Error>,
 }
@@ -63,7 +86,7 @@ struct Running {
 }
 
 impl Running {
-    fn new(event_loop: &ActiveEventLoop) -> Result<Self> {
+    fn new(event_loop: &ActiveEventLoop, project: &Project) -> Result<Self> {
         let dm_window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
@@ -72,7 +95,11 @@ impl Running {
             )?,
         );
         let displays: Vec<_> = event_loop.available_monitors().collect();
-        let tv_display = pick_tv_display(&displays, dm_window.current_monitor().as_ref());
+        let dm_display = dm_window
+            .current_monitor()
+            .and_then(|current| displays.iter().position(|display| *display == current));
+        let tv_display =
+            resolve_tv_display(&project.tv_display, &display_names(&displays), dm_display);
         let tv_window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
@@ -95,34 +122,48 @@ impl Running {
         })
     }
 
-    fn window_event(&mut self, id: WindowId, event: &WindowEvent) -> Result<()> {
+    /// Handles a window event. Returns `true` when the DM changed a setting.
+    fn window_event(&mut self, id: WindowId, event: &WindowEvent) -> Result<bool> {
         let is_dm = id == self.dm.window.id();
         if is_dm && self.ui.on_event(&self.dm, event) {
-            return Ok(());
+            return Ok(false);
         }
         let pane = if is_dm { &mut self.dm } else { &mut self.tv };
         match event {
             WindowEvent::Resized(size) => pane.resize(&self.gpu.device, size.width, size.height),
-            WindowEvent::RedrawRequested if is_dm => self.redraw_dm()?,
+            WindowEvent::RedrawRequested if is_dm => return self.redraw_dm(),
             WindowEvent::RedrawRequested => {
                 self.gpu.clear(pane, color::linear_color(color::CANVAS))?;
             }
             _ => {}
         }
-        Ok(())
+        Ok(false)
     }
 
-    fn redraw_dm(&mut self) -> Result<()> {
+    /// Runs a DM frame. Returns `true` when the DM changed a setting.
+    fn redraw_dm(&mut self) -> Result<bool> {
         let before = self.settings.clone();
         self.ui
             .frame(&self.gpu, &mut self.dm, &self.displays, &mut self.settings)?;
-        if self.settings != before {
+        let changed = self.settings != before;
+        if changed {
             self.tv
                 .window
                 .set_fullscreen(fullscreen_on(&self.displays, self.settings.tv_display));
         }
-        Ok(())
+        Ok(changed)
     }
+
+    /// Copies the settings into the project.
+    fn update_project(&self, project: &mut Project) {
+        project.tv_display =
+            placement_for(self.settings.tv_display, &display_names(&self.displays));
+    }
+}
+
+/// The names of the displays, in order.
+fn display_names(displays: &[MonitorHandle]) -> Vec<Option<String>> {
+    displays.iter().map(MonitorHandle::name).collect()
 }
 
 /// Borderless full screen on the chosen display, or `None` for a normal window.
@@ -135,7 +176,7 @@ impl ApplicationHandler for App {
         if self.running.is_some() {
             return;
         }
-        match Running::new(event_loop) {
+        match Running::new(event_loop, &self.project) {
             Ok(running) => self.running = Some(running),
             Err(error) => {
                 self.error = Some(error);
@@ -157,7 +198,15 @@ impl ApplicationHandler for App {
         let Some(running) = self.running.as_mut() else {
             return;
         };
-        if let Err(error) = running.window_event(window_id, &event) {
+        let result = running.window_event(window_id, &event).and_then(|changed| {
+            if changed {
+                running.update_project(&mut self.project);
+                std::fs::write(&self.path, self.project.to_json())
+                    .with_context(|| format!("{}: cannot save", self.path.display()))?;
+            }
+            Ok(())
+        });
+        if let Err(error) = result {
             self.error = Some(error);
             event_loop.exit();
         }
