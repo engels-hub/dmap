@@ -2,6 +2,8 @@
 
 // Rust guideline compliant 2026-02-21
 
+mod tv;
+
 fn main() {
     println!("dmap");
 }
