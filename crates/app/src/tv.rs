@@ -39,13 +39,17 @@ pub fn resolve_tv_display<S: AsRef<str>>(
     }
 }
 
+/// A display's `(position, size)` in screen pixels.
+pub type DisplayRect = ((i32, i32), (u32, u32));
+
 /// Finds the display whose rectangle holds `point`.
 ///
-/// `rects` are `(position, size)` pairs in screen pixels, in display order.
-pub fn display_at(point: (i32, i32), rects: &[((i32, i32), (u32, u32))]) -> Option<usize> {
+/// `rects` are in display order.
+pub fn display_at(point: (i32, i32), rects: &[DisplayRect]) -> Option<usize> {
+    let (px, py) = (i64::from(point.0), i64::from(point.1));
     rects.iter().position(|&((x, y), (width, height))| {
-        let (px, py) = point;
-        px >= x && py >= y && px - x < width as i32 && py - y < height as i32
+        let (x, y) = (i64::from(x), i64::from(y));
+        px >= x && py >= y && px - x < i64::from(width) && py - y < i64::from(height)
     })
 }
 
