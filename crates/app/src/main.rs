@@ -13,11 +13,16 @@ use egui_winit::winit::{
     dpi::LogicalSize,
     event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoop},
-    window::{Window, WindowId},
+    window::{Fullscreen, Window, WindowId},
 };
+
+use crate::tv::pick_tv_display;
 
 /// Size the DM window opens with. The design mockups use this frame.
 const DM_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(1440.0, 900.0);
+
+/// Size of the TV window when no display is free for it.
+const TV_FALLBACK_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 540.0);
 
 fn main() -> Result<()> {
     let event_loop = EventLoop::new()?;
@@ -30,7 +35,30 @@ fn main() -> Result<()> {
 #[derive(Default)]
 struct App {
     dm_window: Option<Window>,
+    tv_window: Option<Window>,
     error: Option<anyhow::Error>,
+}
+
+impl App {
+    fn open_windows(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
+        let dm_window = event_loop.create_window(
+            Window::default_attributes()
+                .with_title("dmap")
+                .with_inner_size(DM_WINDOW_SIZE),
+        )?;
+        let displays: Vec<_> = event_loop.available_monitors().collect();
+        let tv_display = pick_tv_display(&displays, dm_window.current_monitor().as_ref())
+            .map(|i| Fullscreen::Borderless(Some(displays[i].clone())));
+        let tv_window = event_loop.create_window(
+            Window::default_attributes()
+                .with_title("dmap TV")
+                .with_inner_size(TV_FALLBACK_SIZE)
+                .with_fullscreen(tv_display),
+        )?;
+        self.dm_window = Some(dm_window);
+        self.tv_window = Some(tv_window);
+        Ok(())
+    }
 }
 
 impl ApplicationHandler for App {
@@ -38,15 +66,9 @@ impl ApplicationHandler for App {
         if self.dm_window.is_some() {
             return;
         }
-        let attributes = Window::default_attributes()
-            .with_title("dmap")
-            .with_inner_size(DM_WINDOW_SIZE);
-        match event_loop.create_window(attributes) {
-            Ok(window) => self.dm_window = Some(window),
-            Err(error) => {
-                self.error = Some(error.into());
-                event_loop.exit();
-            }
+        if let Err(error) = self.open_windows(event_loop) {
+            self.error = Some(error);
+            event_loop.exit();
         }
     }
 

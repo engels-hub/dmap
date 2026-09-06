@@ -7,7 +7,6 @@
 /// Returns the index into `displays`, or `None` when every display is the
 /// DM's. Then the TV should open as a normal window, so it does not cover
 /// the DM window.
-#[expect(dead_code, reason = "used once the TV window opens")]
 pub fn pick_tv_display<T: PartialEq>(displays: &[T], dm_display: Option<&T>) -> Option<usize> {
     displays
         .iter()
