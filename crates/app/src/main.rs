@@ -83,6 +83,8 @@ struct Running {
     ui: DmUi,
     displays: Vec<MonitorHandle>,
     settings: Settings,
+    /// Whether the first DM frame has checked the window placement.
+    placed: bool,
 }
 
 impl Running {
@@ -106,7 +108,6 @@ impl Running {
                     .with_fullscreen(fullscreen_on(&displays, tv_display)),
             )?,
         );
-        move_dm_off_tv(&dm_window, &displays, tv_display);
         let gpu = Gpu::new(&dm_window)?;
         let dm = gpu.pane(dm_window)?;
         let tv = gpu.pane(tv_window)?;
@@ -121,6 +122,7 @@ impl Running {
                 tv_display,
                 swap_windows: project.swap_windows,
             },
+            placed: false,
         })
     }
 
@@ -135,9 +137,7 @@ impl Running {
             WindowEvent::Resized(size) => pane.resize(&self.gpu.device, size.width, size.height),
             // The window manager places a new window where it likes, so check
             // after every move that the DM window is not on the TV display.
-            WindowEvent::Moved(_) if is_dm => {
-                move_dm_off_tv(&self.dm.window, &self.displays, self.settings.tv_display);
-            }
+            WindowEvent::Moved(_) if is_dm => self.keep_dm_off_tv(),
             WindowEvent::RedrawRequested if is_dm => return self.redraw_dm(),
             WindowEvent::RedrawRequested => {
                 self.gpu.clear(pane, color::linear_color(color::CANVAS))?;
@@ -153,11 +153,42 @@ impl Running {
         self.ui
             .frame(&self.gpu, &mut self.dm, &self.displays, &mut self.settings)?;
         let changed = self.settings != before;
-        if changed {
-            place_tv(&self.tv.window, &self.displays, self.settings.tv_display);
-            move_dm_off_tv(&self.dm.window, &self.displays, self.settings.tv_display);
+        if changed || !self.placed {
+            self.placed = true;
+            // Swap first: the swap decides which window is the TV.
+            self.keep_dm_off_tv();
+            if changed {
+                place_tv(&self.tv.window, &self.displays, self.settings.tv_display);
+            }
         }
         Ok(changed)
+    }
+
+    /// Keeps the DM window off the TV display, by a move or by a role swap.
+    fn keep_dm_off_tv(&mut self) {
+        if !self.settings.swap_windows {
+            move_dm_off_tv(&self.dm.window, &self.displays, self.settings.tv_display);
+            return;
+        }
+        let dm_display = display_of(&self.dm.window, &self.displays);
+        if dm_move_target(self.settings.tv_display, dm_display, self.displays.len()).is_some() {
+            self.swap_roles();
+        }
+    }
+
+    /// Makes the TV window the DM window and the other way round.
+    ///
+    /// Nothing moves, so this works where a program cannot position its
+    /// windows, such as Wayland. The TV window still needs `place_tv`.
+    fn swap_roles(&mut self) {
+        std::mem::swap(&mut self.dm, &mut self.tv);
+        self.dm.window.set_title("dmap");
+        self.dm.window.set_fullscreen(None);
+        self.dm.window.set_decorations(true);
+        self.dm.window.set_maximized(true);
+        self.tv.window.set_title("dmap TV");
+        self.tv.window.set_decorations(false);
+        self.ui = DmUi::new(&self.gpu, &self.dm);
     }
 
     /// Copies the settings into the project.
@@ -183,9 +214,13 @@ fn place_tv(tv_window: &Window, displays: &[MonitorHandle], tv_display: Option<u
 /// The display that holds the window's top-left corner.
 ///
 /// winit's own lookup reports the wrong display on some X11 setups, so this
-/// compares the window position with the display rectangles.
+/// compares the window position with the display rectangles. Where the
+/// position is unknown, as on Wayland, winit's lookup is used instead.
 fn display_of(window: &Window, displays: &[MonitorHandle]) -> Option<usize> {
-    let position = window.outer_position().ok()?;
+    let Ok(position) = window.outer_position() else {
+        let current = window.current_monitor()?;
+        return displays.iter().position(|display| *display == current);
+    };
     let rects: Vec<_> = displays
         .iter()
         .map(|display| {
