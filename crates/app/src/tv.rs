@@ -2,6 +2,8 @@
 
 // Rust guideline compliant 2026-02-21
 
+use crate::project::TvPlacement;
+
 /// Picks the display for the TV: the first one that is not the DM's.
 ///
 /// Returns the index into `displays`, or `None` when every display is the
@@ -13,6 +15,34 @@ pub fn pick_tv_display<T: PartialEq>(displays: &[T], dm_display: Option<&T>) -> 
         .position(|display| Some(display) != dm_display)
 }
 
+/// Turns a saved placement into a display index.
+///
+/// `names` are the connected displays in order. `dm_display` is the index of
+/// the DM's display. A saved name that is no longer connected falls back to
+/// the automatic choice. `None` means a normal window.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired into the app in the next commit")
+)]
+pub fn resolve_tv_display(
+    placement: &TvPlacement,
+    names: &[Option<&str>],
+    dm_display: Option<usize>,
+) -> Option<usize> {
+    let auto = || {
+        let indices: Vec<usize> = (0..names.len()).collect();
+        pick_tv_display(&indices, dm_display.as_ref())
+    };
+    match placement {
+        TvPlacement::Auto => auto(),
+        TvPlacement::Window => None,
+        TvPlacement::Display(wanted) => names
+            .iter()
+            .position(|name| *name == Some(wanted.as_str()))
+            .or_else(auto),
+    }
+}
+
 /// Human-readable label for a display: its name and its resolution.
 pub fn display_label(name: Option<&str>, width: u32, height: u32) -> String {
     format!("{} · {width} × {height}", name.unwrap_or("Display"))
@@ -20,7 +50,40 @@ pub fn display_label(name: Option<&str>, width: u32, height: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_label, pick_tv_display};
+    use super::{display_label, pick_tv_display, resolve_tv_display};
+    use crate::project::TvPlacement;
+
+    #[test]
+    fn resolves_auto_to_a_free_display() {
+        let names = [Some("a"), Some("b")];
+        assert_eq!(
+            resolve_tv_display(&TvPlacement::Auto, &names, Some(0)),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn resolves_window_to_none() {
+        let names = [Some("a"), Some("b")];
+        assert_eq!(
+            resolve_tv_display(&TvPlacement::Window, &names, Some(0)),
+            None
+        );
+    }
+
+    #[test]
+    fn resolves_a_saved_name_to_that_display() {
+        let names = [Some("a"), None, Some("c")];
+        let saved = TvPlacement::Display("c".to_owned());
+        assert_eq!(resolve_tv_display(&saved, &names, Some(0)), Some(2));
+    }
+
+    #[test]
+    fn falls_back_to_a_free_display_when_the_saved_name_is_gone() {
+        let names = [Some("a"), Some("b")];
+        let saved = TvPlacement::Display("gone".to_owned());
+        assert_eq!(resolve_tv_display(&saved, &names, Some(0)), Some(1));
+    }
 
     #[test]
     fn labels_a_display_with_its_name_and_size() {

@@ -10,8 +10,21 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Project {
-    /// Name of the display that shows the TV window, or `None` for a window.
-    pub tv_display: Option<String>,
+    /// Where the TV window opens.
+    pub tv_display: TvPlacement,
+}
+
+/// Where the TV window opens.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TvPlacement {
+    /// The first display that is not the DM's.
+    #[default]
+    Auto,
+    /// A normal window on the DM's display.
+    Window,
+    /// Full screen on the display with this name.
+    Display(String),
 }
 
 impl Project {
@@ -32,15 +45,27 @@ impl Project {
 
 #[cfg(test)]
 mod tests {
-    use super::Project;
+    use super::{Project, TvPlacement};
 
     #[test]
     fn round_trips_through_json() {
+        for tv_display in [
+            TvPlacement::Auto,
+            TvPlacement::Window,
+            TvPlacement::Display("HDMI-1".to_owned()),
+        ] {
+            let project = Project { tv_display };
+            let json = project.to_json();
+            assert_eq!(Project::from_json(&json).unwrap(), project);
+        }
+    }
+
+    #[test]
+    fn stores_the_display_choice_readably() {
         let project = Project {
-            tv_display: Some("HDMI-1".to_owned()),
+            tv_display: TvPlacement::Display("HDMI-1".to_owned()),
         };
-        let json = project.to_json();
-        assert_eq!(Project::from_json(&json).unwrap(), project);
+        assert!(project.to_json().contains("\"display\": \"HDMI-1\""));
     }
 
     #[test]
@@ -50,6 +75,6 @@ mod tests {
 
     #[test]
     fn rejects_broken_json() {
-        assert!(matches!(Project::from_json("{"), Err(_)));
+        Project::from_json("{").unwrap_err();
     }
 }
