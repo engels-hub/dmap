@@ -85,6 +85,8 @@ struct Running {
     settings: Settings,
     /// Whether the first DM frame has checked the window placement.
     placed: bool,
+    /// Where the pointer is over the TV window, in pixels, or `None` when outside.
+    tv_pointer: Option<(f32, f32)>,
 }
 
 impl Running {
@@ -108,6 +110,8 @@ impl Running {
                     .with_fullscreen(fullscreen_on(&displays, tv_display)),
             )?,
         );
+        // The TV draws its own pointer, so the system pointer stays hidden.
+        tv_window.set_cursor_visible(false);
         let gpu = Gpu::new(&dm_window)?;
         let dm = gpu.pane(dm_window)?;
         let tv = gpu.pane(tv_window)?;
@@ -123,6 +127,7 @@ impl Running {
                 swap_windows: project.swap_windows,
             },
             placed: false,
+            tv_pointer: None,
         })
     }
 
@@ -147,6 +152,14 @@ impl Running {
             WindowEvent::RedrawRequested if is_dm => return self.redraw_dm(),
             WindowEvent::RedrawRequested => {
                 self.gpu.clear(pane, color::linear_color(color::CANVAS))?;
+            }
+            WindowEvent::CursorMoved { position, .. } if !is_dm => {
+                self.tv_pointer = Some((position.x as f32, position.y as f32));
+                self.tv.window.request_redraw();
+            }
+            WindowEvent::CursorLeft { .. } if !is_dm => {
+                self.tv_pointer = None;
+                self.tv.window.request_redraw();
             }
             _ => {}
         }
