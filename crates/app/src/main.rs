@@ -5,6 +5,11 @@
 
 // Rust guideline compliant 2026-02-21
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the map layer in a later commit")
+)]
+mod camera;
 mod color;
 mod gpu;
 mod pointer;
