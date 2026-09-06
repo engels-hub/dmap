@@ -161,9 +161,6 @@ fn settings_ui(ui: &mut egui::Ui, displays: &[MonitorHandle], settings: &mut Set
                     ui.selectable_value(&mut settings.tv_display, Some(i), label(i));
                 }
             });
-        ui.checkbox(
-            &mut settings.swap_windows,
-            "Swap windows instead of moving them (Wayland)",
-        );
+        ui.checkbox(&mut settings.swap_windows, "Swap mode (Wayland compat)");
     });
 }

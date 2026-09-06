@@ -137,7 +137,13 @@ impl Running {
             WindowEvent::Resized(size) => pane.resize(&self.gpu.device, size.width, size.height),
             // The window manager places a new window where it likes, so check
             // after every move that the DM window is not on the TV display.
-            WindowEvent::Moved(_) if is_dm => self.keep_dm_off_tv(),
+            // The window manager places a new window where it likes, so check
+            // after every move that the DM window is not on the TV display.
+            // Swap mode checks only on demand: a swap makes the window manager
+            // move the windows, and a check on every move would swap again.
+            WindowEvent::Moved(_) if is_dm && !self.settings.swap_windows => {
+                move_dm_off_tv(&self.dm.window, &self.displays, self.settings.tv_display);
+            }
             WindowEvent::RedrawRequested if is_dm => return self.redraw_dm(),
             WindowEvent::RedrawRequested => {
                 self.gpu.clear(pane, color::linear_color(color::CANVAS))?;
@@ -156,8 +162,8 @@ impl Running {
         if changed || !self.placed {
             self.placed = true;
             // Swap first: the swap decides which window is the TV.
-            self.keep_dm_off_tv();
-            if changed {
+            let swapped = self.keep_dm_off_tv();
+            if changed || swapped {
                 place_tv(&self.tv.window, &self.displays, self.settings.tv_display);
             }
         }
@@ -165,26 +171,38 @@ impl Running {
     }
 
     /// Keeps the DM window off the TV display, by a move or by a role swap.
-    fn keep_dm_off_tv(&mut self) {
-        if !self.settings.swap_windows {
-            move_dm_off_tv(&self.dm.window, &self.displays, self.settings.tv_display);
-            return;
-        }
+    ///
+    /// Returns `true` when the windows swapped roles.
+    fn keep_dm_off_tv(&mut self) -> bool {
         let dm_display = display_of(&self.dm.window, &self.displays);
-        if dm_move_target(self.settings.tv_display, dm_display, self.displays.len()).is_some() {
-            self.swap_roles();
+        let target = dm_move_target(self.settings.tv_display, dm_display, self.displays.len());
+        match (target, self.settings.swap_windows) {
+            (None, _) => false,
+            (Some(_), false) => {
+                move_dm_off_tv(&self.dm.window, &self.displays, self.settings.tv_display);
+                false
+            }
+            (Some(target), true) => {
+                self.swap_roles(target);
+                true
+            }
         }
     }
 
     /// Makes the TV window the DM window and the other way round.
     ///
-    /// Nothing moves, so this works where a program cannot position its
-    /// windows, such as Wayland. The TV window still needs `place_tv`.
-    fn swap_roles(&mut self) {
+    /// Nothing has to move, so this works where a program cannot position
+    /// its windows, such as Wayland. The new DM window is asked to sit on
+    /// display `target`, which only matters where positioning works. The
+    /// new TV window still needs `place_tv`.
+    fn swap_roles(&mut self, target: usize) {
         std::mem::swap(&mut self.dm, &mut self.tv);
         self.dm.window.set_title("dmap");
         self.dm.window.set_fullscreen(None);
         self.dm.window.set_decorations(true);
+        self.dm
+            .window
+            .set_outer_position(self.displays[target].position());
         self.dm.window.set_maximized(true);
         self.tv.window.set_title("dmap TV");
         self.tv.window.set_decorations(false);
