@@ -1,0 +1,16 @@
+[package]
+name = "dmap"
+description = "Map display for a tabletop RPG table with a TV"
+readme = "../../README.md"
+keywords = ["dnd", "tabletop", "map", "vtt"]
+categories = ["games", "graphics"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
