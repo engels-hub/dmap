@@ -12,8 +12,11 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow = "1"
+# wgpu comes through this re-export so its version always matches egui's.
+egui-wgpu = { version = "0.36", features = ["winit"] }
 # winit comes through this re-export so its version always matches egui's.
 egui-winit = { version = "0.36", default-features = false, features = ["x11", "wayland"] }
+pollster = "1"
 
 [lints]
 workspace = true

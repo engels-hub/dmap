@@ -6,7 +6,10 @@
 // Rust guideline compliant 2026-02-21
 
 mod color;
+mod gpu;
 mod tv;
+
+use std::sync::Arc;
 
 use anyhow::Result;
 use egui_winit::winit::{
@@ -17,6 +20,7 @@ use egui_winit::winit::{
     window::{Fullscreen, Window, WindowId},
 };
 
+use crate::gpu::{Gpu, Pane};
 use crate::tv::pick_tv_display;
 
 /// Size the DM window opens with. The design mockups use this frame.
@@ -33,48 +37,92 @@ fn main() -> Result<()> {
 }
 
 /// Application state across the event loop.
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct App {
-    dm_window: Option<Window>,
-    tv_window: Option<Window>,
+    running: Option<Running>,
     error: Option<anyhow::Error>,
 }
 
-impl App {
-    fn open_windows(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
-        let dm_window = event_loop.create_window(
-            Window::default_attributes()
-                .with_title("dmap")
-                .with_inner_size(DM_WINDOW_SIZE),
-        )?;
+/// Everything that exists once the windows and the GPU are up.
+#[derive(Debug)]
+struct Running {
+    gpu: Gpu,
+    dm: Pane,
+    tv: Pane,
+}
+
+impl Running {
+    fn new(event_loop: &ActiveEventLoop) -> Result<Self> {
+        let dm_window = Arc::new(
+            event_loop.create_window(
+                Window::default_attributes()
+                    .with_title("dmap")
+                    .with_inner_size(DM_WINDOW_SIZE),
+            )?,
+        );
         let displays: Vec<_> = event_loop.available_monitors().collect();
         let tv_display = pick_tv_display(&displays, dm_window.current_monitor().as_ref())
             .map(|i| Fullscreen::Borderless(Some(displays[i].clone())));
-        let tv_window = event_loop.create_window(
-            Window::default_attributes()
-                .with_title("dmap TV")
-                .with_inner_size(TV_FALLBACK_SIZE)
-                .with_fullscreen(tv_display),
-        )?;
-        self.dm_window = Some(dm_window);
-        self.tv_window = Some(tv_window);
+        let tv_window = Arc::new(
+            event_loop.create_window(
+                Window::default_attributes()
+                    .with_title("dmap TV")
+                    .with_inner_size(TV_FALLBACK_SIZE)
+                    .with_fullscreen(tv_display),
+            )?,
+        );
+        let gpu = Gpu::new(&dm_window)?;
+        let dm = gpu.pane(dm_window)?;
+        let tv = gpu.pane(tv_window)?;
+        Ok(Self { gpu, dm, tv })
+    }
+
+    fn window_event(&mut self, id: WindowId, event: &WindowEvent) -> Result<()> {
+        let pane = if id == self.dm.window.id() {
+            &mut self.dm
+        } else {
+            &mut self.tv
+        };
+        match event {
+            WindowEvent::Resized(size) => pane.resize(&self.gpu.device, size.width, size.height),
+            WindowEvent::RedrawRequested => {
+                self.gpu.clear(pane, color::linear_color(color::CANVAS))?;
+            }
+            _ => {}
+        }
         Ok(())
     }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.dm_window.is_some() {
+        if self.running.is_some() {
             return;
         }
-        if let Err(error) = self.open_windows(event_loop) {
-            self.error = Some(error);
-            event_loop.exit();
+        match Running::new(event_loop) {
+            Ok(running) => self.running = Some(running),
+            Err(error) => {
+                self.error = Some(error);
+                event_loop.exit();
+            }
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
         if event == WindowEvent::CloseRequested {
+            event_loop.exit();
+            return;
+        }
+        let Some(running) = self.running.as_mut() else {
+            return;
+        };
+        if let Err(error) = running.window_event(window_id, &event) {
+            self.error = Some(error);
             event_loop.exit();
         }
     }
