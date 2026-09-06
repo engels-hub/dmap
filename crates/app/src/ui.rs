@@ -34,6 +34,7 @@ pub struct Settings {
     pub swap_windows: bool,
 }
 
+#[hotpath::measure_all]
 impl DmUi {
     pub fn new(gpu: &Gpu, pane: &Pane) -> Self {
         let state = egui_winit::State::new(
