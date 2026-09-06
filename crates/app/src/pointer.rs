@@ -14,7 +14,7 @@ pub const RADIUS: f32 = 24.0;
 ///
 /// A blend of `src * (1 - dst) + dst * (1 - src)` with a white disc gives
 /// `1 - dst` inside, `dst` outside, and a mix on the anti-aliased edge.
-const SHADER: &str = r#"
+const SHADER: &str = r"
 struct VsOut {
     @builtin(position) position: vec4<f32>,
     @location(0) local: vec2<f32>,
@@ -35,7 +35,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     let coverage = 1.0 - smoothstep(1.0 - edge, 1.0, d);
     return vec4<f32>(coverage, coverage, coverage, 1.0);
 }
-"#;
+";
 
 /// The GPU pipeline that draws the pointer disc.
 pub struct PointerDisc {
