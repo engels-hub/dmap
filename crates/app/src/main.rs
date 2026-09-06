@@ -26,6 +26,7 @@ use egui_winit::winit::{
 };
 
 use crate::gpu::{Gpu, Pane};
+use crate::pointer::PointerDisc;
 use crate::project::Project;
 use crate::tv::{display_at, dm_move_target, placement_for, resolve_tv_display};
 use crate::ui::{DmUi, Settings};
@@ -82,6 +83,7 @@ struct Running {
     dm: Pane,
     tv: Pane,
     ui: DmUi,
+    pointer: PointerDisc,
     displays: Vec<MonitorHandle>,
     settings: Settings,
     /// Whether the first DM frame has checked the window placement.
@@ -117,11 +119,13 @@ impl Running {
         let dm = gpu.pane(dm_window)?;
         let tv = gpu.pane(tv_window)?;
         let ui = DmUi::new(&gpu, &dm);
+        let pointer = PointerDisc::new(&gpu.device, tv.config.format);
         Ok(Self {
             gpu,
             dm,
             tv,
             ui,
+            pointer,
             displays,
             settings: Settings {
                 tv_display,
@@ -152,7 +156,15 @@ impl Running {
             }
             WindowEvent::RedrawRequested if is_dm => return self.redraw_dm(),
             WindowEvent::RedrawRequested => {
-                self.gpu.clear(pane, color::linear_color(color::CANVAS))?;
+                let viewport = (pane.config.width, pane.config.height);
+                let (queue, pointer, tv_pointer) =
+                    (&self.gpu.queue, &self.pointer, self.tv_pointer);
+                self.gpu
+                    .clear(pane, color::linear_color(color::CANVAS), |pass| {
+                        if let Some(center) = tv_pointer {
+                            pointer.draw(queue, pass, center, viewport);
+                        }
+                    })?;
             }
             WindowEvent::CursorMoved { position, .. } if !is_dm => {
                 self.tv_pointer = Some((position.x as f32, position.y as f32));

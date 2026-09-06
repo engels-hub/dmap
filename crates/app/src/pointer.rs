@@ -2,6 +2,131 @@
 
 // Rust guideline compliant 2026-02-21
 
+use egui_wgpu::wgpu;
+
+/// Radius of the pointer disc in TV pixels.
+///
+/// About a quarter inch on a 4K 55 inch TV. Becomes a setting in inches once
+/// the TV calibration exists.
+pub const RADIUS: f32 = 24.0;
+
+/// Draws a disc that inverts the colors under it.
+///
+/// A blend of `src * (1 - dst) + dst * (1 - src)` with a white disc gives
+/// `1 - dst` inside, `dst` outside, and a mix on the anti-aliased edge.
+const SHADER: &str = r#"
+struct VsOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) local: vec2<f32>,
+};
+
+@vertex
+fn vs(@location(0) clip: vec2<f32>, @location(1) local: vec2<f32>) -> VsOut {
+    var out: VsOut;
+    out.position = vec4<f32>(clip, 0.0, 1.0);
+    out.local = local;
+    return out;
+}
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+    let d = length(in.local);
+    let edge = fwidth(d);
+    let coverage = 1.0 - smoothstep(1.0 - edge, 1.0, d);
+    return vec4<f32>(coverage, coverage, coverage, 1.0);
+}
+"#;
+
+/// The GPU pipeline that draws the pointer disc.
+pub struct PointerDisc {
+    pipeline: wgpu::RenderPipeline,
+    vertices: wgpu::Buffer,
+}
+
+impl std::fmt::Debug for PointerDisc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PointerDisc").finish_non_exhaustive()
+    }
+}
+
+impl PointerDisc {
+    /// Builds the pipeline for surfaces of `format`.
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("pointer disc"),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        });
+        let invert = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::OneMinusDst,
+                dst_factor: wgpu::BlendFactor::OneMinusSrc,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("pointer disc"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<DiscVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
+                })],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(invert),
+                    write_mask: wgpu::ColorWrites::COLOR,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let vertices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pointer disc"),
+            size: std::mem::size_of::<[DiscVertex; 6]>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self { pipeline, vertices }
+    }
+
+    /// Draws the disc around `center` (window pixels) into the open pass.
+    pub fn draw(
+        &self,
+        queue: &wgpu::Queue,
+        pass: &mut wgpu::RenderPass<'_>,
+        center: (f32, f32),
+        viewport: (u32, u32),
+    ) {
+        let quad = disc_quad(center, RADIUS, viewport);
+        let bytes: Vec<u8> = quad
+            .iter()
+            .flatten()
+            .flat_map(|value| value.to_ne_bytes())
+            .collect();
+        queue.write_buffer(&self.vertices, 0, &bytes);
+        pass.set_pipeline(&self.pipeline);
+        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.draw(0..6, 0..1);
+    }
+}
+
 /// One vertex: clip x, clip y, then local x and y in `-1..=1` across the disc.
 pub type DiscVertex = [f32; 4];
 
@@ -9,10 +134,6 @@ pub type DiscVertex = [f32; 4];
 ///
 /// `center` is in window pixels with the origin at the top left. The clip
 /// coordinates put the origin in the middle with y up, as the GPU expects.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "drawn by the pointer pass in the next commit")
-)]
 pub fn disc_quad(center: (f32, f32), radius: f32, viewport: (u32, u32)) -> [DiscVertex; 6] {
     let (width, height) = (viewport.0 as f32, viewport.1 as f32);
     let corner = |lx: f32, ly: f32| -> DiscVertex {
@@ -63,10 +184,16 @@ mod tests {
     fn spans_two_triangles_with_unit_local_coordinates() {
         let quad = disc_quad((50.0, 25.0), 5.0, (100, 50));
         assert_eq!(quad.len(), 6);
-        assert!(quad.iter().all(|v| v[2].abs() == 1.0 && v[3].abs() == 1.0));
+        assert!(
+            quad.iter()
+                .all(|v| close(v[2].abs(), 1.0) && close(v[3].abs(), 1.0))
+        );
         // All four corners are present.
         for corner in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-            assert!(quad.iter().any(|v| (v[2], v[3]) == corner));
+            assert!(
+                quad.iter()
+                    .any(|v| close(v[2], corner.0) && close(v[3], corner.1))
+            );
         }
     }
 }

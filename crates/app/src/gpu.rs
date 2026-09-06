@@ -56,8 +56,13 @@ impl Gpu {
         })
     }
 
-    /// Clears the whole pane to `color`.
-    pub fn clear(&self, pane: &mut Pane, color: wgpu::Color) -> Result<()> {
+    /// Clears the whole pane to `color`, then lets `draw` add to the pass.
+    pub fn clear(
+        &self,
+        pane: &mut Pane,
+        color: wgpu::Color,
+        draw: impl FnOnce(&mut wgpu::RenderPass<'static>),
+    ) -> Result<()> {
         let Some(frame) = pane.acquire(&self.device)? else {
             return Ok(());
         };
@@ -67,7 +72,10 @@ impl Gpu {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        drop(begin_clear_pass(&mut encoder, &view, color));
+        {
+            let mut pass = begin_clear_pass(&mut encoder, &view, color);
+            draw(&mut pass);
+        };
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
         Ok(())
