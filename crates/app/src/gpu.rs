@@ -114,8 +114,7 @@ impl Pane {
 
     /// Reconfigures the surface after the window changed size.
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        if width == 0 || height == 0 || (width, height) == (self.config.width, self.config.height)
-        {
+        if width == 0 || height == 0 || (width, height) == (self.config.width, self.config.height) {
             return;
         }
         self.config.width = width;
