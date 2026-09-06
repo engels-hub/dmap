@@ -13,9 +13,31 @@ pub fn pick_tv_display<T: PartialEq>(displays: &[T], dm_display: Option<&T>) -> 
         .position(|display| Some(display) != dm_display)
 }
 
+/// Human-readable label for a display: its name and its resolution.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used once the display picker exists")
+)]
+pub fn display_label(name: Option<&str>, width: u32, height: u32) -> String {
+    format!("{} · {width} × {height}", name.unwrap_or("Display"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::pick_tv_display;
+    use super::{display_label, pick_tv_display};
+
+    #[test]
+    fn labels_a_display_with_its_name_and_size() {
+        assert_eq!(
+            display_label(Some("HDMI-1"), 3840, 2160),
+            "HDMI-1 · 3840 × 2160"
+        );
+    }
+
+    #[test]
+    fn labels_an_unnamed_display_generically() {
+        assert_eq!(display_label(None, 1920, 1080), "Display · 1920 × 1080");
+    }
 
     #[test]
     fn picks_first_display_that_is_not_the_dm_display() {
