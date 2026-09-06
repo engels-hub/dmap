@@ -7,6 +7,7 @@
 
 mod color;
 mod gpu;
+mod pointer;
 mod project;
 mod tv;
 mod ui;
