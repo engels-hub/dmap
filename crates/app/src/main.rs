@@ -8,6 +8,7 @@
 mod color;
 mod gpu;
 mod tv;
+mod ui;
 
 use std::sync::Arc;
 
@@ -17,11 +18,13 @@ use egui_winit::winit::{
     dpi::LogicalSize,
     event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoop},
+    monitor::MonitorHandle,
     window::{Fullscreen, Window, WindowId},
 };
 
 use crate::gpu::{Gpu, Pane};
 use crate::tv::pick_tv_display;
+use crate::ui::{DmUi, Settings};
 
 /// Size the DM window opens with. The design mockups use this frame.
 const DM_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(1440.0, 900.0);
@@ -49,6 +52,9 @@ struct Running {
     gpu: Gpu,
     dm: Pane,
     tv: Pane,
+    ui: DmUi,
+    displays: Vec<MonitorHandle>,
+    settings: Settings,
 }
 
 impl Running {
@@ -61,30 +67,38 @@ impl Running {
             )?,
         );
         let displays: Vec<_> = event_loop.available_monitors().collect();
-        let tv_display = pick_tv_display(&displays, dm_window.current_monitor().as_ref())
-            .map(|i| Fullscreen::Borderless(Some(displays[i].clone())));
+        let tv_display = pick_tv_display(&displays, dm_window.current_monitor().as_ref());
         let tv_window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
                     .with_title("dmap TV")
                     .with_inner_size(TV_FALLBACK_SIZE)
-                    .with_fullscreen(tv_display),
+                    .with_fullscreen(fullscreen_on(&displays, tv_display)),
             )?,
         );
         let gpu = Gpu::new(&dm_window)?;
         let dm = gpu.pane(dm_window)?;
         let tv = gpu.pane(tv_window)?;
-        Ok(Self { gpu, dm, tv })
+        let ui = DmUi::new(&gpu, &dm);
+        Ok(Self {
+            gpu,
+            dm,
+            tv,
+            ui,
+            displays,
+            settings: Settings { tv_display },
+        })
     }
 
     fn window_event(&mut self, id: WindowId, event: &WindowEvent) -> Result<()> {
-        let pane = if id == self.dm.window.id() {
-            &mut self.dm
-        } else {
-            &mut self.tv
-        };
+        let is_dm = id == self.dm.window.id();
+        if is_dm && self.ui.on_event(&self.dm, event) {
+            return Ok(());
+        }
+        let pane = if is_dm { &mut self.dm } else { &mut self.tv };
         match event {
             WindowEvent::Resized(size) => pane.resize(&self.gpu.device, size.width, size.height),
+            WindowEvent::RedrawRequested if is_dm => self.redraw_dm()?,
             WindowEvent::RedrawRequested => {
                 self.gpu.clear(pane, color::linear_color(color::CANVAS))?;
             }
@@ -92,6 +106,23 @@ impl Running {
         }
         Ok(())
     }
+
+    fn redraw_dm(&mut self) -> Result<()> {
+        let before = self.settings.clone();
+        self.ui
+            .frame(&self.gpu, &mut self.dm, &self.displays, &mut self.settings)?;
+        if self.settings != before {
+            self.tv
+                .window
+                .set_fullscreen(fullscreen_on(&self.displays, self.settings.tv_display));
+        }
+        Ok(())
+    }
+}
+
+/// Borderless full screen on the chosen display, or `None` for a normal window.
+fn fullscreen_on(displays: &[MonitorHandle], index: Option<usize>) -> Option<Fullscreen> {
+    index.map(|i| Fullscreen::Borderless(Some(displays[i].clone())))
 }
 
 impl ApplicationHandler for App {

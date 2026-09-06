@@ -14,10 +14,6 @@ pub fn pick_tv_display<T: PartialEq>(displays: &[T], dm_display: Option<&T>) -> 
 }
 
 /// Human-readable label for a display: its name and its resolution.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used once the display picker exists")
-)]
 pub fn display_label(name: Option<&str>, width: u32, height: u32) -> String {
     format!("{} · {width} × {height}", name.unwrap_or("Display"))
 }
