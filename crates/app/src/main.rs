@@ -26,7 +26,7 @@ use egui_winit::winit::{
 
 use crate::gpu::{Gpu, Pane};
 use crate::project::Project;
-use crate::tv::{dm_move_target, placement_for, resolve_tv_display};
+use crate::tv::{display_at, dm_move_target, placement_for, resolve_tv_display};
 use crate::ui::{DmUi, Settings};
 
 /// Size the DM window opens with. The design mockups use this frame.
@@ -95,9 +95,7 @@ impl Running {
             )?,
         );
         let displays: Vec<_> = event_loop.available_monitors().collect();
-        let dm_display = dm_window
-            .current_monitor()
-            .and_then(|current| displays.iter().position(|display| *display == current));
+        let dm_display = display_of(&dm_window, &displays);
         let tv_display =
             resolve_tv_display(&project.tv_display, &display_names(&displays), dm_display);
         let tv_window = Arc::new(
@@ -132,6 +130,11 @@ impl Running {
         let pane = if is_dm { &mut self.dm } else { &mut self.tv };
         match event {
             WindowEvent::Resized(size) => pane.resize(&self.gpu.device, size.width, size.height),
+            // The window manager places a new window where it likes, so check
+            // after every move that the DM window is not on the TV display.
+            WindowEvent::Moved(_) if is_dm => {
+                move_dm_off_tv(&self.dm.window, &self.displays, self.settings.tv_display);
+            }
             WindowEvent::RedrawRequested if is_dm => return self.redraw_dm(),
             WindowEvent::RedrawRequested => {
                 self.gpu.clear(pane, color::linear_color(color::CANVAS))?;
@@ -148,9 +151,7 @@ impl Running {
             .frame(&self.gpu, &mut self.dm, &self.displays, &mut self.settings)?;
         let changed = self.settings != before;
         if changed {
-            self.tv
-                .window
-                .set_fullscreen(fullscreen_on(&self.displays, self.settings.tv_display));
+            place_tv(&self.tv.window, &self.displays, self.settings.tv_display);
             move_dm_off_tv(&self.dm.window, &self.displays, self.settings.tv_display);
         }
         Ok(changed)
@@ -163,15 +164,45 @@ impl Running {
     }
 }
 
+/// Puts the TV window full screen on the chosen display, or back into a window.
+///
+/// A window that is already full screen ignores a change of display on X11,
+/// so it leaves full screen and moves there first.
+fn place_tv(tv_window: &Window, displays: &[MonitorHandle], tv_display: Option<usize>) {
+    tv_window.set_fullscreen(None);
+    if let Some(i) = tv_display {
+        tv_window.set_outer_position(displays[i].position());
+    }
+    tv_window.set_fullscreen(fullscreen_on(displays, tv_display));
+}
+
+/// The display that holds the window's top-left corner.
+///
+/// winit's own lookup reports the wrong display on some X11 setups, so this
+/// compares the window position with the display rectangles.
+fn display_of(window: &Window, displays: &[MonitorHandle]) -> Option<usize> {
+    let position = window.outer_position().ok()?;
+    let rects: Vec<_> = displays
+        .iter()
+        .map(|display| {
+            let position = display.position();
+            let size = display.size();
+            ((position.x, position.y), (size.width, size.height))
+        })
+        .collect();
+    display_at((position.x, position.y), &rects)
+}
+
 /// Moves the DM window to another display when the TV took its display.
 fn move_dm_off_tv(dm_window: &Window, displays: &[MonitorHandle], tv_display: Option<usize>) {
-    let dm_display = dm_window
-        .current_monitor()
-        .and_then(|current| displays.iter().position(|display| *display == current));
+    let dm_display = display_of(dm_window, displays);
     if let Some(target) = dm_move_target(tv_display, dm_display, displays.len()) {
-        // A maximized window ignores a move, so release it first.
+        // A maximized window ignores a move, so release it first. Maximize
+        // again after the move, so the window fits a display with another
+        // scale factor.
         dm_window.set_maximized(false);
         dm_window.set_outer_position(displays[target].position());
+        dm_window.set_maximized(true);
     }
 }
 

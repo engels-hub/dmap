@@ -39,6 +39,16 @@ pub fn resolve_tv_display<S: AsRef<str>>(
     }
 }
 
+/// Finds the display whose rectangle holds `point`.
+///
+/// `rects` are `(position, size)` pairs in screen pixels, in display order.
+pub fn display_at(point: (i32, i32), rects: &[((i32, i32), (u32, u32))]) -> Option<usize> {
+    rects.iter().position(|&((x, y), (width, height))| {
+        let (px, py) = point;
+        px >= x && py >= y && px - x < width as i32 && py - y < height as i32
+    })
+}
+
 /// Where the DM window must move so it does not sit on the TV display.
 ///
 /// Returns the index of a free display when the TV and the DM window share a
@@ -76,8 +86,25 @@ pub fn display_label(name: Option<&str>, width: u32, height: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        display_label, dm_move_target, pick_tv_display, placement_for, resolve_tv_display,
+        display_at, display_label, dm_move_target, pick_tv_display, placement_for,
+        resolve_tv_display,
     };
+
+    #[test]
+    fn finds_the_display_that_holds_a_point() {
+        let rects = [((0, 0), (1920, 1200)), ((1920, 0), (2560, 1440))];
+        assert_eq!(display_at((5, 29), &rects), Some(0));
+        assert_eq!(display_at((1920, 0), &rects), Some(1));
+        assert_eq!(display_at((1925, 1439), &rects), Some(1));
+    }
+
+    #[test]
+    fn finds_no_display_for_a_point_outside_all() {
+        let rects = [((0, 0), (1920, 1200)), ((1920, 0), (2560, 1440))];
+        assert_eq!(display_at((-1, 0), &rects), None);
+        assert_eq!(display_at((4480, 0), &rects), None);
+        assert_eq!(display_at((0, 1200), &rects), None);
+    }
     use crate::project::TvPlacement;
 
     #[test]
