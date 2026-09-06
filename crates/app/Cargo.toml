@@ -1,0 +1,29 @@
+[package]
+name = "dmap"
+description = "Map display for a tabletop RPG table with a TV"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["dnd", "tabletop", "map", "vtt"]
+categories = ["games", "graphics"]
+rust-version.workspace = true
+
+[[bin]]
+name = "dmap"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+egui = "0.36"
+# wgpu and winit come through these re-exports so the versions always match.
+egui-wgpu = { version = "0.36", features = ["winit"] }
+egui-winit = { version = "0.36", default-features = false, features = ["links", "x11", "wayland"] }
+env_logger = "0.11"
+log = "0.4"
+mimalloc = "0.1"
+pollster = "1"
+
+[lints]
+workspace = true
