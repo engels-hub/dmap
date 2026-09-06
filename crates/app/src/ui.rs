@@ -68,6 +68,7 @@ impl DmUi {
         pane: &mut Pane,
         displays: &[MonitorHandle],
         settings: &mut Settings,
+        draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
     ) -> Result<()> {
         let raw_input = self.state.take_egui_input(&pane.window);
         let ctx = self.state.egui_ctx().clone();
@@ -112,6 +113,7 @@ impl DmUi {
             {
                 let mut pass =
                     begin_clear_pass(&mut encoder, &view, color::linear_color(color::CANVAS));
+                draw_canvas(&mut pass);
                 self.renderer.render(&mut pass, &paint_jobs, &screen);
             };
             gpu.queue

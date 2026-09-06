@@ -16,6 +16,10 @@ pub struct Camera {
 
 impl Camera {
     /// Maps a window pixel to a world point for a view of `viewport` pixels.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used once the DM camera pans and zooms")
+    )]
     pub fn screen_to_world(&self, screen: (f64, f64), viewport: (u32, u32)) -> (f64, f64) {
         let (half_w, half_h) = (f64::from(viewport.0) / 2.0, f64::from(viewport.1) / 2.0);
         (
