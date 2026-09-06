@@ -1,0 +1,34 @@
+name: User story
+description: One thing a user wants to do, and why.
+title: "Story: "
+labels: ["user story"]
+body:
+  - type: input
+    id: who
+    attributes:
+      label: Who
+      placeholder: DM, player
+    validations:
+      required: true
+  - type: textarea
+    id: story
+    attributes:
+      label: Story
+      description: As a <who>, I want <what>, so that <why>.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: One line for each thing that must be true when the story is done.
+      value: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Links to PLAN.md or DESIGN.md sections, open questions.
