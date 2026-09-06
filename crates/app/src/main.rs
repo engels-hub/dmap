@@ -169,6 +169,8 @@ fn move_dm_off_tv(dm_window: &Window, displays: &[MonitorHandle], tv_display: Op
         .current_monitor()
         .and_then(|current| displays.iter().position(|display| *display == current));
     if let Some(target) = dm_move_target(tv_display, dm_display, displays.len()) {
+        // A maximized window ignores a move, so release it first.
+        dm_window.set_maximized(false);
         dm_window.set_outer_position(displays[target].position());
     }
 }
