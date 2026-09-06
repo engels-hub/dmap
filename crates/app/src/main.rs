@@ -5,6 +5,7 @@
 
 // Rust guideline compliant 2026-02-21
 
+mod color;
 mod tv;
 
 use anyhow::Result;
