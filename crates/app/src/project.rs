@@ -4,10 +4,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::scene::MapObject;
+
 /// Everything the DM set up for one campaign.
 ///
 /// Every field has a default, so a file from an older version still loads.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Project {
     /// Where the TV window opens.
@@ -17,6 +19,8 @@ pub struct Project {
     /// Wayland does not let a program move its windows, so this is the only
     /// way to keep the DM window off the TV display there.
     pub swap_windows: bool,
+    /// The maps on the canvas, in drawing order.
+    pub maps: Vec<MapObject>,
 }
 
 /// Where the TV window opens.
@@ -50,7 +54,10 @@ impl Project {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{Project, TvPlacement};
+    use crate::scene::MapObject;
 
     #[test]
     fn round_trips_through_json() {
@@ -63,11 +70,26 @@ mod tests {
                 let project = Project {
                     tv_display: tv_display.clone(),
                     swap_windows,
+                    ..Project::default()
                 };
                 let json = project.to_json();
                 assert_eq!(Project::from_json(&json).unwrap(), project);
             }
         }
+    }
+
+    #[test]
+    fn maps_round_trip_through_json() {
+        let project = Project {
+            maps: vec![MapObject {
+                path: PathBuf::from("maps/crypt.png"),
+                center: (1.5, -2.0),
+                grid_px: 140.0,
+            }],
+            ..Project::default()
+        };
+        let json = project.to_json();
+        assert_eq!(Project::from_json(&json).unwrap(), project);
     }
 
     #[test]
@@ -79,7 +101,7 @@ mod tests {
     fn stores_the_display_choice_readably() {
         let project = Project {
             tv_display: TvPlacement::Display("HDMI-1".to_owned()),
-            swap_windows: false,
+            ..Project::default()
         };
         assert!(project.to_json().contains("\"display\": \"HDMI-1\""));
     }

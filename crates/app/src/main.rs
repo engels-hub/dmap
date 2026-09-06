@@ -14,6 +14,11 @@ mod color;
 mod gpu;
 mod pointer;
 mod project;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the map layer in a later commit")
+)]
+mod scene;
 mod tv;
 mod ui;
 
