@@ -62,6 +62,8 @@ impl DmUi {
     }
 
     /// Runs one UI frame and draws it into the pane.
+    ///
+    /// Returns `true` when the DM pressed Add map.
     pub fn frame(
         &mut self,
         gpu: &Gpu,
@@ -69,10 +71,13 @@ impl DmUi {
         displays: &[MonitorHandle],
         settings: &mut Settings,
         draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let raw_input = self.state.take_egui_input(&pane.window);
         let ctx = self.state.egui_ctx().clone();
-        let output = ctx.run_ui(raw_input, |ui| settings_ui(ui, displays, settings));
+        let mut add_map = false;
+        let output = ctx.run_ui(raw_input, |ui| {
+            add_map = settings_ui(ui, displays, settings);
+        });
         let egui::FullOutput {
             platform_output,
             mut textures_delta,
@@ -132,17 +137,19 @@ impl DmUi {
         {
             pane.window.request_redraw();
         }
-        Ok(())
+        Ok(add_map)
     }
 }
 
-/// The rail and the settings panel.
-fn settings_ui(ui: &mut egui::Ui, displays: &[MonitorHandle], settings: &mut Settings) {
+/// The rail and the settings panel. Returns `true` when Add map was pressed.
+fn settings_ui(ui: &mut egui::Ui, displays: &[MonitorHandle], settings: &mut Settings) -> bool {
+    let mut add_map = false;
     egui::Panel::left("rail")
         .exact_size(RAIL_WIDTH)
         .resizable(false)
         .show(ui, |ui| {
             ui.label("dmap");
+            add_map = ui.button("Add map").clicked();
         });
     egui::Panel::right("settings").show(ui, |ui| {
         ui.heading("Settings");
@@ -165,4 +172,5 @@ fn settings_ui(ui: &mut egui::Ui, displays: &[MonitorHandle], settings: &mut Set
             });
         ui.checkbox(&mut settings.swap_windows, "Swap mode (Wayland compat)");
     });
+    add_map
 }

@@ -180,7 +180,7 @@ impl Running {
     fn window_event(&mut self, id: WindowId, event: &WindowEvent) -> Result<bool> {
         let is_dm = id == self.dm.window.id();
         if let (true, WindowEvent::DroppedFile(path)) = (is_dm, event) {
-            return Ok(self.add_map(path.clone()));
+            return Ok(self.add_map(path));
         }
         if is_dm && self.ui.on_event(&self.dm, event) {
             return Ok(false);
@@ -225,11 +225,20 @@ impl Running {
     }
 
     /// Adds a map file at the middle of the DM view. Returns `true`: the project changed.
-    fn add_map(&mut self, file: PathBuf) -> bool {
-        let stored = relative_path(&self.project_dir, &file);
+    fn add_map(&mut self, file: &Path) -> bool {
+        let stored = relative_path(&self.project_dir, file);
         self.loader.request(self.project_dir.join(&stored));
         self.maps.push(MapObject::new(stored, self.camera.center));
         true
+    }
+
+    /// Asks for an image file and adds it. Returns `true` when a file was added.
+    fn pick_map_file(&mut self) -> bool {
+        let picked = rfd::FileDialog::new()
+            .add_filter("Images", &["png", "jpg", "jpeg"])
+            .set_directory(&self.project_dir)
+            .pick_file();
+        picked.is_some_and(|file| self.add_map(&file))
     }
 
     /// Moves finished image files to the GPU.
@@ -254,14 +263,15 @@ impl Running {
         let viewport = (self.dm.config.width, self.dm.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
         let (map_layer, maps, camera) = (&mut self.map_layer, &self.maps, &self.camera);
-        self.ui.frame(
+        let add_map = self.ui.frame(
             &self.gpu,
             &mut self.dm,
             &self.displays,
             &mut self.settings,
             |pass| map_layer.draw(device, queue, pass, maps, camera, viewport),
         )?;
-        let changed = self.settings != before;
+        let added = add_map && self.pick_map_file();
+        let changed = added || self.settings != before;
         if changed || !self.placed {
             self.placed = true;
             // Swap first: the swap decides which window is the TV.
