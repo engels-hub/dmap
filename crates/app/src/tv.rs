@@ -39,6 +39,26 @@ pub fn resolve_tv_display<S: AsRef<str>>(
     }
 }
 
+/// Where the DM window must move so it does not sit on the TV display.
+///
+/// Returns the index of a free display when the TV and the DM window share a
+/// display and another one exists. Otherwise `None`: nothing moves.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired into the app in the next commit")
+)]
+pub fn dm_move_target(
+    tv_display: Option<usize>,
+    dm_display: Option<usize>,
+    display_count: usize,
+) -> Option<usize> {
+    let tv = tv_display?;
+    if dm_display != Some(tv) {
+        return None;
+    }
+    (0..display_count).find(|&i| i != tv)
+}
+
 /// Turns the picker's choice into what the project file stores.
 ///
 /// A display without a name cannot be found again by name, so it is saved
@@ -59,8 +79,28 @@ pub fn display_label(name: Option<&str>, width: u32, height: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_label, pick_tv_display, placement_for, resolve_tv_display};
+    use super::{
+        display_label, dm_move_target, pick_tv_display, placement_for, resolve_tv_display,
+    };
     use crate::project::TvPlacement;
+
+    #[test]
+    fn moves_the_dm_window_off_the_display_that_became_the_tv() {
+        assert_eq!(dm_move_target(Some(0), Some(0), 2), Some(1));
+        assert_eq!(dm_move_target(Some(1), Some(1), 3), Some(0));
+    }
+
+    #[test]
+    fn leaves_the_dm_window_alone_when_the_tv_is_elsewhere() {
+        assert_eq!(dm_move_target(Some(1), Some(0), 2), None);
+        assert_eq!(dm_move_target(None, Some(0), 2), None);
+        assert_eq!(dm_move_target(Some(0), None, 2), None);
+    }
+
+    #[test]
+    fn leaves_the_dm_window_alone_when_there_is_no_other_display() {
+        assert_eq!(dm_move_target(Some(0), Some(0), 1), None);
+    }
 
     #[test]
     fn saves_a_picked_display_by_name() {
