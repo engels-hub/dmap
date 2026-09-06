@@ -30,6 +30,8 @@ impl std::fmt::Debug for DmUi {
 pub struct Settings {
     /// Index into the display list, or `None` for a normal window.
     pub tv_display: Option<usize>,
+    /// Swap window roles instead of moving the DM window. See `Project`.
+    pub swap_windows: bool,
 }
 
 impl DmUi {
@@ -159,5 +161,9 @@ fn settings_ui(ui: &mut egui::Ui, displays: &[MonitorHandle], settings: &mut Set
                     ui.selectable_value(&mut settings.tv_display, Some(i), label(i));
                 }
             });
+        ui.checkbox(
+            &mut settings.swap_windows,
+            "Swap windows instead of moving them (Wayland)",
+        );
     });
 }

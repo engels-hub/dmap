@@ -117,7 +117,10 @@ impl Running {
             tv,
             ui,
             displays,
-            settings: Settings { tv_display },
+            settings: Settings {
+                tv_display,
+                swap_windows: project.swap_windows,
+            },
         })
     }
 
@@ -161,6 +164,7 @@ impl Running {
     fn update_project(&self, project: &mut Project) {
         project.tv_display =
             placement_for(self.settings.tv_display, &display_names(&self.displays));
+        project.swap_windows = self.settings.swap_windows;
     }
 }
 

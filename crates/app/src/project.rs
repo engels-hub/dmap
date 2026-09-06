@@ -12,6 +12,11 @@ use serde::{Deserialize, Serialize};
 pub struct Project {
     /// Where the TV window opens.
     pub tv_display: TvPlacement,
+    /// Swap the roles of the two windows instead of moving the DM window.
+    ///
+    /// Wayland does not let a program move its windows, so this is the only
+    /// way to keep the DM window off the TV display there.
+    pub swap_windows: bool,
 }
 
 /// Where the TV window opens.
@@ -54,16 +59,27 @@ mod tests {
             TvPlacement::Window,
             TvPlacement::Display("HDMI-1".to_owned()),
         ] {
-            let project = Project { tv_display };
-            let json = project.to_json();
-            assert_eq!(Project::from_json(&json).unwrap(), project);
+            for swap_windows in [false, true] {
+                let project = Project {
+                    tv_display: tv_display.clone(),
+                    swap_windows,
+                };
+                let json = project.to_json();
+                assert_eq!(Project::from_json(&json).unwrap(), project);
+            }
         }
+    }
+
+    #[test]
+    fn swap_windows_is_off_by_default() {
+        assert!(!Project::default().swap_windows);
     }
 
     #[test]
     fn stores_the_display_choice_readably() {
         let project = Project {
             tv_display: TvPlacement::Display("HDMI-1".to_owned()),
+            swap_windows: false,
         };
         assert!(project.to_json().contains("\"display\": \"HDMI-1\""));
     }
