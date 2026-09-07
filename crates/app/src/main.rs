@@ -13,6 +13,7 @@ mod maps;
 mod pointer;
 mod project;
 mod scene;
+mod transform;
 mod tv;
 mod ui;
 
@@ -37,7 +38,7 @@ use crate::pointer::PointerDisc;
 use crate::project::Project;
 use crate::scene::MapObject;
 use crate::tv::{display_at, dm_move_target, placement_for, resolve_tv_display};
-use crate::ui::{DmUi, Settings};
+use crate::ui::{DmUi, Frame, Settings};
 
 /// Size the DM window opens with. The design mockups use this frame.
 const DM_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(1440.0, 900.0);
@@ -260,27 +261,40 @@ impl Running {
     fn redraw_dm(&mut self) -> Result<bool> {
         self.upload_loaded_images();
         let before = self.settings.clone();
+        let map_layer = &self.map_layer;
+        let output = self.ui.run(
+            &self.dm,
+            Frame {
+                displays: &self.displays,
+                settings: &mut self.settings,
+                maps: &mut self.maps,
+                camera: &self.camera,
+                size_of: &|path| map_layer.size_of(path),
+            },
+        );
         let viewport = (self.dm.config.width, self.dm.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
         let (map_layer, maps, camera) = (&mut self.map_layer, &self.maps, &self.camera);
-        let add_map = self.ui.frame(
-            &self.gpu,
-            &mut self.dm,
-            &self.displays,
-            &mut self.settings,
-            |pass| map_layer.draw(device, queue, pass, maps, camera, viewport),
-        )?;
-        let added = add_map && self.pick_map_file();
-        let changed = added || self.settings != before;
-        if changed || !self.placed {
+        self.ui
+            .render(&self.gpu, &mut self.dm, output.paint, |pass| {
+                map_layer.draw(device, queue, pass, maps, camera, viewport);
+            })?;
+        if output.edited {
+            self.tv.window.request_redraw();
+        }
+        let added = output.add_map && self.pick_map_file();
+        let settings_changed = self.settings != before;
+        if settings_changed || !self.placed {
             self.placed = true;
             // Swap first: the swap decides which window is the TV.
             let swapped = self.keep_dm_off_tv();
-            if changed || swapped {
+            // Only a placement change touches the TV window: re-entering full
+            // screen takes the keyboard focus away from the DM window.
+            if settings_changed || swapped {
                 place_tv(&self.tv.window, &self.displays, self.settings.tv_display);
             }
         }
-        Ok(changed)
+        Ok(added || output.save || settings_changed)
     }
 
     /// Keeps the DM window off the TV display, by a move or by a role swap.

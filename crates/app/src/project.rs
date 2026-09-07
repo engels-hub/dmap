@@ -82,9 +82,11 @@ mod tests {
     fn maps_round_trip_through_json() {
         let project = Project {
             maps: vec![MapObject {
-                path: PathBuf::from("maps/crypt.png"),
-                center: (1.5, -2.0),
                 grid_px: 140.0,
+                rotation: 0.5,
+                scale: 1.5,
+                flip_x: true,
+                ..MapObject::new(PathBuf::from("maps/crypt.png"), (1.5, -2.0))
             }],
             ..Project::default()
         };

@@ -143,6 +143,11 @@ impl MapLayer {
         }
     }
 
+    /// Pixel size of the image for `path`, once it is on the GPU.
+    pub fn size_of(&self, path: &Path) -> Option<(u32, u32)> {
+        self.textures.get(path).map(|texture| texture.size)
+    }
+
     /// Puts a decoded image on the GPU under `path`.
     pub fn upload(
         &mut self,
@@ -220,7 +225,13 @@ impl MapLayer {
             .iter()
             .filter_map(|map| {
                 let texture = self.textures.get(&map.path)?;
-                Some((texture, map_quad(map.rect(texture.size), camera, viewport)))
+                let quad = map_quad(
+                    map.corners(texture.size),
+                    (map.flip_x, map.flip_y),
+                    camera,
+                    viewport,
+                );
+                Some((texture, quad))
             })
             .collect();
         if drawn.is_empty() {
@@ -259,30 +270,41 @@ fn vertex_buffer(device: &wgpu::Device, maps: usize) -> wgpu::Buffer {
 /// One vertex: clip x, clip y, texture u, texture v.
 pub type MapVertex = [f32; 4];
 
-/// The two triangles that show a map's world `rect` through `camera`.
+/// The two triangles that show a map through `camera`.
+///
+/// `corners` come from `MapObject::corners`. `flip` mirrors the image on
+/// the x and y axis by swapping texture coordinates.
 pub fn map_quad(
-    rect: ((f64, f64), (f64, f64)),
+    corners: [(f64, f64); 4],
+    flip: (bool, bool),
     camera: &Camera,
     viewport: (u32, u32),
 ) -> [MapVertex; 6] {
-    let (min, max) = rect;
-    let corner = |u: f32, v: f32| -> MapVertex {
-        let world = (
-            if u == 0.0 { min.0 } else { max.0 },
-            if v == 0.0 { min.1 } else { max.1 },
-        );
-        let (sx, sy) = camera.world_to_screen(world, viewport);
+    let vertex = |i: usize| -> MapVertex {
+        let (sx, sy) = camera.world_to_screen(corners[i], viewport);
         let clip_x = (sx / f64::from(viewport.0)) * 2.0 - 1.0;
         let clip_y = 1.0 - (sy / f64::from(viewport.1)) * 2.0;
+        let (mut u, mut v) = match i {
+            0 => (0.0, 0.0),
+            1 => (1.0, 0.0),
+            2 => (1.0, 1.0),
+            _ => (0.0, 1.0),
+        };
+        if flip.0 {
+            u = 1.0 - u;
+        }
+        if flip.1 {
+            v = 1.0 - v;
+        }
         [clip_x as f32, clip_y as f32, u, v]
     };
     [
-        corner(0.0, 0.0),
-        corner(1.0, 0.0),
-        corner(0.0, 1.0),
-        corner(0.0, 1.0),
-        corner(1.0, 0.0),
-        corner(1.0, 1.0),
+        vertex(0),
+        vertex(1),
+        vertex(3),
+        vertex(3),
+        vertex(1),
+        vertex(2),
     ]
 }
 
@@ -310,7 +332,8 @@ mod tests {
             pixels_per_inch: 100.0,
         };
         // A 2 by 1 inch map centered on the origin in a 400 by 200 view.
-        let quad = map_quad(((-1.0, -0.5), (1.0, 0.5)), &camera, (400, 200));
+        let corners = [(-1.0, -0.5), (1.0, -0.5), (1.0, 0.5), (-1.0, 0.5)];
+        let quad = map_quad(corners, (false, false), &camera, (400, 200));
         assert_eq!(quad.len(), 6);
         let top_left = quad
             .iter()
@@ -322,6 +345,22 @@ mod tests {
             .find(|v| close(v[2], 1.0) && close(v[3], 1.0))
             .unwrap();
         assert!(close(bottom_right[0], 0.5) && close(bottom_right[1], -0.5));
+    }
+
+    #[test]
+    fn a_flipped_map_mirrors_its_texture_coordinates() {
+        let camera = Camera {
+            center: (0.0, 0.0),
+            pixels_per_inch: 100.0,
+        };
+        let corners = [(-1.0, -0.5), (1.0, -0.5), (1.0, 0.5), (-1.0, 0.5)];
+        let quad = map_quad(corners, (true, false), &camera, (400, 200));
+        // The top-left corner now shows the image's top-right texel.
+        let top_left = quad
+            .iter()
+            .find(|v| close(v[0], -0.5) && close(v[1], 0.5))
+            .unwrap();
+        assert!(close(top_left[2], 1.0) && close(top_left[3], 0.0));
     }
 
     #[test]
