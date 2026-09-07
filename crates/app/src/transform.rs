@@ -70,8 +70,8 @@ pub fn rotation_from_drag(
 /// edge, on the outside of the map. Screen space, y down.
 pub fn rotation_handle(top_left: (f64, f64), top_right: (f64, f64), offset: f64) -> (f64, f64) {
     let mid = (
-        (top_left.0 + top_right.0) / 2.0,
-        (top_left.1 + top_right.1) / 2.0,
+        f64::midpoint(top_left.0, top_right.0),
+        f64::midpoint(top_left.1, top_right.1),
     );
     let length = distance(top_left, top_right);
     if length <= 0.0 {

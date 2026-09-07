@@ -13,14 +13,11 @@ mod maps;
 mod pointer;
 mod project;
 mod scene;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the Select tool in the next commit")
-)]
 mod transform;
 mod tv;
 mod ui;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -42,7 +39,7 @@ use crate::pointer::PointerDisc;
 use crate::project::Project;
 use crate::scene::MapObject;
 use crate::tv::{display_at, dm_move_target, placement_for, resolve_tv_display};
-use crate::ui::{DmUi, Settings};
+use crate::ui::{DmUi, Frame, Settings};
 
 /// Size the DM window opens with. The design mockups use this frame.
 const DM_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(1440.0, 900.0);
@@ -265,27 +262,46 @@ impl Running {
     fn redraw_dm(&mut self) -> Result<bool> {
         self.upload_loaded_images();
         let before = self.settings.clone();
+        let maps_before = self.maps.clone();
         let viewport = (self.dm.config.width, self.dm.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
-        let (map_layer, maps, camera) = (&mut self.map_layer, &self.maps, &self.camera);
+        let (map_layer, camera) = (&mut self.map_layer, &self.camera);
+        // Image sizes known at the start of the frame, for hit tests and handles.
+        let sizes: HashMap<PathBuf, (u32, u32)> = maps_before
+            .iter()
+            .filter_map(|map| Some((map.path.clone(), map_layer.size_of(&map.path)?)))
+            .collect();
         let add_map = self.ui.frame(
             &self.gpu,
             &mut self.dm,
-            &self.displays,
-            &mut self.settings,
-            |pass| map_layer.draw(device, queue, pass, maps, camera, viewport),
+            Frame {
+                displays: &self.displays,
+                settings: &mut self.settings,
+                maps: &mut self.maps,
+                camera,
+                size_of: &|path| sizes.get(path).copied(),
+            },
+            // The maps as they were at the start of the frame; an edit made in
+            // this frame shows on the next one.
+            |pass| map_layer.draw(device, queue, pass, &maps_before, camera, viewport),
         )?;
         let added = add_map && self.pick_map_file();
-        let changed = added || self.settings != before;
-        if changed || !self.placed {
+        let maps_changed = self.maps != maps_before;
+        if maps_changed {
+            self.tv.window.request_redraw();
+        }
+        let settings_changed = self.settings != before;
+        if settings_changed || !self.placed {
             self.placed = true;
             // Swap first: the swap decides which window is the TV.
             let swapped = self.keep_dm_off_tv();
-            if changed || swapped {
+            // Only a placement change touches the TV window: re-entering full
+            // screen takes the keyboard focus away from the DM window.
+            if settings_changed || swapped {
                 place_tv(&self.tv.window, &self.displays, self.settings.tv_display);
             }
         }
-        Ok(changed)
+        Ok(added || maps_changed || settings_changed)
     }
 
     /// Keeps the DM window off the TV display, by a move or by a role swap.

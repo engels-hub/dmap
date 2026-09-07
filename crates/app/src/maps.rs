@@ -143,6 +143,11 @@ impl MapLayer {
         }
     }
 
+    /// Pixel size of the image for `path`, once it is on the GPU.
+    pub fn size_of(&self, path: &Path) -> Option<(u32, u32)> {
+        self.textures.get(path).map(|texture| texture.size)
+    }
+
     /// Puts a decoded image on the GPU under `path`.
     pub fn upload(
         &mut self,
