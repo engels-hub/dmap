@@ -13,8 +13,9 @@ use crate::color;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::scene::MapObject;
 use crate::transform::{
-    MAX_GRID_PX, MIN_GRID_PX, edge_midpoint, grid_px_from_measure, hit_test, pick_handle, reorder,
-    rotation_from_drag, rotation_handle, scale_from_drag, snap_corner, step_scale,
+    MAX_GRID_PX, MIN_GRID_PX, corner_offset, edge_midpoint, grid_px_from_measure, hit_test,
+    pick_handle, reorder, rotation_from_drag, rotation_handle, scale_from_drag, snap_corner,
+    step_scale,
 };
 use crate::tv::display_label;
 
@@ -643,8 +644,16 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
                 start_center.1 + cursor.1 - start_cursor.1,
             );
             map.center = moved;
-            if let (true, Some(size)) = (snap, size) {
-                map.center = snap_corner(moved, &map.corners(size));
+            // A snapped move steps along the map's own grid. A free move
+            // decides where that grid starts, so letting Ctrl go never
+            // pulls the map back off the spot the DM chose.
+            if let Some(size) = size {
+                let corners = map.corners(size);
+                if snap {
+                    map.center = snap_corner(moved, &corners, map.snap_offset);
+                } else {
+                    map.snap_offset = corner_offset(&corners);
+                }
             }
         }
         Drag::Scale {
