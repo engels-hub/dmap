@@ -51,10 +51,14 @@ const TV_FALLBACK_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 540.0);
 /// Project file used when no path is given on the command line.
 const DEFAULT_PROJECT: &str = "project.json";
 
-/// The DM camera at start: the origin in the middle, 50 pixels per inch.
+/// The DM camera at start: the origin in the middle.
+///
+/// 25 pixels to the inch shows about 59 inches across a 1920 pixel window.
+/// A new TV box is 48 inches wide, so the DM can see it and reach its
+/// handles. The DM cannot pan or zoom yet; that is issue #10.
 const DM_CAMERA: Camera = Camera {
     center: (0.0, 0.0),
-    pixels_per_inch: 50.0,
+    pixels_per_inch: 25.0,
 };
 
 fn main() -> Result<()> {
@@ -171,7 +175,7 @@ impl Running {
             map_layer,
             loader,
             camera: DM_CAMERA,
-            tv_box: project.tv_box,
+            tv_box: project.tv_box.clamped(),
         })
     }
 
@@ -186,7 +190,14 @@ impl Running {
         }
         let pane = if is_dm { &mut self.dm } else { &mut self.tv };
         match event {
-            WindowEvent::Resized(size) => pane.resize(&self.gpu.device, size.width, size.height),
+            WindowEvent::Resized(size) => {
+                pane.resize(&self.gpu.device, size.width, size.height);
+                // The TV box on the DM screen has the shape of the TV, so a
+                // TV that changes size changes what the DM must draw.
+                if !is_dm {
+                    self.dm.window.request_redraw();
+                }
+            }
             // The window manager places a new window where it likes, so check
             // after every move that the DM window is not on the TV display.
             // The window manager places a new window where it likes, so check

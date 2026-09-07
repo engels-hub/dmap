@@ -48,6 +48,17 @@ impl TvBox {
         self.width * f64::from(viewport.1) / f64::from(viewport.0)
     }
 
+    /// The same box, with a width the camera can divide by.
+    ///
+    /// A project file is text that a DM can edit by hand, so the width that
+    /// comes back is not always a number this program can draw.
+    pub fn clamped(self) -> Self {
+        Self {
+            width: clamp_width(self.width),
+            ..self
+        }
+    }
+
     /// The camera that shows this box on a TV of `viewport` pixels.
     pub fn camera(&self, viewport: (u32, u32)) -> Camera {
         Camera {
@@ -70,8 +81,15 @@ impl TvBox {
 }
 
 /// Holds a box width inside the range the program draws.
+///
+/// A width that is not a number falls back to the default, since a camera
+/// cannot divide by it.
 pub fn clamp_width(width: f64) -> f64 {
-    width.clamp(MIN_WIDTH, MAX_WIDTH)
+    if width.is_finite() {
+        width.clamp(MIN_WIDTH, MAX_WIDTH)
+    } else {
+        DEFAULT_WIDTH
+    }
 }
 
 #[cfg(test)]
@@ -134,6 +152,26 @@ mod tests {
         assert!(close(clamp_width(-5.0), MIN_WIDTH));
         assert!(close(clamp_width(1e9), MAX_WIDTH));
         assert!(close(clamp_width(32.0), 32.0));
+    }
+
+    #[test]
+    fn a_width_that_is_not_a_number_falls_back_to_the_default() {
+        // A hand-edited project file can hold anything. A width of zero
+        // would divide the camera by zero and blank the TV.
+        assert!(close(clamp_width(f64::NAN), TvBox::default().width));
+        assert!(close(clamp_width(f64::INFINITY), TvBox::default().width));
+    }
+
+    #[test]
+    fn a_loaded_box_is_held_inside_the_range() {
+        let loaded = TvBox {
+            center: (2.0, 3.0),
+            width: 0.0,
+        };
+        let fixed = loaded.clamped();
+        assert!(close(fixed.width, MIN_WIDTH));
+        // The center is not touched. Only the width can break the camera.
+        assert_eq!(fixed.center, (2.0, 3.0));
     }
 
     #[test]
