@@ -18,6 +18,15 @@ const MIN_WIDTH: f64 = 1.0;
 /// The largest box, in inches. Wider than any table.
 const MAX_WIDTH: f64 = 1000.0;
 
+/// The snap window a new project uses, in percent. PLAN.md section 3.2.
+pub const DEFAULT_SNAP_PERCENT: f64 = 8.0;
+
+/// Pixels to the inch on the TV, until the DM can enter the TV's size.
+///
+/// A 55 inch 4K TV has about 80. Issue #6 lets the DM enter the resolution
+/// and the diagonal of the real TV, and this constant then goes away.
+pub const TV_PPI: f64 = 80.0;
+
 /// The rectangle of the canvas that the TV shows.
 ///
 /// The DM drags this box on the DM screen. The TV camera follows it. The
@@ -46,6 +55,13 @@ impl TvBox {
             return self.width;
         }
         self.width * f64::from(viewport.1) / f64::from(viewport.0)
+    }
+
+    /// The zoom of the box. 1.0 draws the world at true size on the TV.
+    ///
+    /// A wider box shows more of the canvas, so its zoom is below 1.0.
+    pub fn zoom(&self, viewport: (u32, u32), ppi: f64) -> f64 {
+        true_width(viewport, ppi) / self.width
     }
 
     /// The same box, with a width the camera can divide by.
@@ -80,6 +96,28 @@ impl TvBox {
     }
 }
 
+/// The width of a box that fills the TV at true size, in inches.
+///
+/// `ppi` is how many pixels the TV puts in one real inch.
+pub fn true_width(viewport: (u32, u32), ppi: f64) -> f64 {
+    f64::from(viewport.0) / ppi
+}
+
+/// The box width once the snap to true size has had its say.
+///
+/// A box within `percent` of a 100 percent zoom takes true size exactly, so
+/// that a miniature on the table covers the cell it stands in. A box outside
+/// that window keeps the width the DM gave it.
+pub fn snap_to_true_size(width: f64, viewport: (u32, u32), ppi: f64, percent: f64) -> f64 {
+    let true_size = true_width(viewport, ppi);
+    let zoom = true_size / width;
+    if (zoom - 1.0).abs() * 100.0 <= percent {
+        true_size
+    } else {
+        width
+    }
+}
+
 /// Holds a box width inside the range the program draws.
 ///
 /// A width that is not a number falls back to the default, since a camera
@@ -94,7 +132,7 @@ pub fn clamp_width(width: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_WIDTH, MIN_WIDTH, TvBox, clamp_width};
+    use super::{MAX_WIDTH, MIN_WIDTH, TvBox, clamp_width, snap_to_true_size, true_width};
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
@@ -152,6 +190,44 @@ mod tests {
         assert!(close(clamp_width(-5.0), MIN_WIDTH));
         assert!(close(clamp_width(1e9), MAX_WIDTH));
         assert!(close(clamp_width(32.0), 32.0));
+    }
+
+    #[test]
+    fn a_box_the_size_of_the_tv_screen_is_at_100_percent() {
+        // A 4K TV at 80 pixels to the inch is 48 inches wide.
+        let tv_box = TvBox {
+            center: (0.0, 0.0),
+            width: 48.0,
+        };
+        assert!(close(tv_box.zoom(UHD, 80.0), 1.0));
+        assert!(close(true_width(UHD, 80.0), 48.0));
+    }
+
+    #[test]
+    fn a_wider_box_shows_more_world_at_less_zoom() {
+        let tv_box = TvBox {
+            center: (0.0, 0.0),
+            width: 96.0,
+        };
+        assert!(close(tv_box.zoom(UHD, 80.0), 0.5));
+    }
+
+    #[test]
+    fn a_size_inside_the_snap_window_takes_true_size() {
+        // 50 inches is a zoom of 96 %, which is inside 8 % of 100 %.
+        assert!(close(snap_to_true_size(50.0, UHD, 80.0, 8.0), 48.0));
+        // 44 inches is 109 %, which is outside it.
+        assert!(close(snap_to_true_size(44.0, UHD, 80.0, 8.0), 44.0));
+    }
+
+    #[test]
+    fn a_snap_window_of_zero_leaves_every_size_alone() {
+        assert!(close(snap_to_true_size(47.9, UHD, 80.0, 0.0), 47.9));
+    }
+
+    #[test]
+    fn a_box_already_at_true_size_does_not_move() {
+        assert!(close(snap_to_true_size(48.0, UHD, 80.0, 8.0), 48.0));
     }
 
     #[test]

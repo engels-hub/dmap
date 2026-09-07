@@ -5,12 +5,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::scene::MapObject;
-use crate::tvbox::TvBox;
+use crate::tvbox::{DEFAULT_SNAP_PERCENT, TvBox};
 
 /// Everything the DM set up for one campaign.
 ///
 /// Every field has a default, so a file from an older version still loads.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Project {
     /// Where the TV window opens.
@@ -24,6 +24,20 @@ pub struct Project {
     pub maps: Vec<MapObject>,
     /// The part of the canvas the TV shows.
     pub tv_box: TvBox,
+    /// How close to true size the box must come before it snaps, in percent.
+    pub snap_percent: f64,
+}
+
+impl Default for Project {
+    fn default() -> Self {
+        Self {
+            tv_display: TvPlacement::default(),
+            swap_windows: false,
+            maps: Vec::new(),
+            tv_box: TvBox::default(),
+            snap_percent: DEFAULT_SNAP_PERCENT,
+        }
+    }
 }
 
 /// Where the TV window opens.
@@ -110,6 +124,11 @@ mod tests {
         };
         let json = project.to_json();
         assert_eq!(Project::from_json(&json).unwrap().tv_box, project.tv_box);
+    }
+
+    #[test]
+    fn a_new_project_snaps_within_eight_percent() {
+        assert!((Project::default().snap_percent - 8.0).abs() < 1e-9);
     }
 
     #[test]
