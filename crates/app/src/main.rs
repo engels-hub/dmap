@@ -167,6 +167,7 @@ impl Running {
             settings: Settings {
                 tv_display,
                 swap_windows: project.swap_windows,
+                snap_percent: project.snap_percent,
             },
             placed: false,
             tv_pointer: None,
@@ -353,6 +354,7 @@ impl Running {
         project.tv_display =
             placement_for(self.settings.tv_display, &display_names(&self.displays));
         project.swap_windows = self.settings.swap_windows;
+        project.snap_percent = self.settings.snap_percent;
         project.maps.clone_from(&self.maps);
         project.tv_box = self.tv_box;
     }

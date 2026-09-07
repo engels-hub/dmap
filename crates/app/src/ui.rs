@@ -18,7 +18,7 @@ use crate::transform::{
     step_scale,
 };
 use crate::tv::display_label;
-use crate::tvbox::{TvBox, clamp_width};
+use crate::tvbox::{TV_PPI, TvBox, clamp_width, snap_to_true_size};
 
 /// Width of the tool rail on the left, from DESIGN.md.
 const RAIL_WIDTH: f32 = 72.0;
@@ -52,6 +52,19 @@ const DIM: egui::Color32 = egui::Color32::from_rgba_premultiplied(5, 4, 3, 31);
 
 /// Text on the accent, from the `field` token in DESIGN.md.
 const ON_ACCENT: egui::Color32 = egui::Color32::from_rgb(0xf5, 0xef, 0xe2);
+
+/// The `ink` token of the light theme, from DESIGN.md.
+const INK: egui::Color32 = egui::Color32::from_rgb(0x2b, 0x24, 0x19);
+
+/// Size of the zoom label on the TV box, in points. DESIGN.md 5.3.
+const ZOOM_LABEL_SIZE: f32 = 14.0;
+
+/// Gap between the top edge of the box and its zoom label, in points.
+const ZOOM_LABEL_GAP: f32 = 6.0;
+
+/// The widest snap window the settings accept, in percent. Half of that
+/// would already reach from 50 to 150 percent.
+const MAX_SNAP_PERCENT: f64 = 50.0;
 
 /// One grid cell on the canvas, in inches. The arrow keys move the TV box
 /// by this much.
@@ -91,6 +104,9 @@ pub struct Settings {
     pub tv_display: Option<usize>,
     /// Swap window roles instead of moving the DM window. See `Project`.
     pub swap_windows: bool,
+    /// How close to true size the TV box must come before it snaps, in
+    /// percent.
+    pub snap_percent: f64,
 }
 
 /// Everything one UI frame reads and edits.
@@ -451,6 +467,14 @@ fn rail_and_settings(
             &mut frame.settings.swap_windows,
             "Swap mode (Wayland compat)",
         );
+        ui.label("Snap to true size");
+        ui.horizontal(|ui| {
+            let field = egui::DragValue::new(&mut frame.settings.snap_percent)
+                .suffix(" %")
+                .range(0.0..=MAX_SNAP_PERCENT);
+            ui.add(field);
+            ui.label(egui::RichText::new("either side of 100 %").color(egui::Color32::GRAY));
+        });
         if *tool == Tool::Select {
             edited = map_properties(ui, select, frame.maps);
         } else {
@@ -614,12 +638,27 @@ fn table_tool(
     }
 
     let mut edited = false;
+    let alt = ui.input(|i| i.modifiers.alt);
     match (pointer.down, pointer.pos, table.drag) {
         (true, Some(pos), Some(drag)) => {
             edited = drag_box(frame.tv_box, drag, view.to_world(pos));
         }
         (true, _, _) => {}
-        _ => table.drag = None,
+        // The drag is over. A size that came close to true size takes it
+        // exactly, so that a miniature covers the cell it stands in. Alt
+        // keeps the size the DM dragged. PLAN.md section 3.2.
+        _ => {
+            if let (Some(BoxDrag::Resize { .. }), false) = (table.drag.take(), alt) {
+                let snapped = snap_to_true_size(
+                    frame.tv_box.width,
+                    frame.tv_viewport,
+                    TV_PPI,
+                    frame.settings.snap_percent,
+                );
+                edited |= (snapped - frame.tv_box.width).abs() > f64::EPSILON;
+                frame.tv_box.width = snapped;
+            }
+        }
     }
     // The keys wait for the drag to end. A drag rewrites the box from its
     // start state every frame, so a key press in the middle of one is lost.
@@ -629,7 +668,8 @@ fn table_tool(
 
     let icon = table.drag.map(|_| egui::CursorIcon::ResizeNwSe);
     set_cursor(ui, table.drag.is_some(), icon, pointer, &handles);
-    draw_tv_box(&ui.painter_at(rect), rect, &handles);
+    let zoom = frame.tv_box.zoom(frame.tv_viewport, TV_PPI);
+    draw_tv_box(&ui.painter_at(rect), rect, &handles, zoom);
     edited
 }
 
@@ -697,7 +737,7 @@ fn arrow_keys(ui: &egui::Ui, tv_box: &mut TvBox) -> bool {
 }
 
 /// The wash outside the box, the outline of the box and its handles.
-fn draw_tv_box(painter: &egui::Painter, canvas: egui::Rect, handles: &[egui::Pos2]) {
+fn draw_tv_box(painter: &egui::Painter, canvas: egui::Rect, handles: &[egui::Pos2], zoom: f64) {
     let inside = egui::Rect::from_two_pos(handles[0], handles[2]);
     // Four rectangles around the box, so the box itself stays clear.
     let (top, bottom) = (inside.top(), inside.bottom());
@@ -724,6 +764,16 @@ fn draw_tv_box(painter: &egui::Painter, canvas: egui::Rect, handles: &[egui::Pos
             ACCENT,
         );
     }
+    // DESIGN.md 5.3: the zoom stands above the top-right corner, and takes
+    // the accent while the box is at true size.
+    let at_true_size = (zoom - 1.0).abs() < 1e-9;
+    painter.text(
+        egui::pos2(handles[1].x, handles[1].y - ZOOM_LABEL_GAP),
+        egui::Align2::RIGHT_BOTTOM,
+        format!("{} %", (zoom * 100.0).round()),
+        egui::FontId::proportional(ZOOM_LABEL_SIZE),
+        if at_true_size { ACCENT } else { INK },
+    );
 }
 
 /// Starts the drag for a press at `pos` (points) and `cursor` (world).
