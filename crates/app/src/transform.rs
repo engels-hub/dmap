@@ -85,6 +85,30 @@ pub fn rotation_from_drag(
     }
 }
 
+/// The smallest grid size a map can have: one image pixel in a cell.
+///
+/// A cell of zero pixels would make the map infinitely wide.
+pub const MIN_GRID_PX: f64 = 1.0;
+
+/// The largest grid size a map can have.
+///
+/// One cell this big already fills the largest image the GPU accepts.
+pub const MAX_GRID_PX: f64 = 4096.0;
+
+/// The image pixels in one grid cell, measured across one cell.
+///
+/// `a` and `b` are the two cell corners the DM clicked, in world inches.
+/// `grid_px` and `scale` are the map's values while it was measured, since
+/// together they say how many image pixels one inch of canvas holds.
+/// Returns `None` when the result is outside `MIN_GRID_PX` to `MAX_GRID_PX`,
+/// which two clicks on the same spot always are.
+pub fn grid_px_from_measure(a: (f64, f64), b: (f64, f64), grid_px: f64, scale: f64) -> Option<f64> {
+    let measured = distance(a, b) * grid_px / scale;
+    (MIN_GRID_PX..=MAX_GRID_PX)
+        .contains(&measured)
+        .then_some(measured)
+}
+
 /// The midpoint of a straight edge. Shared by `rotation_handle` and by the
 /// code that draws the line to it, so the two always agree on where the
 /// line starts.
@@ -141,8 +165,8 @@ mod tests {
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
     use super::{
-        ROTATION_STEP, edge_midpoint, hit_test, pick_handle, reorder, rotation_from_drag,
-        rotation_handle, scale_from_drag, snap_corner, step_scale,
+        MAX_GRID_PX, ROTATION_STEP, edge_midpoint, grid_px_from_measure, hit_test, pick_handle,
+        reorder, rotation_from_drag, rotation_handle, scale_from_drag, snap_corner, step_scale,
     };
 
     fn close(a: f64, b: f64) -> bool {
@@ -284,5 +308,44 @@ mod tests {
         let handles = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)];
         assert_eq!(pick_handle((103.0, 2.0), &handles, 8.0), Some(1));
         assert_eq!(pick_handle((50.0, 50.0), &handles, 8.0), None);
+    }
+    #[test]
+    fn a_measure_across_one_cell_gives_the_image_pixels_in_it() {
+        // A map at 100 pixels per cell draws one image pixel per 0.01 inch.
+        // Two clicks half an inch apart therefore span 50 image pixels.
+        let measured = grid_px_from_measure((1.0, 1.0), (1.5, 1.0), 100.0, 1.0).unwrap();
+        assert!(close(measured, 50.0));
+    }
+
+    #[test]
+    fn a_measure_reads_the_image_through_the_size_the_map_has_now() {
+        // The same map at double size: one inch of canvas holds half as many
+        // image pixels, so the same half inch spans 25 image pixels.
+        let measured = grid_px_from_measure((1.0, 1.0), (1.5, 1.0), 100.0, 2.0).unwrap();
+        assert!(close(measured, 25.0));
+    }
+
+    #[test]
+    fn a_measure_along_a_diagonal_uses_the_true_distance() {
+        let measured = grid_px_from_measure((0.0, 0.0), (0.3, 0.4), 100.0, 1.0).unwrap();
+        assert!(close(measured, 50.0));
+    }
+
+    #[test]
+    fn two_clicks_on_the_same_point_measure_nothing() {
+        assert_eq!(
+            grid_px_from_measure((2.0, 3.0), (2.0, 3.0), 100.0, 1.0),
+            None
+        );
+    }
+
+    #[test]
+    fn a_measure_out_of_range_is_refused() {
+        // A whole 4096 pixel map dragged across as if it were one cell.
+        let too_big = MAX_GRID_PX + 1.0;
+        assert_eq!(
+            grid_px_from_measure((0.0, 0.0), (too_big / 100.0, 0.0), 100.0, 1.0),
+            None
+        );
     }
 }
