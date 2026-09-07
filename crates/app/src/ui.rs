@@ -171,7 +171,7 @@ impl DmUi {
             edited,
             save,
             paint: Paint {
-                jobs,
+                jobs: paint_jobs,
                 textures_delta,
                 pixels_per_point,
                 repaint,
@@ -218,7 +218,7 @@ impl DmUi {
                 let mut pass =
                     begin_clear_pass(&mut encoder, &view, color::linear_color(color::CANVAS));
                 draw_canvas(&mut pass);
-                self.renderer.render(&mut pass, &paint_jobs, &screen);
+                self.renderer.render(&mut pass, &jobs, &screen);
             };
             gpu.queue
                 .submit(buffers.into_iter().chain([encoder.finish()]));
