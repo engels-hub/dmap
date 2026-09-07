@@ -44,7 +44,14 @@ const MIN_PERCENT: f64 = 1.0;
 const MAX_PERCENT: f64 = 10_000.0;
 
 /// The wash over the canvas outside the TV box, from DESIGN.md.
-const DIM: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x2b, 0x24, 0x19, 31);
+///
+/// DESIGN.md gives this as `rgba(43, 36, 25, 0.12)`. egui wants the color
+/// already multiplied by the alpha, and only that form is a `const`, so the
+/// channels below are 43, 36 and 25 times 31/255.
+const DIM: egui::Color32 = egui::Color32::from_rgba_premultiplied(5, 4, 3, 31);
+
+/// Text on the accent, from the `field` token in DESIGN.md.
+const ON_ACCENT: egui::Color32 = egui::Color32::from_rgb(0xf5, 0xef, 0xe2);
 
 /// One grid cell on the canvas, in inches. The arrow keys move the TV box
 /// by this much.
@@ -117,7 +124,7 @@ struct Select {
 /// The Table tool's state between frames.
 #[derive(Debug, Default)]
 struct Table {
-    drag: Option<Drag>,
+    drag: Option<BoxDrag>,
 }
 
 /// Maps between window points and world inches for one frame.
@@ -149,6 +156,19 @@ impl View {
     }
 }
 
+/// What one canvas frame reads from the pointer.
+#[derive(Debug, Clone, Copy)]
+struct Pointer {
+    /// The primary button went down this frame.
+    pressed: bool,
+    /// The primary button is down now.
+    down: bool,
+    /// Where the pointer is, in points, or `None` when it is away.
+    pos: Option<egui::Pos2>,
+    /// The pointer is over the canvas.
+    hovered: bool,
+}
+
 /// The measure tool, once the DM started it from the map properties.
 #[derive(Debug, Clone, Copy)]
 enum Measure {
@@ -156,6 +176,19 @@ enum Measure {
     Start,
     /// The first cell corner, in world inches.
     From((f64, f64)),
+}
+
+/// A drag of the TV box, all positions in world inches.
+#[derive(Debug, Clone, Copy)]
+enum BoxDrag {
+    Move {
+        start_center: (f64, f64),
+        start_cursor: (f64, f64),
+    },
+    Resize {
+        start_width: f64,
+        start_cursor: (f64, f64),
+    },
 }
 
 /// A drag in progress, all positions in world inches.
@@ -373,10 +406,21 @@ fn rail_and_settings(
         .show(ui, |ui| {
             ui.label("dmap");
             // DESIGN.md: the accent marks the active tool, and nothing else
-            // in the rail uses a color.
-            ui.visuals_mut().selection.bg_fill = ACCENT;
+            // in the rail takes a color.
             for (choice, label) in [(Tool::Select, "Select"), (Tool::Table, "Table")] {
-                if ui.selectable_label(*tool == choice, label).clicked() {
+                let active = *tool == choice;
+                let color = if active {
+                    ON_ACCENT
+                } else {
+                    ui.visuals().text_color()
+                };
+                let fill = if active {
+                    ACCENT
+                } else {
+                    egui::Color32::TRANSPARENT
+                };
+                let button = egui::Button::new(egui::RichText::new(label).color(color)).fill(fill);
+                if ui.add(button).clicked() {
                     *tool = choice;
                 }
             }
@@ -407,7 +451,13 @@ fn rail_and_settings(
             &mut frame.settings.swap_windows,
             "Swap mode (Wayland compat)",
         );
-        edited = map_properties(ui, select, frame.maps);
+        if *tool == Tool::Select {
+            edited = map_properties(ui, select, frame.maps);
+        } else {
+            // Another tool does not run the measure, so the panel must not
+            // leave a measure armed behind it.
+            select.measure = None;
+        }
     });
     (add_map, edited)
 }
@@ -461,21 +511,8 @@ fn canvas(
     frame: &mut Frame<'_>,
     viewport: (u32, u32),
 ) -> bool {
-    let rect = ui.available_rect_before_wrap();
-    let response = ui.interact(rect, ui.id().with("canvas"), egui::Sense::click_and_drag());
-    let view = View::new(ui, *frame.camera, viewport);
+    let (rect, view, pointer) = canvas_area(ui, *frame.camera, viewport);
     let snap = !ui.input(|i| i.modifiers.ctrl);
-
-    // A press selects: a handle of the selected map, else the topmost map
-    // under the cursor. The same press starts a drag that moves, scales or
-    // turns until the button goes up.
-    let (pressed, down, pointer_pos) = ui.input(|i| {
-        (
-            i.pointer.primary_pressed(),
-            i.pointer.primary_down(),
-            i.pointer.interact_pos(),
-        )
-    });
 
     // The measure tool takes the canvas for two clicks. Escape gives up.
     if select.measure.is_some() {
@@ -485,12 +522,12 @@ fn canvas(
         }
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         let mut edited = false;
-        if let (true, true, Some(pos)) = (pressed, response.hovered(), pointer_pos) {
+        if let (true, true, Some(pos)) = (pointer.pressed, pointer.hovered, pointer.pos) {
             edited = measure_click(select, frame, view.to_world(pos));
         }
         // A line from the first corner to the cursor, so the DM sees the
         // cell that is being measured.
-        if let (Some(Measure::From(first)), Some(pos)) = (select.measure, pointer_pos) {
+        if let (Some(Measure::From(first)), Some(pos)) = (select.measure, pointer.pos) {
             ui.painter_at(rect)
                 .line_segment([view.to_screen(first), pos], egui::Stroke::new(2.0, ACCENT));
         }
@@ -512,16 +549,24 @@ fn canvas(
         })
         .unwrap_or_default();
 
-    if let (true, true, Some(pos)) = (pressed, response.hovered(), pointer_pos) {
+    // A press selects: a handle of the selected map, else the topmost map
+    // under the cursor. The same press starts a drag that moves, scales or
+    // turns until the button goes up.
+    if let (true, true, Some(pos)) = (pointer.pressed, pointer.hovered, pointer.pos) {
         press(select, frame, &handles, pos, view.to_world(pos));
     }
     let mut edited = false;
-    if let (true, Some(pos)) = (down, pointer_pos) {
+    if let (true, Some(pos)) = (pointer.down, pointer.pos) {
         edited |= apply_drag(select, frame, view.to_world(pos), snap);
     } else {
         select.drag = None;
     }
-    set_handle_cursor(ui, select.drag, response.hovered(), pointer_pos, &handles);
+    let icon = select.drag.and_then(|drag| match drag {
+        Drag::Scale { .. } => Some(egui::CursorIcon::ResizeNwSe),
+        Drag::Rotate { .. } => Some(egui::CursorIcon::Grabbing),
+        Drag::Move { .. } => None,
+    });
+    set_cursor(ui, select.drag.is_some(), icon, pointer, &handles);
 
     edited |= keys(ui, select, frame.maps);
 
@@ -542,9 +587,7 @@ fn table_tool(
     frame: &mut Frame<'_>,
     viewport: (u32, u32),
 ) -> bool {
-    let rect = ui.available_rect_before_wrap();
-    let response = ui.interact(rect, ui.id().with("canvas"), egui::Sense::click_and_drag());
-    let view = View::new(ui, *frame.camera, viewport);
+    let (rect, view, pointer) = canvas_area(ui, *frame.camera, viewport);
     let corners = frame.tv_box.corners(frame.tv_viewport);
     let handles: Vec<egui::Pos2> = corners.iter().map(|&c| view.to_screen(c)).collect();
     let handle_points: Vec<(f64, f64)> = handles
@@ -552,23 +595,16 @@ fn table_tool(
         .map(|h| (f64::from(h.x), f64::from(h.y)))
         .collect();
 
-    let (pressed, down, pointer_pos) = ui.input(|i| {
-        (
-            i.pointer.primary_pressed(),
-            i.pointer.primary_down(),
-            i.pointer.interact_pos(),
-        )
-    });
-    if let (true, true, Some(pos)) = (pressed, response.hovered(), pointer_pos) {
+    if let (true, true, Some(pos)) = (pointer.pressed, pointer.hovered, pointer.pos) {
         let point = (f64::from(pos.x), f64::from(pos.y));
         let cursor = view.to_world(pos);
         table.drag = if pick_handle(point, &handle_points, HANDLE_REACH).is_some() {
-            Some(Drag::Scale {
-                start_scale: frame.tv_box.width,
+            Some(BoxDrag::Resize {
+                start_width: frame.tv_box.width,
                 start_cursor: cursor,
             })
         } else if hit_test(cursor, &corners) {
-            Some(Drag::Move {
+            Some(BoxDrag::Move {
                 start_center: frame.tv_box.center,
                 start_cursor: cursor,
             })
@@ -578,35 +614,35 @@ fn table_tool(
     }
 
     let mut edited = false;
-    match (down, pointer_pos, table.drag) {
+    match (pointer.down, pointer.pos, table.drag) {
         (true, Some(pos), Some(drag)) => {
             edited = drag_box(frame.tv_box, drag, view.to_world(pos));
         }
         (true, _, _) => {}
         _ => table.drag = None,
     }
-    edited |= arrow_keys(ui, frame.tv_box);
-
-    let icon = match (table.drag, response.hovered(), pointer_pos) {
-        (Some(Drag::Scale { .. }), ..) => Some(egui::CursorIcon::ResizeNwSe),
-        (None, true, Some(pos)) => hovered_handle(pos, &handles),
-        _ => None,
-    };
-    if let Some(icon) = icon {
-        ui.ctx().set_cursor_icon(icon);
+    // The keys wait for the drag to end. A drag rewrites the box from its
+    // start state every frame, so a key press in the middle of one is lost.
+    if table.drag.is_none() {
+        edited |= arrow_keys(ui, frame.tv_box);
     }
+
+    let icon = table.drag.map(|_| egui::CursorIcon::ResizeNwSe);
+    set_cursor(ui, table.drag.is_some(), icon, pointer, &handles);
     draw_tv_box(&ui.painter_at(rect), rect, &handles);
     edited
 }
 
 /// Applies the drag in progress to the box. Returns `true` when it changed.
-fn drag_box(tv_box: &mut TvBox, drag: Drag, cursor: (f64, f64)) -> bool {
+///
+/// A press that does not move picks the box up and nothing more. It must
+/// not count as an edit, or every click would redraw the TV and save.
+fn drag_box(tv_box: &mut TvBox, drag: BoxDrag, cursor: (f64, f64)) -> bool {
     match drag {
-        Drag::Move {
+        BoxDrag::Move {
             start_center,
             start_cursor,
         } => {
-            // A press without motion picks the box up and nothing more.
             if cursor == start_cursor {
                 return false;
             }
@@ -615,14 +651,16 @@ fn drag_box(tv_box: &mut TvBox, drag: Drag, cursor: (f64, f64)) -> bool {
                 start_center.1 + cursor.1 - start_cursor.1,
             );
         }
-        Drag::Scale {
-            start_scale,
+        BoxDrag::Resize {
+            start_width,
             start_cursor,
         } => {
+            if cursor == start_cursor {
+                return false;
+            }
             let factor = scale_from_drag(tv_box.center, start_cursor, cursor);
-            tv_box.width = clamp_width(start_scale * factor);
+            tv_box.width = clamp_width(start_width * factor);
         }
-        Drag::Rotate { .. } => return false,
     }
     true
 }
@@ -630,6 +668,11 @@ fn drag_box(tv_box: &mut TvBox, drag: Drag, cursor: (f64, f64)) -> bool {
 /// The arrow keys move the box one grid cell. Held keys repeat, so the DM
 /// can walk the box across the canvas.
 fn arrow_keys(ui: &egui::Ui, tv_box: &mut TvBox) -> bool {
+    // A number in the panel takes the keyboard first. egui leaves the left
+    // and right keys to us, so the box would walk while the DM types.
+    if ui.ctx().egui_wants_keyboard_input() {
+        return false;
+    }
     let mut moved = false;
     ui.input(|input| {
         for event in &input.events {
@@ -725,6 +768,11 @@ fn press(
 /// What the keyboard does to the selected map. Returns `true` when it
 /// changed one.
 fn keys(ui: &egui::Ui, select: &mut Select, maps: &mut [MapObject]) -> bool {
+    // A number in the panel takes the keyboard first, or `R` and `F` would
+    // turn and flip the map while the DM types.
+    if ui.ctx().egui_wants_keyboard_input() {
+        return false;
+    }
     let mut edited = false;
     // Keys act on the selection when no drag is in progress, since a drag
     // rewrites the map from its start state every frame. Held keys do not
@@ -801,24 +849,50 @@ fn measure_click(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64))
     true
 }
 
-/// Shows a resize, grab or grabbing cursor over a handle or an active drag.
+/// The canvas area, and how this frame reads the pointer over it.
+fn canvas_area(
+    ui: &mut egui::Ui,
+    camera: Camera,
+    viewport: (u32, u32),
+) -> (egui::Rect, View, Pointer) {
+    let rect = ui.available_rect_before_wrap();
+    let response = ui.interact(rect, ui.id().with("canvas"), egui::Sense::click_and_drag());
+    let view = View::new(ui, camera, viewport);
+    let (pressed, down, pos) = ui.input(|i| {
+        (
+            i.pointer.primary_pressed(),
+            i.pointer.primary_down(),
+            i.pointer.interact_pos(),
+        )
+    });
+    let pointer = Pointer {
+        pressed,
+        down,
+        pos,
+        hovered: response.hovered(),
+    };
+    (rect, view, pointer)
+}
+
+/// Shows the cursor of the drag while one runs, and the cursor of the
+/// handle under the pointer while none does.
 ///
-/// `pointer` is `interact_pos`, which egui gives even without a button
+/// `Pointer::pos` is `interact_pos`, which egui gives even without a button
 /// down, so hover feedback works before the DM commits to a drag.
-fn set_handle_cursor(
+fn set_cursor(
     ui: &egui::Ui,
-    drag: Option<Drag>,
-    hovered: bool,
-    pointer: Option<egui::Pos2>,
+    dragging: bool,
+    drag_icon: Option<egui::CursorIcon>,
+    pointer: Pointer,
     handles: &[egui::Pos2],
 ) {
-    let icon = match drag {
-        Some(Drag::Scale { .. }) => Some(egui::CursorIcon::ResizeNwSe),
-        Some(Drag::Rotate { .. }) => Some(egui::CursorIcon::Grabbing),
-        Some(Drag::Move { .. }) => None,
-        None => hovered
-            .then(|| pointer.and_then(|pos| hovered_handle(pos, handles)))
-            .flatten(),
+    let icon = if dragging {
+        drag_icon
+    } else {
+        pointer
+            .hovered
+            .then(|| pointer.pos.and_then(|pos| hovered_handle(pos, handles)))
+            .flatten()
     };
     if let Some(icon) = icon {
         ui.ctx().set_cursor_icon(icon);
