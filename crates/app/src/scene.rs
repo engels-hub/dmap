@@ -53,7 +53,7 @@ impl MapObject {
     }
 
     /// Half the width and height in inches, with `scale` applied.
-    pub fn half_size(&self, pixels: (u32, u32)) -> (f64, f64) {
+    fn half_size(&self, pixels: (u32, u32)) -> (f64, f64) {
         (
             f64::from(pixels.0) / self.grid_px / 2.0 * self.scale,
             f64::from(pixels.1) / self.grid_px / 2.0 * self.scale,

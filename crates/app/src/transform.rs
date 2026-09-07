@@ -19,14 +19,17 @@ pub fn hit_test(point: (f64, f64), corners: &[(f64, f64); 4]) -> bool {
     !(positive && negative)
 }
 
-/// Moves `center` so the map's top-left corner sits on whole inches.
+/// Moves `center` so the map's top-left extent sits on whole inches.
 ///
-/// `half` is half the map's width and height. The map's own grid starts at
-/// its corner, so that corner is what should land on the canvas grid.
-pub fn snap_corner(center: (f64, f64), half: (f64, f64)) -> (f64, f64) {
+/// `corners` are the map's world corners, turned as drawn. The map's own
+/// grid starts at its corner, so the top-left of its bounding box is what
+/// should land on the canvas grid. For a quarter turn that is a real corner.
+pub fn snap_corner(center: (f64, f64), corners: &[(f64, f64); 4]) -> (f64, f64) {
+    let min_x = corners.iter().map(|c| c.0).fold(f64::INFINITY, f64::min);
+    let min_y = corners.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
     (
-        (center.0 - half.0).round() + half.0,
-        (center.1 - half.1).round() + half.1,
+        center.0 + (min_x.round() - min_x),
+        center.1 + (min_y.round() - min_y),
     )
 }
 
@@ -42,10 +45,12 @@ pub fn scale_from_drag(center: (f64, f64), start: (f64, f64), cursor: (f64, f64)
     (distance(center, cursor) / start_distance).max(MIN_SCALE)
 }
 
-/// Angle in radians the cursor swept around `center` since `start`.
+/// The map's rotation after the cursor swept around `center` since `start`.
 ///
-/// With `snap`, the angle rounds to a multiple of `ROTATION_STEP`.
+/// With `snap`, the resulting angle rounds to a multiple of `ROTATION_STEP`,
+/// so a map that starts off-step can get back on it.
 pub fn rotation_from_drag(
+    start_rotation: f64,
     center: (f64, f64),
     start: (f64, f64),
     cursor: (f64, f64),
@@ -53,16 +58,17 @@ pub fn rotation_from_drag(
 ) -> f64 {
     let angle = |p: (f64, f64)| (p.1 - center.1).atan2(p.0 - center.0);
     let mut swept = angle(cursor) - angle(start);
-    // Keep the result in (-pi, pi], so a small move never reads as a full turn.
+    // Keep the change in (-pi, pi], so a small move never reads as a full turn.
     if swept > std::f64::consts::PI {
         swept -= std::f64::consts::TAU;
     } else if swept <= -std::f64::consts::PI {
         swept += std::f64::consts::TAU;
     }
+    let rotation = start_rotation + swept;
     if snap {
-        (swept / ROTATION_STEP).round() * ROTATION_STEP
+        (rotation / ROTATION_STEP).round() * ROTATION_STEP
     } else {
-        swept
+        rotation
     }
 }
 
@@ -134,10 +140,20 @@ mod tests {
 
     #[test]
     fn snapping_moves_the_top_left_corner_onto_whole_inches() {
-        // A map whose top-left corner is at (2.3, 4.6) moves to (2, 5).
-        assert_eq!(snap_corner((5.3, 6.6), (3.0, 2.0)), (5.0, 7.0));
+        // A 6 by 4 map centered at (5.3, 6.6): its corner (2.3, 4.6) moves to (2, 5).
+        let corners = [(2.3, 4.6), (8.3, 4.6), (8.3, 8.6), (2.3, 8.6)];
+        assert_eq!(snap_corner((5.3, 6.6), &corners), (5.0, 7.0));
         // Already on the grid: no change.
-        assert_eq!(snap_corner((5.0, 7.0), (3.0, 2.0)), (5.0, 7.0));
+        let corners = [(2.0, 5.0), (8.0, 5.0), (8.0, 9.0), (2.0, 9.0)];
+        assert_eq!(snap_corner((5.0, 7.0), &corners), (5.0, 7.0));
+    }
+
+    #[test]
+    fn snapping_a_turned_map_uses_its_bounding_box() {
+        // The same 6 by 4 map a quarter turn later: 4 wide, 6 tall.
+        // Its top-left extent is at (3.3, 3.6) and moves to (3, 4).
+        let corners = [(7.3, 3.6), (7.3, 9.6), (3.3, 9.6), (3.3, 3.6)];
+        assert_eq!(snap_corner((5.3, 6.6), &corners), (5.0, 7.0));
     }
 
     #[test]
@@ -154,19 +170,24 @@ mod tests {
     }
 
     #[test]
-    fn rotation_is_the_angle_the_cursor_swept_around_the_center() {
-        let turned = rotation_from_drag((0.0, 0.0), (1.0, 0.0), (0.0, 1.0), false);
-        assert!(close(turned, FRAC_PI_2));
-        let turned = rotation_from_drag((0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), false);
+    fn rotation_is_the_start_angle_plus_what_the_cursor_swept() {
+        let turned = rotation_from_drag(0.1, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0), false);
+        assert!(close(turned, 0.1 + FRAC_PI_2));
+        let turned = rotation_from_drag(0.0, (0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), false);
         assert!(close(turned.abs(), PI));
     }
 
     #[test]
-    fn rotation_snaps_to_steps_when_asked() {
-        // 40 degrees snaps to 45.
+    fn rotation_snaps_the_resulting_angle_not_the_change() {
+        // A map at 7 degrees dragged by 40 degrees ends at 45, not at 7 + 45.
+        let start = 7f64.to_radians();
         let cursor = (40f64.to_radians().cos(), 40f64.to_radians().sin());
-        let turned = rotation_from_drag((0.0, 0.0), (1.0, 0.0), cursor, true);
+        let turned = rotation_from_drag(start, (0.0, 0.0), (1.0, 0.0), cursor, true);
         assert!(close(turned, FRAC_PI_4));
+        // A tiny drag back with snap on brings a map at 7 degrees to 0.
+        let cursor = ((-1f64).to_radians().cos(), (-1f64).to_radians().sin());
+        let turned = rotation_from_drag(start, (0.0, 0.0), (1.0, 0.0), cursor, true);
+        assert!(close(turned, 0.0));
         assert!(close(ROTATION_STEP, 15f64.to_radians()));
     }
 

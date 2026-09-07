@@ -370,10 +370,10 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
                 start_center.0 + cursor.0 - start_cursor.0,
                 start_center.1 + cursor.1 - start_cursor.1,
             );
-            map.center = match (snap, size) {
-                (true, Some(size)) => snap_corner(moved, map.half_size(size)),
-                _ => moved,
-            };
+            map.center = moved;
+            if let (true, Some(size)) = (snap, size) {
+                map.center = snap_corner(moved, &map.corners(size));
+            }
         }
         Drag::Scale {
             start_scale,
@@ -384,7 +384,7 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             start_cursor,
         } => {
             map.rotation =
-                start_rotation + rotation_from_drag(map.center, start_cursor, cursor, snap);
+                rotation_from_drag(start_rotation, map.center, start_cursor, cursor, snap);
         }
     }
 }
