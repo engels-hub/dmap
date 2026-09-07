@@ -19,17 +19,43 @@ pub fn hit_test(point: (f64, f64), corners: &[(f64, f64); 4]) -> bool {
     !(positive && negative)
 }
 
-/// Moves `center` so the map's top-left extent sits on whole inches.
+/// Moves `center` so the map's top-left extent sits on the map's own grid.
 ///
 /// `corners` are the map's world corners, turned as drawn. The map's own
 /// grid starts at its corner, so the top-left of its bounding box is what
-/// should land on the canvas grid. For a quarter turn that is a real corner.
-pub fn snap_corner(center: (f64, f64), corners: &[(f64, f64); 4]) -> (f64, f64) {
-    let min_x = corners.iter().map(|c| c.0).fold(f64::INFINITY, f64::min);
-    let min_y = corners.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
+/// should land on a whole inch. For a quarter turn that is a real corner.
+///
+/// `offset` says where that grid starts, in inches past the canvas grid.
+/// A map the DM has never placed by hand has an offset of zero and lands
+/// on whole inches. A map the DM placed by hand keeps the spot it got, and
+/// steps by whole inches from there. See `corner_offset`.
+pub fn snap_corner(
+    center: (f64, f64),
+    corners: &[(f64, f64); 4],
+    offset: (f64, f64),
+) -> (f64, f64) {
+    let (min_x, min_y) = top_left(corners);
+    let on_grid = |value: f64, offset: f64| (value - offset).round() + offset;
     (
-        center.0 + (min_x.round() - min_x),
-        center.1 + (min_y.round() - min_y),
+        center.0 + (on_grid(min_x, offset.0) - min_x),
+        center.1 + (on_grid(min_y, offset.1) - min_y),
+    )
+}
+
+/// Where the grid of a map that the DM placed by hand starts.
+///
+/// This is how far the map's top-left extent sits past a whole inch, from
+/// zero up to but not including one. `snap_corner` takes it back.
+pub fn corner_offset(corners: &[(f64, f64); 4]) -> (f64, f64) {
+    let (min_x, min_y) = top_left(corners);
+    (min_x.rem_euclid(1.0), min_y.rem_euclid(1.0))
+}
+
+/// The top-left extent of the map's bounding box, in world inches.
+fn top_left(corners: &[(f64, f64); 4]) -> (f64, f64) {
+    (
+        corners.iter().map(|c| c.0).fold(f64::INFINITY, f64::min),
+        corners.iter().map(|c| c.1).fold(f64::INFINITY, f64::min),
     )
 }
 
@@ -83,6 +109,30 @@ pub fn rotation_from_drag(
     } else {
         rotation
     }
+}
+
+/// The smallest grid size a map can have: one image pixel in a cell.
+///
+/// A cell of zero pixels would make the map infinitely wide.
+pub const MIN_GRID_PX: f64 = 1.0;
+
+/// The largest grid size a map can have.
+///
+/// One cell this big already fills the largest image the GPU accepts.
+pub const MAX_GRID_PX: f64 = 4096.0;
+
+/// The image pixels in one grid cell, measured across one cell.
+///
+/// `a` and `b` are the two cell corners the DM clicked, in world inches.
+/// `grid_px` and `scale` are the map's values while it was measured, since
+/// together they say how many image pixels one inch of canvas holds.
+/// Returns `None` when the result is outside `MIN_GRID_PX` to `MAX_GRID_PX`,
+/// which two clicks on the same spot always are.
+pub fn grid_px_from_measure(a: (f64, f64), b: (f64, f64), grid_px: f64, scale: f64) -> Option<f64> {
+    let measured = distance(a, b) * grid_px / scale;
+    (MIN_GRID_PX..=MAX_GRID_PX)
+        .contains(&measured)
+        .then_some(measured)
 }
 
 /// The midpoint of a straight edge. Shared by `rotation_handle` and by the
@@ -141,8 +191,9 @@ mod tests {
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
     use super::{
-        ROTATION_STEP, edge_midpoint, hit_test, pick_handle, reorder, rotation_from_drag,
-        rotation_handle, scale_from_drag, snap_corner, step_scale,
+        MAX_GRID_PX, ROTATION_STEP, corner_offset, edge_midpoint, grid_px_from_measure, hit_test,
+        pick_handle, reorder, rotation_from_drag, rotation_handle, scale_from_drag, snap_corner,
+        step_scale,
     };
 
     fn close(a: f64, b: f64) -> bool {
@@ -171,10 +222,10 @@ mod tests {
     fn snapping_moves_the_top_left_corner_onto_whole_inches() {
         // A 6 by 4 map centered at (5.3, 6.6): its corner (2.3, 4.6) moves to (2, 5).
         let corners = [(2.3, 4.6), (8.3, 4.6), (8.3, 8.6), (2.3, 8.6)];
-        assert_eq!(snap_corner((5.3, 6.6), &corners), (5.0, 7.0));
+        assert_eq!(snap_corner((5.3, 6.6), &corners, (0.0, 0.0)), (5.0, 7.0));
         // Already on the grid: no change.
         let corners = [(2.0, 5.0), (8.0, 5.0), (8.0, 9.0), (2.0, 9.0)];
-        assert_eq!(snap_corner((5.0, 7.0), &corners), (5.0, 7.0));
+        assert_eq!(snap_corner((5.0, 7.0), &corners, (0.0, 0.0)), (5.0, 7.0));
     }
 
     #[test]
@@ -182,7 +233,7 @@ mod tests {
         // The same 6 by 4 map a quarter turn later: 4 wide, 6 tall.
         // Its top-left extent is at (3.3, 3.6) and moves to (3, 4).
         let corners = [(7.3, 3.6), (7.3, 9.6), (3.3, 9.6), (3.3, 3.6)];
-        assert_eq!(snap_corner((5.3, 6.6), &corners), (5.0, 7.0));
+        assert_eq!(snap_corner((5.3, 6.6), &corners, (0.0, 0.0)), (5.0, 7.0));
     }
 
     #[test]
@@ -284,5 +335,74 @@ mod tests {
         let handles = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)];
         assert_eq!(pick_handle((103.0, 2.0), &handles, 8.0), Some(1));
         assert_eq!(pick_handle((50.0, 50.0), &handles, 8.0), None);
+    }
+    #[test]
+    fn a_measure_across_one_cell_gives_the_image_pixels_in_it() {
+        // A map at 100 pixels per cell draws one image pixel per 0.01 inch.
+        // Two clicks half an inch apart therefore span 50 image pixels.
+        let measured = grid_px_from_measure((1.0, 1.0), (1.5, 1.0), 100.0, 1.0).unwrap();
+        assert!(close(measured, 50.0));
+    }
+
+    #[test]
+    fn a_measure_reads_the_image_through_the_size_the_map_has_now() {
+        // The same map at double size: one inch of canvas holds half as many
+        // image pixels, so the same half inch spans 25 image pixels.
+        let measured = grid_px_from_measure((1.0, 1.0), (1.5, 1.0), 100.0, 2.0).unwrap();
+        assert!(close(measured, 25.0));
+    }
+
+    #[test]
+    fn a_measure_along_a_diagonal_uses_the_true_distance() {
+        let measured = grid_px_from_measure((0.0, 0.0), (0.3, 0.4), 100.0, 1.0).unwrap();
+        assert!(close(measured, 50.0));
+    }
+
+    #[test]
+    fn two_clicks_on_the_same_point_measure_nothing() {
+        assert_eq!(
+            grid_px_from_measure((2.0, 3.0), (2.0, 3.0), 100.0, 1.0),
+            None
+        );
+    }
+
+    #[test]
+    fn a_measure_out_of_range_is_refused() {
+        // A whole 4096 pixel map dragged across as if it were one cell.
+        let too_big = MAX_GRID_PX + 1.0;
+        assert_eq!(
+            grid_px_from_measure((0.0, 0.0), (too_big / 100.0, 0.0), 100.0, 1.0),
+            None
+        );
+    }
+    #[test]
+    fn a_map_steps_along_the_grid_its_own_offset_makes() {
+        // A map placed by hand at a quarter inch past the grid keeps that
+        // quarter inch: its steps run through where the DM left it.
+        let corners = [(2.3, 4.6), (8.3, 4.6), (8.3, 8.6), (2.3, 8.6)];
+        assert_eq!(snap_corner((5.3, 6.6), &corners, (0.25, 0.5)), (5.25, 6.5));
+    }
+
+    #[test]
+    fn a_map_already_on_its_own_grid_does_not_move() {
+        // The corner at (2.25, 4.5) is one whole inch from the offset itself.
+        let corners = [(2.25, 4.5), (8.25, 4.5), (8.25, 8.5), (2.25, 8.5)];
+        assert_eq!(snap_corner((5.25, 6.5), &corners, (0.25, 0.5)), (5.25, 6.5));
+    }
+
+    #[test]
+    fn a_free_move_leaves_the_offset_it_ended_on() {
+        let corners = [(2.3, 4.6), (8.3, 4.6), (8.3, 8.6), (2.3, 8.6)];
+        let (x, y) = corner_offset(&corners);
+        assert!(close(x, 0.3) && close(y, 0.6));
+    }
+
+    #[test]
+    fn the_offset_of_a_map_left_of_the_origin_is_still_a_fraction() {
+        let corners = [(-6.075, -2.5), (0.0, -2.5), (0.0, 1.0), (-6.075, 1.0)];
+        let offset = corner_offset(&corners);
+        assert!(offset.0 >= 0.0 && offset.0 < 1.0);
+        // The map sits on the grid that offset makes, so it does not move.
+        assert_eq!(snap_corner((0.0, 0.0), &corners, offset), (0.0, 0.0));
     }
 }

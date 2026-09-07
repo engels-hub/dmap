@@ -86,6 +86,7 @@ mod tests {
                 rotation: 0.5,
                 scale: 1.5,
                 flip_x: true,
+                snap_offset: (0.25, 0.75),
                 ..MapObject::new(PathBuf::from("maps/crypt.png"), (1.5, -2.0))
             }],
             ..Project::default()

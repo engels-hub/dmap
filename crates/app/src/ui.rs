@@ -13,8 +13,9 @@ use crate::color;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::scene::MapObject;
 use crate::transform::{
-    edge_midpoint, hit_test, pick_handle, reorder, rotation_from_drag, rotation_handle,
-    scale_from_drag, snap_corner, step_scale,
+    MAX_GRID_PX, MIN_GRID_PX, corner_offset, edge_midpoint, grid_px_from_measure, hit_test,
+    pick_handle, reorder, rotation_from_drag, rotation_handle, scale_from_drag, snap_corner,
+    step_scale,
 };
 use crate::tv::display_label;
 
@@ -32,6 +33,14 @@ const HANDLE_REACH: f64 = 10.0;
 
 /// Distance of the rotation handle from the top edge, in points.
 const ROTATION_HANDLE_OFFSET: f64 = 24.0;
+
+/// The smallest size the properties accept, in percent.
+///
+/// The same floor the `-` key keeps, so a map can never vanish.
+const MIN_PERCENT: f64 = 1.0;
+
+/// The largest size the properties accept, in percent.
+const MAX_PERCENT: f64 = 10_000.0;
 
 /// egui state and renderer for one window.
 pub struct DmUi {
@@ -78,6 +87,16 @@ impl std::fmt::Debug for Frame<'_> {
 struct Select {
     selected: Option<usize>,
     drag: Option<Drag>,
+    measure: Option<Measure>,
+}
+
+/// The measure tool, once the DM started it from the map properties.
+#[derive(Debug, Clone, Copy)]
+enum Measure {
+    /// Waiting for the first cell corner.
+    Start,
+    /// The first cell corner, in world inches.
+    From((f64, f64)),
 }
 
 /// A drag in progress, all positions in world inches.
@@ -138,12 +157,15 @@ impl DmUi {
         let mut add_map = false;
         let mut edited = false;
         let select = &mut self.select;
+        let selected_before = select.selected;
         let output = ctx.run_ui(raw_input, |ui| {
             // A click that closes a popup must not reach the canvas.
             let popup_open = egui::Popup::is_any_open(ui.ctx());
-            add_map = rail_and_settings(ui, frame.displays, frame.settings);
+            let (pressed, panel_edited) = rail_and_settings(ui, &mut frame, select);
+            add_map = pressed;
+            edited = panel_edited;
             if !popup_open {
-                edited = canvas(ui, select, &mut frame, viewport);
+                edited |= canvas(ui, select, &mut frame, viewport);
             }
         });
         let egui::FullOutput {
@@ -159,7 +181,10 @@ impl DmUi {
         let paint_jobs = ctx.tessellate(shapes, pixels_per_point);
         let repaint = viewport_output
             .values()
-            .any(|viewport| viewport.repaint_delay.is_zero());
+            .any(|viewport| viewport.repaint_delay.is_zero())
+            // The settings panel draws before the canvas picks a map, so the
+            // properties of a new selection need one more frame to show.
+            || self.select.selected != selected_before;
 
         // Save once a drag is over, not on every frame of it.
         self.dirty |= edited;
@@ -264,13 +289,17 @@ impl std::fmt::Debug for Paint {
     }
 }
 
-/// The rail and the settings panel. Returns `true` when Add map was pressed.
+/// The rail and the settings panel.
+///
+/// Returns whether Add map was pressed, and whether a map property changed.
 fn rail_and_settings(
     ui: &mut egui::Ui,
-    displays: &[MonitorHandle],
-    settings: &mut Settings,
-) -> bool {
+    frame: &mut Frame<'_>,
+    select: &mut Select,
+) -> (bool, bool) {
+    let displays = frame.displays;
     let mut add_map = false;
+    let mut edited = false;
     egui::Panel::left("rail")
         .exact_size(RAIL_WIDTH)
         .resizable(false)
@@ -286,20 +315,65 @@ fn rail_and_settings(
             let size = display.size();
             display_label(display.name().as_deref(), size.width, size.height)
         };
-        let selected = settings
+        let selected = frame
+            .settings
             .tv_display
             .map_or_else(|| "Window".to_owned(), label);
         egui::ComboBox::from_id_salt("tv_display")
             .selected_text(selected)
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut settings.tv_display, None, "Window");
+                ui.selectable_value(&mut frame.settings.tv_display, None, "Window");
                 for i in 0..displays.len() {
-                    ui.selectable_value(&mut settings.tv_display, Some(i), label(i));
+                    ui.selectable_value(&mut frame.settings.tv_display, Some(i), label(i));
                 }
             });
-        ui.checkbox(&mut settings.swap_windows, "Swap mode (Wayland compat)");
+        ui.checkbox(
+            &mut frame.settings.swap_windows,
+            "Swap mode (Wayland compat)",
+        );
+        edited = map_properties(ui, select, frame.maps);
     });
-    add_map
+    (add_map, edited)
+}
+
+/// The properties of the selected map. Returns `true` when one changed.
+///
+/// The grid size decides the true size of the map: one grid cell is one
+/// inch on the canvas. Only a Foundry or a Universal VTT file carries that
+/// number, so for a plain PNG or JPEG the DM types it or measures it.
+fn map_properties(ui: &mut egui::Ui, select: &mut Select, maps: &mut [MapObject]) -> bool {
+    let Some(map) = select.selected.and_then(|i| maps.get_mut(i)) else {
+        return false;
+    };
+    let mut edited = false;
+    ui.separator();
+    ui.heading("Map");
+    ui.horizontal(|ui| {
+        ui.label("Pixels per cell");
+        edited |= ui
+            .add(egui::DragValue::new(&mut map.grid_px).range(MIN_GRID_PX..=MAX_GRID_PX))
+            .changed();
+    });
+    // The size sits next to the grid size because the two multiply: a map
+    // with the right grid size draws at true size only at 100 percent.
+    let mut percent = map.scale * 100.0;
+    ui.horizontal(|ui| {
+        ui.label("Size");
+        let field = egui::DragValue::new(&mut percent)
+            .suffix(" %")
+            .range(MIN_PERCENT..=MAX_PERCENT);
+        if ui.add(field).changed() {
+            map.scale = percent / 100.0;
+            edited = true;
+        }
+    });
+    if ui.button("Measure a cell").clicked() {
+        select.measure = Some(Measure::Start);
+    }
+    if select.measure.is_some() {
+        ui.label("Click two corners of one grid cell.");
+    }
+    edited
 }
 
 /// The Select tool on the canvas: pick, move, scale, turn and flip maps.
@@ -325,6 +399,37 @@ fn canvas(
     };
     let snap = !ui.input(|i| i.modifiers.ctrl);
 
+    // A press selects: a handle of the selected map, else the topmost map
+    // under the cursor. The same press starts a drag that moves, scales or
+    // turns until the button goes up.
+    let (pressed, down, pointer_pos) = ui.input(|i| {
+        (
+            i.pointer.primary_pressed(),
+            i.pointer.primary_down(),
+            i.pointer.interact_pos(),
+        )
+    });
+
+    // The measure tool takes the canvas for two clicks. Escape gives up.
+    if select.measure.is_some() {
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            select.measure = None;
+            return false;
+        }
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        let mut edited = false;
+        if let (true, true, Some(pos)) = (pressed, response.hovered(), pointer_pos) {
+            edited = measure_click(select, frame, to_world(pos));
+        }
+        // A line from the first corner to the cursor, so the DM sees the
+        // cell that is being measured.
+        if let (Some(Measure::From(first)), Some(pos)) = (select.measure, pointer_pos) {
+            ui.painter_at(rect)
+                .line_segment([to_screen(first), pos], egui::Stroke::new(2.0, ACCENT));
+        }
+        return edited;
+    }
+
     // Handles of the selected map, in points: four corners, then rotation.
     let handles: Vec<egui::Pos2> = select
         .selected
@@ -340,16 +445,6 @@ fn canvas(
         })
         .unwrap_or_default();
 
-    // A press selects: a handle of the selected map, else the topmost map
-    // under the cursor. The same press starts a drag that moves, scales or
-    // turns until the button goes up.
-    let (pressed, down, pointer_pos) = ui.input(|i| {
-        (
-            i.pointer.primary_pressed(),
-            i.pointer.primary_down(),
-            i.pointer.interact_pos(),
-        )
-    });
     if let (true, true, Some(pos)) = (pressed, response.hovered(), pointer_pos) {
         press(select, frame, &handles, pos, to_world(pos));
     }
@@ -361,56 +456,7 @@ fn canvas(
     }
     set_handle_cursor(ui, select.drag, response.hovered(), pointer_pos, &handles);
 
-    // Keys act on the selection when no drag is in progress, since a drag
-    // rewrites the map from its start state every frame. Held keys do not
-    // repeat: one press is one turn, one flip, or one step in the stack.
-    if let (None, Some(i)) = (select.drag, select.selected) {
-        ui.input(|input| {
-            for event in &input.events {
-                let egui::Event::Key {
-                    key,
-                    pressed: true,
-                    repeat: false,
-                    modifiers,
-                    ..
-                } = event
-                else {
-                    continue;
-                };
-                match key {
-                    egui::Key::R => frame.maps[i].rotation += std::f64::consts::FRAC_PI_2,
-                    egui::Key::F if modifiers.shift => {
-                        frame.maps[i].flip_y = !frame.maps[i].flip_y;
-                    }
-                    egui::Key::F => frame.maps[i].flip_x = !frame.maps[i].flip_x,
-                    // Plus is the numpad key; Equals is the shared "=/+" main
-                    // row key, which egui reports without needing Shift.
-                    egui::Key::Plus | egui::Key::Equals => {
-                        frame.maps[i].scale = step_scale(frame.maps[i].scale, true);
-                    }
-                    egui::Key::Minus => {
-                        frame.maps[i].scale = step_scale(frame.maps[i].scale, false);
-                    }
-                    egui::Key::PageUp => {
-                        let Some(j) = reorder(i, frame.maps.len(), true) else {
-                            continue;
-                        };
-                        frame.maps.swap(i, j);
-                        select.selected = Some(j);
-                    }
-                    egui::Key::PageDown => {
-                        let Some(j) = reorder(i, frame.maps.len(), false) else {
-                            continue;
-                        };
-                        frame.maps.swap(i, j);
-                        select.selected = Some(j);
-                    }
-                    _ => continue,
-                }
-                edited = true;
-            }
-        });
-    }
+    edited |= keys(ui, select, frame.maps);
 
     if handles.len() == 5 {
         draw_selection(&ui.painter_at(rect), &handles);
@@ -455,6 +501,85 @@ fn press(
             })
         }
     };
+}
+
+/// What the keyboard does to the selected map. Returns `true` when it
+/// changed one.
+fn keys(ui: &egui::Ui, select: &mut Select, maps: &mut [MapObject]) -> bool {
+    let mut edited = false;
+    // Keys act on the selection when no drag is in progress, since a drag
+    // rewrites the map from its start state every frame. Held keys do not
+    // repeat: one press is one turn, one flip, or one step in the stack.
+    if let (None, Some(i)) = (select.drag, select.selected) {
+        ui.input(|input| {
+            for event in &input.events {
+                let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                    ..
+                } = event
+                else {
+                    continue;
+                };
+                match key {
+                    egui::Key::R => maps[i].rotation += std::f64::consts::FRAC_PI_2,
+                    egui::Key::F if modifiers.shift => {
+                        maps[i].flip_y = !maps[i].flip_y;
+                    }
+                    egui::Key::F => maps[i].flip_x = !maps[i].flip_x,
+                    // Plus is the numpad key; Equals is the shared "=/+" main
+                    // row key, which egui reports without needing Shift.
+                    egui::Key::Plus | egui::Key::Equals => {
+                        maps[i].scale = step_scale(maps[i].scale, true);
+                    }
+                    egui::Key::Minus => {
+                        maps[i].scale = step_scale(maps[i].scale, false);
+                    }
+                    egui::Key::PageUp => {
+                        let Some(j) = reorder(i, maps.len(), true) else {
+                            continue;
+                        };
+                        maps.swap(i, j);
+                        select.selected = Some(j);
+                    }
+                    egui::Key::PageDown => {
+                        let Some(j) = reorder(i, maps.len(), false) else {
+                            continue;
+                        };
+                        maps.swap(i, j);
+                        select.selected = Some(j);
+                    }
+                    _ => continue,
+                }
+                edited = true;
+            }
+        });
+    }
+    edited
+}
+
+/// One click of the measure tool. Returns `true` when it set the grid size.
+///
+/// The first click stores a cell corner. The second reads the grid size out
+/// of the distance between the two, and puts the map back to true size.
+fn measure_click(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64)) -> bool {
+    let Some(Measure::From(first)) = select.measure else {
+        select.measure = Some(Measure::From(cursor));
+        return false;
+    };
+    select.measure = None;
+    let Some(map) = select.selected.and_then(|i| frame.maps.get_mut(i)) else {
+        return false;
+    };
+    let Some(grid_px) = grid_px_from_measure(first, cursor, map.grid_px, map.scale) else {
+        return false;
+    };
+    map.grid_px = grid_px;
+    // A measured map draws straight from its grid size: one cell, one inch.
+    map.scale = 1.0;
+    true
 }
 
 /// Shows a resize, grab or grabbing cursor over a handle or an active drag.
@@ -519,8 +644,16 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
                 start_center.1 + cursor.1 - start_cursor.1,
             );
             map.center = moved;
-            if let (true, Some(size)) = (snap, size) {
-                map.center = snap_corner(moved, &map.corners(size));
+            // A snapped move steps along the map's own grid. A free move
+            // decides where that grid starts, so letting Ctrl go never
+            // pulls the map back off the spot the DM chose.
+            if let Some(size) = size {
+                let corners = map.corners(size);
+                if snap {
+                    map.center = snap_corner(moved, &corners, map.snap_offset);
+                } else {
+                    map.snap_offset = corner_offset(&corners);
+                }
             }
         }
         Drag::Scale {
