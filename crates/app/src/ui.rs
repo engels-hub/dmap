@@ -37,6 +37,8 @@ pub struct DmUi {
     state: egui_winit::State,
     renderer: egui_wgpu::Renderer,
     select: Select,
+    /// A map changed since the last save.
+    dirty: bool,
 }
 
 impl std::fmt::Debug for DmUi {
@@ -114,6 +116,7 @@ impl DmUi {
             state,
             renderer,
             select: Select::default(),
+            dirty: false,
         }
     }
 
@@ -126,43 +129,72 @@ impl DmUi {
         response.consumed
     }
 
-    /// Runs one UI frame and draws it into the pane.
-    ///
-    /// Returns `true` when the DM pressed Add map.
-    pub fn frame(
-        &mut self,
-        gpu: &Gpu,
-        pane: &mut Pane,
-        mut frame: Frame<'_>,
-        draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
-    ) -> Result<bool> {
+    /// Runs one UI frame: the rail, the settings and the Select tool.
+    pub fn run(&mut self, pane: &Pane, mut frame: Frame<'_>) -> UiOutput {
         let raw_input = self.state.take_egui_input(&pane.window);
         let ctx = self.state.egui_ctx().clone();
         let viewport = (pane.config.width, pane.config.height);
         let mut add_map = false;
+        let mut edited = false;
         let select = &mut self.select;
         let output = ctx.run_ui(raw_input, |ui| {
             // A click that closes a popup must not reach the canvas.
             let popup_open = egui::Popup::is_any_open(ui.ctx());
             add_map = rail_and_settings(ui, frame.displays, frame.settings);
             if !popup_open {
-                canvas(ui, select, &mut frame, viewport);
+                edited = canvas(ui, select, &mut frame, viewport);
             }
         });
         let egui::FullOutput {
             platform_output,
-            mut textures_delta,
+            textures_delta,
             shapes,
             viewport_output,
             ..
         } = output;
         self.state
             .handle_platform_output(&pane.window, platform_output);
-
         let pixels_per_point = ctx.pixels_per_point();
         let paint_jobs = ctx.tessellate(shapes, pixels_per_point);
+        let repaint = viewport_output
+            .values()
+            .any(|viewport| viewport.repaint_delay.is_zero());
+
+        // Save once a drag is over, not on every frame of it.
+        self.dirty |= edited;
+        let save = self.dirty && self.select.drag.is_none();
+        if save {
+            self.dirty = false;
+        }
+        UiOutput {
+            add_map,
+            edited,
+            save,
+            paint: Paint {
+                jobs,
+                textures_delta,
+                pixels_per_point,
+                repaint,
+            },
+        }
+    }
+
+    /// Draws the canvas through `draw_canvas`, then the UI on top of it.
+    pub fn render(
+        &mut self,
+        gpu: &Gpu,
+        pane: &mut Pane,
+        paint: Paint,
+        draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
+    ) -> Result<()> {
+        let Paint {
+            jobs,
+            mut textures_delta,
+            pixels_per_point,
+            repaint,
+        } = paint;
         let screen = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [viewport.0, viewport.1],
+            size_in_pixels: [pane.config.width, pane.config.height],
             pixels_per_point,
         };
         for (id, deltas) in &textures_delta.set {
@@ -179,13 +211,9 @@ impl DmUi {
             let mut encoder = gpu
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            let buffers = self.renderer.update_buffers(
-                &gpu.device,
-                &gpu.queue,
-                &mut encoder,
-                &paint_jobs,
-                &screen,
-            );
+            let buffers =
+                self.renderer
+                    .update_buffers(&gpu.device, &gpu.queue, &mut encoder, &jobs, &screen);
             {
                 let mut pass =
                     begin_clear_pass(&mut encoder, &view, color::linear_color(color::CANVAS));
@@ -201,14 +229,37 @@ impl DmUi {
             self.renderer.free_texture(id);
         }
         textures_delta.clear();
-
-        if viewport_output
-            .values()
-            .any(|viewport| viewport.repaint_delay.is_zero())
-        {
+        if repaint {
             pane.window.request_redraw();
         }
-        Ok(add_map)
+        Ok(())
+    }
+}
+
+/// What one UI frame decided.
+#[derive(Debug)]
+pub struct UiOutput {
+    /// The DM pressed Add map.
+    pub add_map: bool,
+    /// A map changed this frame; the TV should redraw.
+    pub edited: bool,
+    /// The maps changed and no drag is in progress: write the project.
+    pub save: bool,
+    /// What `DmUi::render` needs.
+    pub paint: Paint,
+}
+
+/// The tessellated UI of one frame, ready to draw.
+pub struct Paint {
+    jobs: Vec<egui::ClippedPrimitive>,
+    textures_delta: egui::TexturesDelta,
+    pixels_per_point: f32,
+    repaint: bool,
+}
+
+impl std::fmt::Debug for Paint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Paint").finish_non_exhaustive()
     }
 }
 
@@ -251,7 +302,14 @@ fn rail_and_settings(
 }
 
 /// The Select tool on the canvas: pick, move, scale, turn and flip maps.
-fn canvas(ui: &mut egui::Ui, select: &mut Select, frame: &mut Frame<'_>, viewport: (u32, u32)) {
+///
+/// Returns `true` when a map changed.
+fn canvas(
+    ui: &mut egui::Ui,
+    select: &mut Select,
+    frame: &mut Frame<'_>,
+    viewport: (u32, u32),
+) -> bool {
     let rect = ui.available_rect_before_wrap();
     let response = ui.interact(rect, ui.id().with("canvas"), egui::Sense::click_and_drag());
     let ppp = f64::from(ui.ctx().pixels_per_point());
@@ -294,8 +352,9 @@ fn canvas(ui: &mut egui::Ui, select: &mut Select, frame: &mut Frame<'_>, viewpor
     if let (true, true, Some(pos)) = (pressed, response.hovered(), pointer_pos) {
         press(select, frame, &handles, pos, to_world(pos));
     }
+    let mut edited = false;
     if let (true, Some(pos)) = (down, pointer_pos) {
-        apply_drag(select, frame, to_world(pos), snap);
+        edited |= apply_drag(select, frame, to_world(pos), snap);
     } else {
         select.drag = None;
     }
@@ -323,8 +382,9 @@ fn canvas(ui: &mut egui::Ui, select: &mut Select, frame: &mut Frame<'_>, viewpor
                     egui::Key::R => map.rotation += std::f64::consts::FRAC_PI_2,
                     egui::Key::F if modifiers.shift => map.flip_y = !map.flip_y,
                     egui::Key::F => map.flip_x = !map.flip_x,
-                    _ => {}
+                    _ => continue,
                 }
+                edited = true;
             }
         });
     }
@@ -332,6 +392,7 @@ fn canvas(ui: &mut egui::Ui, select: &mut Select, frame: &mut Frame<'_>, viewpor
     if handles.len() == 5 {
         draw_selection(&ui.painter_at(rect), &handles);
     }
+    edited
 }
 
 /// Starts the drag for a press at `pos` (points) and `cursor` (world).
@@ -374,9 +435,11 @@ fn press(
 }
 
 /// Applies the drag in progress for the cursor at `cursor` (world).
-fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), snap: bool) {
+///
+/// Returns `true` when the map changed.
+fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), snap: bool) -> bool {
     let (Some(drag), Some(i)) = (select.drag, select.selected) else {
-        return;
+        return false;
     };
     let size = (frame.size_of)(&frame.maps[i].path);
     let map = &mut frame.maps[i];
@@ -388,7 +451,7 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             // A press without motion selects and nothing more: snapping a
             // map that was placed off the grid would shift it.
             if cursor == start_cursor {
-                return;
+                return false;
             }
             let moved = (
                 start_center.0 + cursor.0 - start_cursor.0,
@@ -411,6 +474,7 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
                 rotation_from_drag(start_rotation, map.center, start_cursor, cursor, snap);
         }
     }
+    true
 }
 
 /// The outline, the corner handles and the rotation handle of the selection.

@@ -17,7 +17,6 @@ mod transform;
 mod tv;
 mod ui;
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -262,34 +261,28 @@ impl Running {
     fn redraw_dm(&mut self) -> Result<bool> {
         self.upload_loaded_images();
         let before = self.settings.clone();
-        let maps_before = self.maps.clone();
-        let viewport = (self.dm.config.width, self.dm.config.height);
-        let (device, queue) = (&self.gpu.device, &self.gpu.queue);
-        let (map_layer, camera) = (&mut self.map_layer, &self.camera);
-        // Image sizes known at the start of the frame, for hit tests and handles.
-        let sizes: HashMap<PathBuf, (u32, u32)> = maps_before
-            .iter()
-            .filter_map(|map| Some((map.path.clone(), map_layer.size_of(&map.path)?)))
-            .collect();
-        let add_map = self.ui.frame(
-            &self.gpu,
-            &mut self.dm,
+        let map_layer = &self.map_layer;
+        let output = self.ui.run(
+            &self.dm,
             Frame {
                 displays: &self.displays,
                 settings: &mut self.settings,
                 maps: &mut self.maps,
-                camera,
-                size_of: &|path| sizes.get(path).copied(),
+                camera: &self.camera,
+                size_of: &|path| map_layer.size_of(path),
             },
-            // The maps as they were at the start of the frame; an edit made in
-            // this frame shows on the next one.
-            |pass| map_layer.draw(device, queue, pass, &maps_before, camera, viewport),
-        )?;
-        let added = add_map && self.pick_map_file();
-        let maps_changed = self.maps != maps_before;
-        if maps_changed {
+        );
+        let viewport = (self.dm.config.width, self.dm.config.height);
+        let (device, queue) = (&self.gpu.device, &self.gpu.queue);
+        let (map_layer, maps, camera) = (&mut self.map_layer, &self.maps, &self.camera);
+        self.ui
+            .render(&self.gpu, &mut self.dm, output.paint, |pass| {
+                map_layer.draw(device, queue, pass, maps, camera, viewport);
+            })?;
+        if output.edited {
             self.tv.window.request_redraw();
         }
+        let added = output.add_map && self.pick_map_file();
         let settings_changed = self.settings != before;
         if settings_changed || !self.placed {
             self.placed = true;
@@ -301,7 +294,7 @@ impl Running {
                 place_tv(&self.tv.window, &self.displays, self.settings.tv_display);
             }
         }
-        Ok(added || maps_changed || settings_changed)
+        Ok(added || output.save || settings_changed)
     }
 
     /// Keeps the DM window off the TV display, by a move or by a role swap.
