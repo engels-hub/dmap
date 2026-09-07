@@ -33,16 +33,29 @@ pub fn snap_corner(center: (f64, f64), corners: &[(f64, f64); 4]) -> (f64, f64) 
     )
 }
 
+/// A map cannot shrink to nothing, or it could never be grabbed again.
+const MIN_SCALE: f64 = 0.01;
+
 /// Size factor for a corner drag: how far the cursor is from the center,
 /// relative to where the handle started. Never below `MIN_SCALE`.
 pub fn scale_from_drag(center: (f64, f64), start: (f64, f64), cursor: (f64, f64)) -> f64 {
-    /// A map cannot shrink to nothing, or it could never be grabbed again.
-    const MIN_SCALE: f64 = 0.01;
     let start_distance = distance(center, start);
     if start_distance <= 0.0 {
         return 1.0;
     }
     (distance(center, cursor) / start_distance).max(MIN_SCALE)
+}
+
+/// A scale change per `+`/`-` key press: 10%.
+const SCALE_STEP: f64 = 1.1;
+
+/// One `+`/`-` key step applied to `scale`. Never below `MIN_SCALE`.
+pub fn step_scale(scale: f64, grow: bool) -> f64 {
+    if grow {
+        scale * SCALE_STEP
+    } else {
+        (scale / SCALE_STEP).max(MIN_SCALE)
+    }
 }
 
 /// The map's rotation after the cursor swept around `center` since `start`.
@@ -129,7 +142,7 @@ mod tests {
 
     use super::{
         ROTATION_STEP, edge_midpoint, hit_test, pick_handle, reorder, rotation_from_drag,
-        rotation_handle, scale_from_drag, snap_corner,
+        rotation_handle, scale_from_drag, snap_corner, step_scale,
     };
 
     fn close(a: f64, b: f64) -> bool {
@@ -183,6 +196,27 @@ mod tests {
     #[test]
     fn scale_never_collapses_to_zero() {
         assert!(scale_from_drag((0.0, 0.0), (1.0, 0.0), (0.0, 0.0)) > 0.0);
+    }
+
+    #[test]
+    fn a_key_step_grows_or_shrinks_by_ten_percent() {
+        assert!(close(step_scale(1.0, true), 1.1));
+        assert!(close(step_scale(1.1, false), 1.0));
+    }
+
+    #[test]
+    fn key_steps_compound() {
+        let grown = step_scale(step_scale(1.0, true), true);
+        assert!(close(grown, 1.21));
+    }
+
+    #[test]
+    fn shrinking_never_collapses_to_zero() {
+        let mut scale = 1.0;
+        for _ in 0..200 {
+            scale = step_scale(scale, false);
+        }
+        assert!(scale > 0.0);
     }
 
     #[test]

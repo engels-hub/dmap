@@ -14,7 +14,7 @@ use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::scene::MapObject;
 use crate::transform::{
     edge_midpoint, hit_test, pick_handle, reorder, rotation_from_drag, rotation_handle,
-    scale_from_drag, snap_corner,
+    scale_from_drag, snap_corner, step_scale,
 };
 use crate::tv::display_label;
 
@@ -383,6 +383,14 @@ fn canvas(
                         frame.maps[i].flip_y = !frame.maps[i].flip_y;
                     }
                     egui::Key::F => frame.maps[i].flip_x = !frame.maps[i].flip_x,
+                    // Plus is the numpad key; Equals is the shared "=/+" main
+                    // row key, which egui reports without needing Shift.
+                    egui::Key::Plus | egui::Key::Equals => {
+                        frame.maps[i].scale = step_scale(frame.maps[i].scale, true);
+                    }
+                    egui::Key::Minus => {
+                        frame.maps[i].scale = step_scale(frame.maps[i].scale, false);
+                    }
                     egui::Key::PageUp => {
                         let Some(j) = reorder(i, frame.maps.len(), true) else {
                             continue;
