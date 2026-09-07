@@ -72,13 +72,17 @@ pub fn rotation_from_drag(
     }
 }
 
+/// The midpoint of a straight edge. Shared by `rotation_handle` and by the
+/// code that draws the line to it, so the two always agree on where the
+/// line starts.
+pub fn edge_midpoint(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    (f64::midpoint(a.0, b.0), f64::midpoint(a.1, b.1))
+}
+
 /// Where the rotation handle sits: `offset` past the middle of the top
 /// edge, on the outside of the map. Screen space, y down.
 pub fn rotation_handle(top_left: (f64, f64), top_right: (f64, f64), offset: f64) -> (f64, f64) {
-    let mid = (
-        f64::midpoint(top_left.0, top_right.0),
-        f64::midpoint(top_left.1, top_right.1),
-    );
+    let mid = edge_midpoint(top_left, top_right);
     let length = distance(top_left, top_right);
     if length <= 0.0 {
         return (mid.0, mid.1 - offset);
@@ -107,13 +111,25 @@ fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.0 - b.0).hypot(a.1 - b.1)
 }
 
+/// The index one step forward (`toward_end`) or backward in a list of
+/// `len` items, or `None` when already at that end. Used to reorder maps
+/// in their draw order, which is also their stacking order: later draws
+/// on top.
+pub fn reorder(index: usize, len: usize, toward_end: bool) -> Option<usize> {
+    if toward_end {
+        (index + 1 < len).then_some(index + 1)
+    } else {
+        index.checked_sub(1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
     use super::{
-        ROTATION_STEP, hit_test, pick_handle, rotation_from_drag, rotation_handle, scale_from_drag,
-        snap_corner,
+        ROTATION_STEP, edge_midpoint, hit_test, pick_handle, reorder, rotation_from_drag,
+        rotation_handle, scale_from_drag, snap_corner,
     };
 
     fn close(a: f64, b: f64) -> bool {
@@ -199,6 +215,34 @@ mod tests {
         // A turned edge: the handle moves along the edge's normal.
         let handle = rotation_handle((10.0, 20.0), (10.0, 0.0), 24.0);
         assert!(close(handle.0, -14.0) && close(handle.1, 10.0));
+    }
+
+    #[test]
+    fn the_rotation_handle_starts_from_the_shared_edge_midpoint_function() {
+        // Any caller that draws the connecting line must use the exact same
+        // midpoint the handle position itself is built from, so the line
+        // always starts precisely where the handle's offset is measured from.
+        let (top_left, top_right) = ((12.0, 40.0), (212.0, 96.0));
+        let mid = edge_midpoint(top_left, top_right);
+        assert!(close(mid.0, 112.0) && close(mid.1, 68.0));
+        let handle = rotation_handle(top_left, top_right, 24.0);
+        // The handle sits exactly `offset` from `mid`, along the perpendicular.
+        let handle_distance = (handle.0 - mid.0).hypot(handle.1 - mid.1);
+        assert!(close(handle_distance, 24.0));
+    }
+
+    #[test]
+    fn reordering_moves_one_step_forward_or_backward() {
+        assert_eq!(reorder(0, 3, true), Some(1));
+        assert_eq!(reorder(1, 3, true), Some(2));
+        assert_eq!(reorder(1, 3, false), Some(0));
+    }
+
+    #[test]
+    fn reordering_stops_at_the_ends() {
+        assert_eq!(reorder(2, 3, true), None);
+        assert_eq!(reorder(0, 3, false), None);
+        assert_eq!(reorder(0, 1, true), None);
     }
 
     #[test]

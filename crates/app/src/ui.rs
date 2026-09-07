@@ -13,7 +13,8 @@ use crate::color;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::scene::MapObject;
 use crate::transform::{
-    hit_test, pick_handle, rotation_from_drag, rotation_handle, scale_from_drag, snap_corner,
+    edge_midpoint, hit_test, pick_handle, reorder, rotation_from_drag, rotation_handle,
+    scale_from_drag, snap_corner,
 };
 use crate::tv::display_label;
 
@@ -358,16 +359,14 @@ fn canvas(
     } else {
         select.drag = None;
     }
+    set_handle_cursor(ui, select.drag, response.hovered(), pointer_pos, &handles);
 
     // Keys act on the selection when no drag is in progress, since a drag
     // rewrites the map from its start state every frame. Held keys do not
-    // repeat: one press is one turn or one flip.
-    if let (None, Some(map)) = (
-        select.drag,
-        select.selected.and_then(|i| frame.maps.get_mut(i)),
-    ) {
-        ui.input(|i| {
-            for event in &i.events {
+    // repeat: one press is one turn, one flip, or one step in the stack.
+    if let (None, Some(i)) = (select.drag, select.selected) {
+        ui.input(|input| {
+            for event in &input.events {
                 let egui::Event::Key {
                     key,
                     pressed: true,
@@ -379,9 +378,25 @@ fn canvas(
                     continue;
                 };
                 match key {
-                    egui::Key::R => map.rotation += std::f64::consts::FRAC_PI_2,
-                    egui::Key::F if modifiers.shift => map.flip_y = !map.flip_y,
-                    egui::Key::F => map.flip_x = !map.flip_x,
+                    egui::Key::R => frame.maps[i].rotation += std::f64::consts::FRAC_PI_2,
+                    egui::Key::F if modifiers.shift => {
+                        frame.maps[i].flip_y = !frame.maps[i].flip_y;
+                    }
+                    egui::Key::F => frame.maps[i].flip_x = !frame.maps[i].flip_x,
+                    egui::Key::PageUp => {
+                        let Some(j) = reorder(i, frame.maps.len(), true) else {
+                            continue;
+                        };
+                        frame.maps.swap(i, j);
+                        select.selected = Some(j);
+                    }
+                    egui::Key::PageDown => {
+                        let Some(j) = reorder(i, frame.maps.len(), false) else {
+                            continue;
+                        };
+                        frame.maps.swap(i, j);
+                        select.selected = Some(j);
+                    }
                     _ => continue,
                 }
                 edited = true;
@@ -434,6 +449,44 @@ fn press(
     };
 }
 
+/// Shows a resize, grab or grabbing cursor over a handle or an active drag.
+///
+/// `pointer` is `interact_pos`, which egui gives even without a button
+/// down, so hover feedback works before the DM commits to a drag.
+fn set_handle_cursor(
+    ui: &egui::Ui,
+    drag: Option<Drag>,
+    hovered: bool,
+    pointer: Option<egui::Pos2>,
+    handles: &[egui::Pos2],
+) {
+    let icon = match drag {
+        Some(Drag::Scale { .. }) => Some(egui::CursorIcon::ResizeNwSe),
+        Some(Drag::Rotate { .. }) => Some(egui::CursorIcon::Grabbing),
+        Some(Drag::Move { .. }) => None,
+        None => hovered
+            .then(|| pointer.and_then(|pos| hovered_handle(pos, handles)))
+            .flatten(),
+    };
+    if let Some(icon) = icon {
+        ui.ctx().set_cursor_icon(icon);
+    }
+}
+
+/// The cursor for the handle nearest `pos`, if any is within reach.
+fn hovered_handle(pos: egui::Pos2, handles: &[egui::Pos2]) -> Option<egui::CursorIcon> {
+    let points: Vec<(f64, f64)> = handles
+        .iter()
+        .map(|h| (f64::from(h.x), f64::from(h.y)))
+        .collect();
+    let hit = pick_handle((f64::from(pos.x), f64::from(pos.y)), &points, HANDLE_REACH)?;
+    Some(if hit == 4 {
+        egui::CursorIcon::Grab
+    } else {
+        egui::CursorIcon::ResizeNwSe
+    })
+}
+
 /// Applies the drag in progress for the cursor at `cursor` (world).
 ///
 /// Returns `true` when the map changed.
@@ -481,10 +534,13 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
 fn draw_selection(painter: &egui::Painter, handles: &[egui::Pos2]) {
     let stroke = egui::Stroke::new(2.0, ACCENT);
     painter.add(egui::Shape::closed_line(handles[..4].to_vec(), stroke));
-    let top_mid = egui::pos2(
-        f32::midpoint(handles[0].x, handles[1].x),
-        f32::midpoint(handles[0].y, handles[1].y),
+    // The same function that placed the rotation handle, so the line always
+    // starts exactly where the handle's offset is measured from.
+    let (mid_x, mid_y) = edge_midpoint(
+        (f64::from(handles[0].x), f64::from(handles[0].y)),
+        (f64::from(handles[1].x), f64::from(handles[1].y)),
     );
+    let top_mid = egui::pos2(mid_x as f32, mid_y as f32);
     painter.line_segment([top_mid, handles[4]], stroke);
     for handle in &handles[..4] {
         painter.rect_filled(
