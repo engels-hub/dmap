@@ -94,6 +94,7 @@ enum Drag {
     },
 }
 
+#[hotpath::measure_all]
 impl DmUi {
     pub fn new(gpu: &Gpu, pane: &Pane) -> Self {
         let state = egui_winit::State::new(
@@ -141,8 +142,12 @@ impl DmUi {
         let mut add_map = false;
         let select = &mut self.select;
         let output = ctx.run_ui(raw_input, |ui| {
+            // A click that closes a popup must not reach the canvas.
+            let popup_open = egui::Popup::is_any_open(ui.ctx());
             add_map = rail_and_settings(ui, frame.displays, frame.settings);
-            canvas(ui, select, &mut frame, viewport);
+            if !popup_open {
+                canvas(ui, select, &mut frame, viewport);
+            }
         });
         let egui::FullOutput {
             platform_output,
@@ -295,16 +300,30 @@ fn canvas(ui: &mut egui::Ui, select: &mut Select, frame: &mut Frame<'_>, viewpor
         select.drag = None;
     }
 
-    if let Some(map) = select.selected.and_then(|i| frame.maps.get_mut(i)) {
+    // Keys act on the selection when no drag is in progress, since a drag
+    // rewrites the map from its start state every frame. Held keys do not
+    // repeat: one press is one turn or one flip.
+    if let (None, Some(map)) = (
+        select.drag,
+        select.selected.and_then(|i| frame.maps.get_mut(i)),
+    ) {
         ui.input(|i| {
-            if i.key_pressed(egui::Key::R) {
-                map.rotation += std::f64::consts::FRAC_PI_2;
-            }
-            if i.key_pressed(egui::Key::F) {
-                if i.modifiers.shift {
-                    map.flip_y = !map.flip_y;
-                } else {
-                    map.flip_x = !map.flip_x;
+            for event in &i.events {
+                let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                    ..
+                } = event
+                else {
+                    continue;
+                };
+                match key {
+                    egui::Key::R => map.rotation += std::f64::consts::FRAC_PI_2,
+                    egui::Key::F if modifiers.shift => map.flip_y = !map.flip_y,
+                    egui::Key::F => map.flip_x = !map.flip_x,
+                    _ => {}
                 }
             }
         });
@@ -366,6 +385,11 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             start_center,
             start_cursor,
         } => {
+            // A press without motion selects and nothing more: snapping a
+            // map that was placed off the grid would shift it.
+            if cursor == start_cursor {
+                return;
+            }
             let moved = (
                 start_center.0 + cursor.0 - start_cursor.0,
                 start_center.1 + cursor.1 - start_cursor.1,
