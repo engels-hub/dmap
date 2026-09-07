@@ -27,6 +27,13 @@ pub struct MapObject {
     /// Mirror the image top to bottom.
     #[serde(default)]
     pub flip_y: bool,
+    /// Where the grid this map snaps to starts, in inches.
+    ///
+    /// Zero is the canvas grid. A free move, with Ctrl held, writes the
+    /// spot the DM chose here, so a later snapped move steps by whole
+    /// inches from that spot and never pulls the map back.
+    #[serde(default)]
+    pub snap_offset: (f64, f64),
 }
 
 fn one() -> f64 {
@@ -49,6 +56,7 @@ impl MapObject {
             scale: 1.0,
             flip_x: false,
             flip_y: false,
+            snap_offset: (0.0, 0.0),
         }
     }
 
@@ -132,6 +140,8 @@ mod tests {
         assert!((map.rotation).abs() < 1e-9);
         assert!((map.scale - 1.0).abs() < 1e-9);
         assert!(!map.flip_x && !map.flip_y);
+        // A map from before this field snaps to the canvas grid, as it did.
+        assert_eq!(map.snap_offset, (0.0, 0.0));
     }
 
     #[test]
