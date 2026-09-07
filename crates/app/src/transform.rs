@@ -1,0 +1,189 @@
+//! Math for the Select tool: hit tests, handles, snapping.
+
+// Rust guideline compliant 2026-02-21
+
+/// Rotation handle snaps to multiples of this angle: 15 degrees.
+pub const ROTATION_STEP: f64 = std::f64::consts::PI / 12.0;
+
+/// Whether `point` lies inside the convex quad `corners` (any winding).
+pub fn hit_test(point: (f64, f64), corners: &[(f64, f64); 4]) -> bool {
+    let mut positive = false;
+    let mut negative = false;
+    for i in 0..4 {
+        let a = corners[i];
+        let b = corners[(i + 1) % 4];
+        let cross = (b.0 - a.0) * (point.1 - a.1) - (b.1 - a.1) * (point.0 - a.0);
+        positive |= cross > 0.0;
+        negative |= cross < 0.0;
+    }
+    !(positive && negative)
+}
+
+/// Moves `center` so the map's top-left corner sits on whole inches.
+///
+/// `half` is half the map's width and height. The map's own grid starts at
+/// its corner, so that corner is what should land on the canvas grid.
+pub fn snap_corner(center: (f64, f64), half: (f64, f64)) -> (f64, f64) {
+    (
+        (center.0 - half.0).round() + half.0,
+        (center.1 - half.1).round() + half.1,
+    )
+}
+
+/// Size factor for a corner drag: how far the cursor is from the center,
+/// relative to where the handle started. Never below `MIN_SCALE`.
+pub fn scale_from_drag(center: (f64, f64), start: (f64, f64), cursor: (f64, f64)) -> f64 {
+    /// A map cannot shrink to nothing, or it could never be grabbed again.
+    const MIN_SCALE: f64 = 0.01;
+    let start_distance = distance(center, start);
+    if start_distance <= 0.0 {
+        return 1.0;
+    }
+    (distance(center, cursor) / start_distance).max(MIN_SCALE)
+}
+
+/// Angle in radians the cursor swept around `center` since `start`.
+///
+/// With `snap`, the angle rounds to a multiple of `ROTATION_STEP`.
+pub fn rotation_from_drag(
+    center: (f64, f64),
+    start: (f64, f64),
+    cursor: (f64, f64),
+    snap: bool,
+) -> f64 {
+    let angle = |p: (f64, f64)| (p.1 - center.1).atan2(p.0 - center.0);
+    let mut swept = angle(cursor) - angle(start);
+    // Keep the result in (-pi, pi], so a small move never reads as a full turn.
+    if swept > std::f64::consts::PI {
+        swept -= std::f64::consts::TAU;
+    } else if swept <= -std::f64::consts::PI {
+        swept += std::f64::consts::TAU;
+    }
+    if snap {
+        (swept / ROTATION_STEP).round() * ROTATION_STEP
+    } else {
+        swept
+    }
+}
+
+/// Where the rotation handle sits: `offset` past the middle of the top
+/// edge, on the outside of the map. Screen space, y down.
+pub fn rotation_handle(top_left: (f64, f64), top_right: (f64, f64), offset: f64) -> (f64, f64) {
+    let mid = (
+        (top_left.0 + top_right.0) / 2.0,
+        (top_left.1 + top_right.1) / 2.0,
+    );
+    let length = distance(top_left, top_right);
+    if length <= 0.0 {
+        return (mid.0, mid.1 - offset);
+    }
+    let dir = (
+        (top_right.0 - top_left.0) / length,
+        (top_right.1 - top_left.1) / length,
+    );
+    // The map lies on the right-hand side of the edge, so outside is the
+    // left-hand normal.
+    (mid.0 + dir.1 * offset, mid.1 - dir.0 * offset)
+}
+
+/// The index of the handle nearest to `cursor` within `radius`, if any.
+pub fn pick_handle(cursor: (f64, f64), handles: &[(f64, f64)], radius: f64) -> Option<usize> {
+    handles
+        .iter()
+        .enumerate()
+        .map(|(i, &handle)| (i, distance(cursor, handle)))
+        .filter(|&(_, d)| d <= radius)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
+fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {
+    (a.0 - b.0).hypot(a.1 - b.1)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+
+    use super::{
+        ROTATION_STEP, hit_test, pick_handle, rotation_from_drag, rotation_handle, scale_from_drag,
+        snap_corner,
+    };
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    const SQUARE: [(f64, f64); 4] = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)];
+
+    #[test]
+    fn a_point_inside_a_quad_hits_and_outside_misses() {
+        assert!(hit_test((1.0, 1.0), &SQUARE));
+        assert!(hit_test((0.1, 1.9), &SQUARE));
+        assert!(!hit_test((2.1, 1.0), &SQUARE));
+        assert!(!hit_test((-0.1, -0.1), &SQUARE));
+    }
+
+    #[test]
+    fn hit_test_works_for_a_turned_quad() {
+        // A diamond: the square turned 45 degrees around (1, 1).
+        let d = [(1.0, -0.414), (2.414, 1.0), (1.0, 2.414), (-0.414, 1.0)];
+        assert!(hit_test((1.0, 1.0), &d));
+        assert!(!hit_test((0.0, 0.0), &d));
+    }
+
+    #[test]
+    fn snapping_moves_the_top_left_corner_onto_whole_inches() {
+        // A map whose top-left corner is at (2.3, 4.6) moves to (2, 5).
+        assert_eq!(snap_corner((5.3, 6.6), (3.0, 2.0)), (5.0, 7.0));
+        // Already on the grid: no change.
+        assert_eq!(snap_corner((5.0, 7.0), (3.0, 2.0)), (5.0, 7.0));
+    }
+
+    #[test]
+    fn scale_follows_the_distance_of_the_cursor_from_the_center() {
+        let factor = scale_from_drag((0.0, 0.0), (3.0, 4.0), (6.0, 8.0));
+        assert!(close(factor, 2.0));
+        let factor = scale_from_drag((1.0, 1.0), (3.0, 1.0), (2.0, 1.0));
+        assert!(close(factor, 0.5));
+    }
+
+    #[test]
+    fn scale_never_collapses_to_zero() {
+        assert!(scale_from_drag((0.0, 0.0), (1.0, 0.0), (0.0, 0.0)) > 0.0);
+    }
+
+    #[test]
+    fn rotation_is_the_angle_the_cursor_swept_around_the_center() {
+        let turned = rotation_from_drag((0.0, 0.0), (1.0, 0.0), (0.0, 1.0), false);
+        assert!(close(turned, FRAC_PI_2));
+        let turned = rotation_from_drag((0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), false);
+        assert!(close(turned.abs(), PI));
+    }
+
+    #[test]
+    fn rotation_snaps_to_steps_when_asked() {
+        // 40 degrees snaps to 45.
+        let cursor = (40f64.to_radians().cos(), 40f64.to_radians().sin());
+        let turned = rotation_from_drag((0.0, 0.0), (1.0, 0.0), cursor, true);
+        assert!(close(turned, FRAC_PI_4));
+        assert!(close(ROTATION_STEP, 15f64.to_radians()));
+    }
+
+    #[test]
+    fn the_rotation_handle_sits_above_the_top_edge() {
+        // Screen space, y down: "above" means smaller y.
+        let handle = rotation_handle((0.0, 10.0), (20.0, 10.0), 24.0);
+        assert!(close(handle.0, 10.0) && close(handle.1, -14.0));
+        // A turned edge: the handle moves along the edge's normal.
+        let handle = rotation_handle((10.0, 20.0), (10.0, 0.0), 24.0);
+        assert!(close(handle.0, -14.0) && close(handle.1, 10.0));
+    }
+
+    #[test]
+    fn the_nearest_handle_within_reach_is_picked() {
+        let handles = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)];
+        assert_eq!(pick_handle((103.0, 2.0), &handles, 8.0), Some(1));
+        assert_eq!(pick_handle((50.0, 50.0), &handles, 8.0), None);
+    }
+}

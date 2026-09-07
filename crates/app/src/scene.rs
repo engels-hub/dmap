@@ -73,15 +73,6 @@ impl MapObject {
             )
         })
     }
-
-    /// The world rectangle, `(min, max)` in inches, before any turn.
-    pub fn rect(&self, pixels: (u32, u32)) -> ((f64, f64), (f64, f64)) {
-        let (hw, hh) = self.half_size(pixels);
-        (
-            (self.center.0 - hw, self.center.1 - hh),
-            (self.center.0 + hw, self.center.1 + hh),
-        )
-    }
 }
 
 #[cfg(test)]

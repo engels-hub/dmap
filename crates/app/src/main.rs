@@ -13,6 +13,11 @@ mod maps;
 mod pointer;
 mod project;
 mod scene;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the Select tool in the next commit")
+)]
+mod transform;
 mod tv;
 mod ui;
 
