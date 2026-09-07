@@ -15,6 +15,7 @@ mod project;
 mod scene;
 mod transform;
 mod tv;
+mod tvbox;
 mod ui;
 
 use std::path::{Path, PathBuf};
@@ -38,6 +39,7 @@ use crate::pointer::PointerDisc;
 use crate::project::Project;
 use crate::scene::MapObject;
 use crate::tv::{display_at, dm_move_target, placement_for, resolve_tv_display};
+use crate::tvbox::TvBox;
 use crate::ui::{DmUi, Frame, Settings};
 
 /// Size the DM window opens with. The design mockups use this frame.
@@ -49,17 +51,14 @@ const TV_FALLBACK_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 540.0);
 /// Project file used when no path is given on the command line.
 const DEFAULT_PROJECT: &str = "project.json";
 
-/// The DM camera at start: the origin in the middle, 50 pixels per inch.
+/// The DM camera at start: the origin in the middle.
+///
+/// 25 pixels to the inch shows about 59 inches across a 1920 pixel window.
+/// A new TV box is 48 inches wide, so the DM can see it and reach its
+/// handles. The DM cannot pan or zoom yet; that is issue #10.
 const DM_CAMERA: Camera = Camera {
     center: (0.0, 0.0),
-    pixels_per_inch: 50.0,
-};
-
-/// The TV camera until the TV box exists: the origin at 80 pixels per inch,
-/// about true size on a 4K 55 inch TV.
-const TV_CAMERA: Camera = Camera {
-    center: (0.0, 0.0),
-    pixels_per_inch: 80.0,
+    pixels_per_inch: 25.0,
 };
 
 fn main() -> Result<()> {
@@ -118,6 +117,8 @@ struct Running {
     map_layer: MapLayer,
     loader: Loader,
     camera: Camera,
+    /// The part of the canvas the TV shows.
+    tv_box: TvBox,
 }
 
 impl Running {
@@ -174,6 +175,7 @@ impl Running {
             map_layer,
             loader,
             camera: DM_CAMERA,
+            tv_box: project.tv_box.clamped(),
         })
     }
 
@@ -188,7 +190,14 @@ impl Running {
         }
         let pane = if is_dm { &mut self.dm } else { &mut self.tv };
         match event {
-            WindowEvent::Resized(size) => pane.resize(&self.gpu.device, size.width, size.height),
+            WindowEvent::Resized(size) => {
+                pane.resize(&self.gpu.device, size.width, size.height);
+                // The TV box on the DM screen has the shape of the TV, so a
+                // TV that changes size changes what the DM must draw.
+                if !is_dm {
+                    self.dm.window.request_redraw();
+                }
+            }
             // The window manager places a new window where it likes, so check
             // after every move that the DM window is not on the TV display.
             // The window manager places a new window where it likes, so check
@@ -203,10 +212,11 @@ impl Running {
                 let viewport = (pane.config.width, pane.config.height);
                 let (device, queue) = (&self.gpu.device, &self.gpu.queue);
                 let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
+                let tv_camera = self.tv_box.camera(viewport);
                 let (map_layer, maps) = (&mut self.map_layer, &self.maps);
                 self.gpu
                     .clear(pane, color::linear_color(color::CANVAS), |pass| {
-                        map_layer.draw(device, queue, pass, maps, &TV_CAMERA, viewport);
+                        map_layer.draw(device, queue, pass, maps, &tv_camera, viewport);
                         if let Some(center) = tv_pointer {
                             pointer.draw(queue, pass, center, viewport);
                         }
@@ -269,6 +279,8 @@ impl Running {
                 settings: &mut self.settings,
                 maps: &mut self.maps,
                 camera: &self.camera,
+                tv_box: &mut self.tv_box,
+                tv_viewport: (self.tv.config.width, self.tv.config.height),
                 size_of: &|path| map_layer.size_of(path),
             },
         );
@@ -342,6 +354,7 @@ impl Running {
             placement_for(self.settings.tv_display, &display_names(&self.displays));
         project.swap_windows = self.settings.swap_windows;
         project.maps.clone_from(&self.maps);
+        project.tv_box = self.tv_box;
     }
 }
 

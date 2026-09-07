@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::scene::MapObject;
+use crate::tvbox::TvBox;
 
 /// Everything the DM set up for one campaign.
 ///
@@ -21,6 +22,8 @@ pub struct Project {
     pub swap_windows: bool,
     /// The maps on the canvas, in drawing order.
     pub maps: Vec<MapObject>,
+    /// The part of the canvas the TV shows.
+    pub tv_box: TvBox,
 }
 
 /// Where the TV window opens.
@@ -58,6 +61,7 @@ mod tests {
 
     use super::{Project, TvPlacement};
     use crate::scene::MapObject;
+    use crate::tvbox::TvBox;
 
     #[test]
     fn round_trips_through_json() {
@@ -93,6 +97,19 @@ mod tests {
         };
         let json = project.to_json();
         assert_eq!(Project::from_json(&json).unwrap(), project);
+    }
+
+    #[test]
+    fn the_tv_box_round_trips_through_json() {
+        let project = Project {
+            tv_box: TvBox {
+                center: (3.0, -1.5),
+                width: 36.0,
+            },
+            ..Project::default()
+        };
+        let json = project.to_json();
+        assert_eq!(Project::from_json(&json).unwrap().tv_box, project.tv_box);
     }
 
     #[test]
