@@ -279,78 +279,19 @@ fn canvas(ui: &mut egui::Ui, select: &mut Select, frame: &mut Frame<'_>, viewpor
     // A press selects: a handle of the selected map, else the topmost map
     // under the cursor. The same press starts a drag that moves, scales or
     // turns until the button goes up.
-    let (pressed, down, pointer) = ui.input(|i| {
+    let (pressed, down, pointer_pos) = ui.input(|i| {
         (
             i.pointer.primary_pressed(),
             i.pointer.primary_down(),
             i.pointer.interact_pos(),
         )
     });
-    if let (true, true, Some(pos)) = (pressed, response.hovered(), pointer) {
-        let cursor = to_world(pos);
-        let handle_points: Vec<(f64, f64)> = handles
-            .iter()
-            .map(|h| (f64::from(h.x), f64::from(h.y)))
-            .collect();
-        let hit_handle = pick_handle(
-            (f64::from(pos.x), f64::from(pos.y)),
-            &handle_points,
-            HANDLE_REACH,
-        );
-        select.drag = match (hit_handle, select.selected.and_then(|i| frame.maps.get(i))) {
-            (Some(4), Some(map)) => Some(Drag::Rotate {
-                start_rotation: map.rotation,
-                start_cursor: cursor,
-            }),
-            (Some(_), Some(map)) => Some(Drag::Scale {
-                start_scale: map.scale,
-                start_cursor: cursor,
-            }),
-            _ => {
-                select.selected = frame.maps.iter().enumerate().rev().find_map(|(i, map)| {
-                    let size = (frame.size_of)(&map.path)?;
-                    hit_test(cursor, &map.corners(size)).then_some(i)
-                });
-                select.selected.map(|i| Drag::Move {
-                    start_center: frame.maps[i].center,
-                    start_cursor: cursor,
-                })
-            }
-        };
+    if let (true, true, Some(pos)) = (pressed, response.hovered(), pointer_pos) {
+        press(select, frame, &handles, pos, to_world(pos));
     }
-
-    if let (Some(drag), Some(i), Some(pos), true) = (select.drag, select.selected, pointer, down) {
-        let cursor = to_world(pos);
-        let size = (frame.size_of)(&frame.maps[i].path);
-        let map = &mut frame.maps[i];
-        match drag {
-            Drag::Move {
-                start_center,
-                start_cursor,
-            } => {
-                let moved = (
-                    start_center.0 + cursor.0 - start_cursor.0,
-                    start_center.1 + cursor.1 - start_cursor.1,
-                );
-                map.center = match (snap, size) {
-                    (true, Some(size)) => snap_corner(moved, map.half_size(size)),
-                    _ => moved,
-                };
-            }
-            Drag::Scale {
-                start_scale,
-                start_cursor,
-            } => map.scale = start_scale * scale_from_drag(map.center, start_cursor, cursor),
-            Drag::Rotate {
-                start_rotation,
-                start_cursor,
-            } => {
-                map.rotation =
-                    start_rotation + rotation_from_drag(map.center, start_cursor, cursor, snap);
-            }
-        }
-    }
-    if !down {
+    if let (true, Some(pos)) = (down, pointer_pos) {
+        apply_drag(select, frame, to_world(pos), snap);
+    } else {
         select.drag = None;
     }
 
@@ -370,21 +311,99 @@ fn canvas(ui: &mut egui::Ui, select: &mut Select, frame: &mut Frame<'_>, viewpor
     }
 
     if handles.len() == 5 {
-        let painter = ui.painter_at(rect);
-        let stroke = egui::Stroke::new(2.0, ACCENT);
-        painter.add(egui::Shape::closed_line(handles[..4].to_vec(), stroke));
-        let top_mid = egui::pos2(
-            (handles[0].x + handles[1].x) / 2.0,
-            (handles[0].y + handles[1].y) / 2.0,
-        );
-        painter.line_segment([top_mid, handles[4]], stroke);
-        for handle in &handles[..4] {
-            painter.rect_filled(
-                egui::Rect::from_center_size(*handle, egui::vec2(HANDLE_SIZE, HANDLE_SIZE)),
-                0.0,
-                ACCENT,
-            );
-        }
-        painter.circle_filled(handles[4], HANDLE_SIZE / 2.0, ACCENT);
+        draw_selection(&ui.painter_at(rect), &handles);
     }
+}
+
+/// Starts the drag for a press at `pos` (points) and `cursor` (world).
+fn press(
+    select: &mut Select,
+    frame: &mut Frame<'_>,
+    handles: &[egui::Pos2],
+    pos: egui::Pos2,
+    cursor: (f64, f64),
+) {
+    let handle_points: Vec<(f64, f64)> = handles
+        .iter()
+        .map(|h| (f64::from(h.x), f64::from(h.y)))
+        .collect();
+    let hit_handle = pick_handle(
+        (f64::from(pos.x), f64::from(pos.y)),
+        &handle_points,
+        HANDLE_REACH,
+    );
+    select.drag = match (hit_handle, select.selected.and_then(|i| frame.maps.get(i))) {
+        (Some(4), Some(map)) => Some(Drag::Rotate {
+            start_rotation: map.rotation,
+            start_cursor: cursor,
+        }),
+        (Some(_), Some(map)) => Some(Drag::Scale {
+            start_scale: map.scale,
+            start_cursor: cursor,
+        }),
+        _ => {
+            select.selected = frame.maps.iter().enumerate().rev().find_map(|(i, map)| {
+                let size = (frame.size_of)(&map.path)?;
+                hit_test(cursor, &map.corners(size)).then_some(i)
+            });
+            select.selected.map(|i| Drag::Move {
+                start_center: frame.maps[i].center,
+                start_cursor: cursor,
+            })
+        }
+    };
+}
+
+/// Applies the drag in progress for the cursor at `cursor` (world).
+fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), snap: bool) {
+    let (Some(drag), Some(i)) = (select.drag, select.selected) else {
+        return;
+    };
+    let size = (frame.size_of)(&frame.maps[i].path);
+    let map = &mut frame.maps[i];
+    match drag {
+        Drag::Move {
+            start_center,
+            start_cursor,
+        } => {
+            let moved = (
+                start_center.0 + cursor.0 - start_cursor.0,
+                start_center.1 + cursor.1 - start_cursor.1,
+            );
+            map.center = match (snap, size) {
+                (true, Some(size)) => snap_corner(moved, map.half_size(size)),
+                _ => moved,
+            };
+        }
+        Drag::Scale {
+            start_scale,
+            start_cursor,
+        } => map.scale = start_scale * scale_from_drag(map.center, start_cursor, cursor),
+        Drag::Rotate {
+            start_rotation,
+            start_cursor,
+        } => {
+            map.rotation =
+                start_rotation + rotation_from_drag(map.center, start_cursor, cursor, snap);
+        }
+    }
+}
+
+/// The outline, the corner handles and the rotation handle of the selection.
+fn draw_selection(painter: &egui::Painter, handles: &[egui::Pos2]) {
+    let stroke = egui::Stroke::new(2.0, ACCENT);
+    painter.add(egui::Shape::closed_line(handles[..4].to_vec(), stroke));
+    let top_mid = egui::pos2(
+        f32::midpoint(handles[0].x, handles[1].x),
+        f32::midpoint(handles[0].y, handles[1].y),
+    );
+    painter.line_segment([top_mid, handles[4]], stroke);
+    for handle in &handles[..4] {
+        painter.rect_filled(
+            egui::Rect::from_center_size(*handle, egui::vec2(HANDLE_SIZE, HANDLE_SIZE)),
+            0.0,
+            ACCENT,
+        );
+    }
+    painter.circle_filled(handles[4], HANDLE_SIZE / 2.0, ACCENT);
 }
