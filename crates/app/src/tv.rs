@@ -2,7 +2,7 @@
 
 // Rust guideline compliant 2026-02-21
 
-use crate::project::TvPlacement;
+use crate::config::TvPlacement;
 
 /// Picks the display for the TV: the first one that is not the DM's.
 ///
@@ -126,7 +126,7 @@ mod tests {
         let maximized_center = (1920 / 2, 1080 / 2);
         assert_eq!(display_at(maximized_center, &rects), Some(0));
     }
-    use crate::project::TvPlacement;
+    use crate::config::TvPlacement;
 
     #[test]
     fn moves_the_dm_window_off_the_display_that_became_the_tv() {

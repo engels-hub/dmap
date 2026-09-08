@@ -7,11 +7,11 @@
 
 mod camera;
 mod color;
+mod config;
 mod gpu;
 mod images;
 mod maps;
 mod pointer;
-mod project;
 mod scene;
 mod transform;
 mod tv;
@@ -32,12 +32,13 @@ use egui_winit::winit::{
 };
 
 use crate::camera::{Camera, DEFAULT_PIXELS_PER_INCH};
+use crate::config::Config;
 use crate::gpu::{Gpu, Pane};
 use crate::images::Loader;
 use crate::maps::{MapLayer, relative_path};
 use crate::pointer::PointerDisc;
-use crate::project::Project;
 use crate::scene::MapObject;
+use crate::scene::{Scene, copy_into_scene};
 use crate::tv::{display_at, dm_move_target, placement_for, resolve_tv_display};
 use crate::tvbox::{TvBox, clamp_snap_percent};
 use crate::ui::{DmUi, Frame, Settings};
@@ -48,8 +49,11 @@ const DM_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(1440.0, 900.0);
 /// Size of the TV window when no display is free for it.
 const TV_FALLBACK_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 540.0);
 
-/// Project file used when no path is given on the command line.
-const DEFAULT_PROJECT: &str = "project.json";
+/// The file that holds one scene, inside the scene's own folder.
+const SCENE_FILE: &str = "scene.json";
+
+/// The scene a first run opens.
+const FIRST_SCENE: &str = "New scene";
 
 /// The DM camera at start: the origin in the middle of the view.
 const DM_CAMERA: Camera = Camera {
@@ -58,14 +62,19 @@ const DM_CAMERA: Camera = Camera {
 };
 
 fn main() -> Result<()> {
-    let path = std::env::args_os()
-        .nth(1)
-        .map_or_else(|| PathBuf::from(DEFAULT_PROJECT), PathBuf::from);
-    let project = load_project(&path)?;
+    let mut config = load_config()?;
+    let scene_dir = scene_to_open(&mut config);
+    std::fs::create_dir_all(&scene_dir)
+        .with_context(|| format!("{}: cannot make the scene folder", scene_dir.display()))?;
+    let scene = load_scene(&scene_dir)?;
+    // Write both files at once. The scene folder then exists on disk, and
+    // the next run without an argument finds its way back to it.
+    save(&config, &scene, &scene_dir)?;
     let event_loop = EventLoop::new()?;
     let mut app = App {
-        path,
-        project,
+        config,
+        scene_dir,
+        scene,
         running: None,
         error: None,
     };
@@ -73,13 +82,50 @@ fn main() -> Result<()> {
     app.error.map_or(Ok(()), Err)
 }
 
-/// Reads the project file, or starts a new project when there is none.
-fn load_project(path: &Path) -> Result<Project> {
-    match std::fs::read_to_string(path) {
+/// Reads the config, or starts a new one when there is none.
+fn load_config() -> Result<Config> {
+    let path = config::config_path();
+    match std::fs::read_to_string(&path) {
         Ok(json) => {
-            Project::from_json(&json).with_context(|| format!("{}: broken project", path.display()))
+            Config::from_json(&json).with_context(|| format!("{}: broken config", path.display()))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Project::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+        Err(error) => Err(error).with_context(|| format!("{}: cannot read", path.display())),
+    }
+}
+
+/// The folder of the scene this run opens.
+///
+/// A folder on the command line wins. A path to a scene file names its own
+/// folder. Without an argument the program opens the scene of the last run,
+/// and a first run gets a new one. `config.last_scene` follows the choice.
+fn scene_to_open(config: &mut Config) -> PathBuf {
+    if let Some(argument) = std::env::args_os().nth(1) {
+        let given = PathBuf::from(argument);
+        let dir = if given.file_name().is_some_and(|name| name == SCENE_FILE) {
+            given.parent().unwrap_or(Path::new(".")).to_path_buf()
+        } else {
+            given
+        };
+        config.last_scene = Some(config.remember(&dir));
+        return dir;
+    }
+    let scene = config.last_scene.clone().unwrap_or_else(|| {
+        let first = PathBuf::from(FIRST_SCENE);
+        config.last_scene = Some(first.clone());
+        first
+    });
+    config.scene_dir(&scene)
+}
+
+/// Reads the scene file, or starts an empty scene when there is none.
+fn load_scene(dir: &Path) -> Result<Scene> {
+    let path = dir.join(SCENE_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(json) => {
+            Scene::from_json(&json).with_context(|| format!("{}: broken scene", path.display()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Scene::default()),
         Err(error) => Err(error).with_context(|| format!("{}: cannot read", path.display())),
     }
 }
@@ -87,8 +133,10 @@ fn load_project(path: &Path) -> Result<Project> {
 /// Application state across the event loop.
 #[derive(Debug)]
 struct App {
-    path: PathBuf,
-    project: Project,
+    config: Config,
+    /// The folder of the open scene. Its images sit beside its scene file.
+    scene_dir: PathBuf,
+    scene: Scene,
     running: Option<Running>,
     error: Option<anyhow::Error>,
 }
@@ -107,8 +155,8 @@ struct Running {
     placed: bool,
     /// Where the pointer is over the TV window, in pixels, or `None` when outside.
     tv_pointer: Option<(f32, f32)>,
-    /// Folder of the project file; map paths are relative to it.
-    project_dir: PathBuf,
+    /// Folder of the open scene; every map path is a name inside it.
+    scene_dir: PathBuf,
     maps: Vec<MapObject>,
     map_layer: MapLayer,
     loader: Loader,
@@ -118,7 +166,12 @@ struct Running {
 }
 
 impl Running {
-    fn new(event_loop: &ActiveEventLoop, project: &Project, project_dir: PathBuf) -> Result<Self> {
+    fn new(
+        event_loop: &ActiveEventLoop,
+        config: &Config,
+        scene: &Scene,
+        scene_dir: PathBuf,
+    ) -> Result<Self> {
         let dm_window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
@@ -129,7 +182,7 @@ impl Running {
         let displays: Vec<_> = event_loop.available_monitors().collect();
         let dm_display = display_of(&dm_window, &displays);
         let tv_display =
-            resolve_tv_display(&project.tv_display, &display_names(&displays), dm_display);
+            resolve_tv_display(&config.tv_display, &display_names(&displays), dm_display);
         let tv_window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
@@ -150,8 +203,8 @@ impl Running {
         let loader = Loader::spawn(gpu.device.limits().max_texture_dimension_2d, move || {
             wake_window.request_redraw();
         });
-        for map in &project.maps {
-            loader.request(project_dir.join(&map.path));
+        for map in &scene.maps {
+            loader.request(scene_dir.join(&map.path));
         }
         Ok(Self {
             gpu,
@@ -162,17 +215,17 @@ impl Running {
             displays,
             settings: Settings {
                 tv_display,
-                swap_windows: project.swap_windows,
-                snap_percent: clamp_snap_percent(project.snap_percent),
+                swap_windows: config.swap_windows,
+                snap_percent: clamp_snap_percent(config.snap_percent),
             },
             placed: false,
             tv_pointer: None,
-            project_dir,
-            maps: project.maps.clone(),
+            scene_dir,
+            maps: scene.maps.clone(),
             map_layer,
             loader,
             camera: DM_CAMERA,
-            tv_box: project.tv_box.clamped(),
+            tv_box: scene.tv_box.clamped(),
         })
     }
 
@@ -232,10 +285,18 @@ impl Running {
         Ok(false)
     }
 
-    /// Adds a map file at the middle of the DM view. Returns `true`: the project changed.
+    /// Adds a map file at the middle of the DM view.
+    ///
+    /// Returns `true` when the scene changed.
     fn add_map(&mut self, file: &Path) -> bool {
-        let stored = relative_path(&self.project_dir, file);
-        self.loader.request(self.project_dir.join(&stored));
+        let stored = match copy_into_scene(&self.scene_dir, file) {
+            Ok(name) => name,
+            Err(error) => {
+                eprintln!("{error:#}");
+                return false;
+            }
+        };
+        self.loader.request(self.scene_dir.join(&stored));
         self.maps.push(MapObject::new(stored, self.camera.center));
         true
     }
@@ -244,7 +305,7 @@ impl Running {
     fn pick_map_file(&mut self) -> bool {
         let picked = rfd::FileDialog::new()
             .add_filter("Images", &["png", "jpg", "jpeg"])
-            .set_directory(&self.project_dir)
+            .set_directory(&self.scene_dir)
             .pick_file();
         picked.is_some_and(|file| self.add_map(&file))
     }
@@ -252,7 +313,7 @@ impl Running {
     /// Moves finished image files to the GPU.
     fn upload_loaded_images(&mut self) {
         while let Some((file, result)) = self.loader.poll() {
-            let stored = relative_path(&self.project_dir, &file);
+            let stored = relative_path(&self.scene_dir, &file);
             match result {
                 Ok(decoded) => {
                     self.map_layer
@@ -347,14 +408,13 @@ impl Running {
         self.ui = DmUi::new(&self.gpu, &self.dm);
     }
 
-    /// Copies the settings into the project.
-    fn update_project(&self, project: &mut Project) {
-        project.tv_display =
-            placement_for(self.settings.tv_display, &display_names(&self.displays));
-        project.swap_windows = self.settings.swap_windows;
-        project.snap_percent = self.settings.snap_percent;
-        project.maps.clone_from(&self.maps);
-        project.tv_box = self.tv_box;
+    /// Copies what the DM changed into the config and the scene.
+    fn update(&self, config: &mut Config, scene: &mut Scene) {
+        config.tv_display = placement_for(self.settings.tv_display, &display_names(&self.displays));
+        config.swap_windows = self.settings.swap_windows;
+        config.snap_percent = self.settings.snap_percent;
+        scene.maps.clone_from(&self.maps);
+        scene.tv_box = self.tv_box;
     }
 }
 
@@ -418,6 +478,24 @@ fn display_names(displays: &[MonitorHandle]) -> Vec<Option<String>> {
     displays.iter().map(MonitorHandle::name).collect()
 }
 
+/// Writes the scene beside its images, and the config in its own folder.
+///
+/// # Errors
+///
+/// Returns an error when a folder cannot be made or a file cannot be written.
+fn save(config: &Config, scene: &Scene, scene_dir: &Path) -> Result<()> {
+    let scene_file = scene_dir.join(SCENE_FILE);
+    std::fs::write(&scene_file, scene.to_json())
+        .with_context(|| format!("{}: cannot save the scene", scene_file.display()))?;
+    let config_file = config::config_path();
+    if let Some(folder) = config_file.parent() {
+        std::fs::create_dir_all(folder)
+            .with_context(|| format!("{}: cannot make the config folder", folder.display()))?;
+    }
+    std::fs::write(&config_file, config.to_json())
+        .with_context(|| format!("{}: cannot save the config", config_file.display()))
+}
+
 /// Borderless full screen on the chosen display, or `None` for a normal window.
 fn fullscreen_on(displays: &[MonitorHandle], index: Option<usize>) -> Option<Fullscreen> {
     index.map(|i| Fullscreen::Borderless(Some(displays[i].clone())))
@@ -428,12 +506,12 @@ impl ApplicationHandler for App {
         if self.running.is_some() {
             return;
         }
-        let project_dir = self
-            .path
-            .parent()
-            .filter(|dir| !dir.as_os_str().is_empty())
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        match Running::new(event_loop, &self.project, project_dir) {
+        match Running::new(
+            event_loop,
+            &self.config,
+            &self.scene,
+            self.scene_dir.clone(),
+        ) {
             Ok(running) => self.running = Some(running),
             Err(error) => {
                 self.error = Some(error);
@@ -457,9 +535,8 @@ impl ApplicationHandler for App {
         };
         let result = running.window_event(window_id, &event).and_then(|changed| {
             if changed {
-                running.update_project(&mut self.project);
-                std::fs::write(&self.path, self.project.to_json())
-                    .with_context(|| format!("{}: cannot save", self.path.display()))?;
+                running.update(&mut self.config, &mut self.scene);
+                save(&self.config, &self.scene, &self.scene_dir)?;
             }
             Ok(())
         });

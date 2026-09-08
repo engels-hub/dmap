@@ -28,13 +28,35 @@ cargo run --release
 
 The first build takes some minutes. The DM window opens on your display. If a second display is connected, the TV window fills it. With one display, the TV window opens as a normal window.
 
-The program reads and writes `project.json` in the current folder. To use another file, give its path:
+### Where your work lives
 
-```bash
-cargo run --release -- path/to/project.json
+A scene is a folder. The folder holds one `scene.json` and the map images beside it. Nothing in it points outside the folder. Copy a scene to a USB stick or to another machine, and it opens there.
+
+```text
+~/dmap/scenes/
+  The Crypt/
+    scene.json      the maps, where they sit, and the TV box
+    crypt.png       the images themselves
+  Sosnovka/
+    scene.json
+    village.jpg
 ```
 
-Pick the TV display in the Settings panel. The choice is saved in the project file.
+The program keeps its own file in `~/.config/dmap/config.json`. It holds the folder your scenes live in and the scene you had open last. It also holds the settings of this table: the TV display, swap mode and the snap window. A scene carries none of those, so your TV does not travel with a scene you give away.
+
+Both files are JSON, and both are written to be read. Edit them by hand if you like.
+
+Start the program with no argument and it opens the scene you had open last. Give it a scene folder to open that one:
+
+```bash
+cargo run --release -- ~/dmap/scenes/The Crypt
+```
+
+To move your scenes somewhere else, such as a campaign folder you already keep, change `scenes_dir` in the config file.
+
+An image you add is copied into the scene folder. The same image twice keeps one copy. A different image of the same name gets a number.
+
+Pick the TV display in the Settings panel. The choice is saved in the config file.
 
 ## Controls
 
