@@ -11,7 +11,7 @@ use egui_winit::winit::{event::WindowEvent, monitor::MonitorHandle};
 use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::color;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
-use crate::scene::{Group, Node, NodeId, ROOT_ID, Scene};
+use crate::scene::{Group, Node, NodeId, Placed, ROOT_ID, Scene};
 use crate::transform::{
     MAX_GRID_PX, MIN_GRID_PX, corner_offset, edge_midpoint, grid_px_from_measure, hit_test,
     pick_handle, rotation_from_drag, rotation_handle, scale_from_drag, snap_corner, step_scale,
@@ -367,12 +367,16 @@ enum Drag {
     },
     /// A rectangle over the canvas that picks what it covers.
     Band { start_cursor: (f64, f64) },
+    /// Every asset the DM holds, where it stood, and the point it turns
+    /// or grows around.
     Scale {
-        start_scale: f64,
+        starts: Vec<Placed>,
+        pivot: (f64, f64),
         start_cursor: (f64, f64),
     },
     Rotate {
-        start_rotation: f64,
+        starts: Vec<Placed>,
+        pivot: (f64, f64),
         start_cursor: (f64, f64),
     },
 }
@@ -858,6 +862,24 @@ fn tree_panel(ui: &mut egui::Ui, scene: &mut Scene, select: &mut Select, tree: &
             crate::scene::move_above(scene, node, target)
         };
     }
+    ui.horizontal(|ui| {
+        // The DM can only take apart the one group they hold.
+        let group = select.only().filter(|id| *id != ROOT_ID).filter(|id| {
+            crate::scene::find(scene, *id)
+                .and_then(Node::group)
+                .is_some()
+        });
+        if ui
+            .add_enabled(group.is_some(), egui::Button::new("Ungroup"))
+            .clicked()
+            && let Some(id) = group
+        {
+            // What was in it stands where it stood.
+            let freed = crate::scene::assets_of(scene, id);
+            edited |= crate::scene::ungroup(scene, id);
+            select.chosen = freed;
+        }
+    });
     if ui.button("New group").clicked() {
         let id = scene.next_id();
         let group = Group::new(id, format!("Group {id}"));
@@ -897,11 +919,20 @@ fn tree_rows(
                     if ui.add(mark(tree.active == id)).clicked() {
                         tree.active = id;
                     }
+                    if select.holds(id) {
+                        ui.label(egui::RichText::new("|").color(ACCENT));
+                    }
                     if ui.add(arrow(open)).clicked() {
                         flip(&mut tree.open, id);
                     }
                     let name = egui::TextEdit::singleline(&mut group.name).desired_width(72.0);
-                    edited |= ui.add(name).changed();
+                    let field = ui.add(name);
+                    // A click on the name takes the group, so the DM can
+                    // reach one whose box hides under an asset.
+                    if field.gained_focus() {
+                        select.take(id, ui.input(|i| i.modifiers.ctrl));
+                    }
+                    edited |= field.changed();
                     edited |= ui.checkbox(&mut group.shown.dm, "").changed();
                     edited |= ui.checkbox(&mut group.shown.tv, "").changed();
                 });
@@ -1119,10 +1150,7 @@ fn canvas(
     }
 
     // Handles of the selected map, in points: four corners, then rotation.
-    let handles: Vec<egui::Pos2> = select
-        .only()
-        .and_then(|id| crate::scene::find(frame.scene, id).and_then(Node::asset))
-        .and_then(|map| (frame.size_of)(&map.path).map(|size| map.corners(size)))
+    let handles: Vec<egui::Pos2> = held_corners(select, frame)
         .map(|corners| {
             let mut handles: Vec<egui::Pos2> = corners.iter().map(|&c| view.to_screen(c)).collect();
             let top_left = (f64::from(handles[0].x), f64::from(handles[0].y));
@@ -1492,6 +1520,33 @@ fn draw_tv_box(painter: &egui::Painter, canvas: egui::Rect, handles: &[egui::Pos
     );
 }
 
+/// The world corners of what the DM holds, when they hold one thing.
+///
+/// An asset gives its own four corners, turned as it draws. A group gives
+/// the corners of the box around everything in it.
+fn held_corners(select: &Select, frame: &Frame<'_>) -> Option<[(f64, f64); 4]> {
+    let id = select.only()?;
+    match crate::scene::find(frame.scene, id)? {
+        Node::Asset(asset) => {
+            let size = (frame.size_of)(&asset.path)?;
+            Some(asset.corners(size))
+        }
+        Node::Group(group) => {
+            let (min, max) = crate::scene::bounds(group, frame.size_of)?;
+            Some([min, (max.0, min.1), max, (min.0, max.1)])
+        }
+    }
+}
+
+/// The point a turn or a growth happens around: the middle of what the DM
+/// holds.
+fn pivot_of(corners: &[(f64, f64); 4]) -> (f64, f64) {
+    (
+        f64::midpoint(corners[0].0, corners[2].0),
+        f64::midpoint(corners[0].1, corners[2].1),
+    )
+}
+
 /// Starts the drag for a press at `pos` (points) and `cursor` (world).
 fn press(
     select: &mut Select,
@@ -1511,18 +1566,19 @@ fn press(
         &handle_points,
         HANDLE_REACH,
     );
-    let held = select
-        .only()
-        .and_then(|id| crate::scene::find(frame.scene, id).and_then(Node::asset));
-    if let (Some(handle), Some(map)) = (hit_handle, held) {
+    if let (Some(handle), Some(corners)) = (hit_handle, held_corners(select, frame)) {
+        let starts = crate::scene::placed(frame.scene, &select.chosen);
+        let pivot = pivot_of(&corners);
         select.drag = Some(if handle == 4 {
             Drag::Rotate {
-                start_rotation: map.rotation,
+                starts,
+                pivot,
                 start_cursor: cursor,
             }
         } else {
             Drag::Scale {
-                start_scale: map.scale,
+                starts,
+                pivot,
                 start_cursor: cursor,
             }
         });
@@ -1895,30 +1951,23 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             true
         }
         Drag::Scale {
-            start_scale,
+            starts,
+            pivot,
             start_cursor,
         } => {
-            let Some(map) = select
-                .only()
-                .and_then(|id| crate::scene::asset_mut(frame.scene, id))
-            else {
-                return false;
-            };
-            map.scale = start_scale * scale_from_drag(map.center, start_cursor, cursor);
+            let factor = scale_from_drag(pivot, start_cursor, cursor);
+            crate::scene::scale_about(frame.scene, &starts, pivot, factor);
             true
         }
         Drag::Rotate {
-            start_rotation,
+            starts,
+            pivot,
             start_cursor,
         } => {
-            let Some(map) = select
-                .only()
-                .and_then(|id| crate::scene::asset_mut(frame.scene, id))
-            else {
-                return false;
-            };
-            map.rotation =
-                rotation_from_drag(start_rotation, map.center, start_cursor, cursor, snap);
+            // A group turns as one piece, so the angle it sweeps is the
+            // angle every asset in it takes on.
+            let angle = rotation_from_drag(0.0, pivot, start_cursor, cursor, snap);
+            crate::scene::rotate_about(frame.scene, &starts, pivot, angle);
             true
         }
     }

@@ -479,6 +479,91 @@ pub fn move_into(scene: &mut Scene, id: NodeId, parent: NodeId) -> bool {
     true
 }
 
+/// Takes a group out of the tree and leaves its children in its place.
+///
+/// The root stays: the tree needs a root. Returns `true` when it went.
+pub fn ungroup(scene: &mut Scene, id: NodeId) -> bool {
+    if id == ROOT_ID || find(scene, id).and_then(Node::group).is_none() {
+        return false;
+    }
+    let Some((parent, place)) = parent_of(scene, id) else {
+        return false;
+    };
+    let Some(Node::Group(group)) = take_node(scene, id) else {
+        return false;
+    };
+    let Some(holder) = group_mut(scene, parent) else {
+        return false;
+    };
+    for (step, child) in group.children.into_iter().enumerate() {
+        let place = (place + step).min(holder.children.len());
+        holder.children.insert(place, child);
+    }
+    true
+}
+
+/// Where an asset stood when a drag began.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placed {
+    /// The asset this belongs to.
+    pub id: NodeId,
+    /// Where the asset stood, in inches.
+    pub center: (f64, f64),
+    /// The size factor it had.
+    pub scale: f64,
+    /// The turn it had, in radians.
+    pub rotation: f64,
+}
+
+/// Where every asset under a selection stands now.
+pub fn placed(scene: &Scene, ids: &[NodeId]) -> Vec<Placed> {
+    normalize(scene, ids)
+        .iter()
+        .flat_map(|id| assets_of(scene, *id))
+        .filter_map(|id| {
+            let asset = find(scene, id)?.asset()?;
+            Some(Placed {
+                id,
+                center: asset.center,
+                scale: asset.scale,
+                rotation: asset.rotation,
+            })
+        })
+        .collect()
+}
+
+/// Grows or shrinks a set of assets around one point.
+///
+/// Each asset keeps its distance from the point in proportion, so the set
+/// holds its shape.
+pub fn scale_about(scene: &mut Scene, starts: &[Placed], pivot: (f64, f64), factor: f64) {
+    for start in starts {
+        let Some(asset) = asset_mut(scene, start.id) else {
+            continue;
+        };
+        asset.scale = start.scale * factor;
+        asset.center = (
+            pivot.0 + (start.center.0 - pivot.0) * factor,
+            pivot.1 + (start.center.1 - pivot.1) * factor,
+        );
+    }
+}
+
+/// Turns a set of assets around one point.
+///
+/// Each asset turns on its own as well, so the set holds its shape.
+pub fn rotate_about(scene: &mut Scene, starts: &[Placed], pivot: (f64, f64), angle: f64) {
+    let (sin, cos) = angle.sin_cos();
+    for start in starts {
+        let Some(asset) = asset_mut(scene, start.id) else {
+            continue;
+        };
+        let (dx, dy) = (start.center.0 - pivot.0, start.center.1 - pivot.1);
+        asset.center = (pivot.0 + dx * cos - dy * sin, pivot.1 + dx * sin + dy * cos);
+        asset.rotation = start.rotation + angle;
+    }
+}
+
 /// Every group in the scene, the root first, each with how deep it sits.
 ///
 /// A list of groups for the DM to choose from reads better with the depth.
@@ -1461,5 +1546,65 @@ mod tests {
             names,
             vec![(ROOT_ID, "Scene".to_owned(), 0), (3, "Notes".to_owned(), 1)]
         );
+    }
+
+    #[test]
+    fn a_group_that_goes_leaves_its_children_where_it_stood() {
+        let mut scene = family();
+        assert!(super::ungroup(&mut scene, 3));
+        assert_eq!(
+            scene.root.children.iter().map(Node::id).collect::<Vec<_>>(),
+            vec![1, 2, 4, 5]
+        );
+        // Every asset is still here, in the order it drew in.
+        assert_eq!(
+            assets(&scene)
+                .iter()
+                .map(|asset| asset.id)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 4, 5]
+        );
+    }
+
+    #[test]
+    fn the_root_never_goes() {
+        let mut scene = family();
+        assert!(!super::ungroup(&mut scene, ROOT_ID));
+        // An asset is not a group, so it does not go either.
+        assert!(!super::ungroup(&mut scene, 1));
+        assert_eq!(scene.root.children.len(), 3);
+    }
+
+    #[test]
+    fn a_set_grows_around_a_point_and_holds_its_shape() {
+        let mut scene = family();
+        let starts = super::placed(&scene, &[3]);
+        super::scale_about(&mut scene, &starts, (0.0, 0.0), 2.0);
+        // Both assets sat at the middle, so both stay there, twice as big.
+        for id in [4, 5] {
+            let asset = find(&scene, id).unwrap().asset().unwrap();
+            assert!((asset.scale - 2.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_set_turns_around_a_point_and_holds_its_shape() {
+        let mut scene = family();
+        // pin.png stands two inches to the right of the middle.
+        let Some(Node::Group(notes)) = scene.root.children.get_mut(2) else {
+            panic!("Notes is the third child");
+        };
+        let Some(Node::Asset(pin)) = notes.children.get_mut(1) else {
+            panic!("pin.png is the second child of Notes");
+        };
+        pin.center = (2.0, 0.0);
+
+        let starts = super::placed(&scene, &[5]);
+        super::rotate_about(&mut scene, &starts, (0.0, 0.0), std::f64::consts::FRAC_PI_2);
+
+        let pin = find(&scene, 5).unwrap().asset().unwrap();
+        // A quarter turn takes it to two inches below the middle.
+        assert!(pin.center.0.abs() < 1e-9 && (pin.center.1 - 2.0).abs() < 1e-9);
+        assert!((pin.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
     }
 }

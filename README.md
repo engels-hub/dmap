@@ -123,7 +123,11 @@ The two switches work on their own, and a group rules the nodes under it. A grou
 
 To move something you already placed, drag its row by the `::` grip onto a group. The **Group** field in the Map section does the same without a drag.
 
-A group draws over the groups under it, and its assets draw inside its place. Every group but the root shows a dashed box around what it holds. Click the box to take the group, and drag it to move everything in it as one.
+A group draws over the groups under it, and its assets draw inside its place. Every group but the root shows a dashed box around what it holds. Click the box, or the group's name in the list, to take the group.
+
+A group you hold takes handles of its own. Drag the box to move it, a corner to grow it, and the handle above it to turn it. Everything in the group keeps its place and its shape.
+
+**Ungroup** takes a group apart. What was in it stays where it stood, in the group that held it.
 
 To take several things, drag over bare canvas. A list says what you took, and **Group** puts them in a new group. The new group lands in the lowest group that held them all. An uncle and a nephew meet in the group above both.
 
