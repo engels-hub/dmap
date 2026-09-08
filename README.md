@@ -36,4 +36,47 @@ cargo run --release -- path/to/project.json
 
 Pick the TV display in the Settings panel. The choice is saved in the project file.
 
+## Controls
+
+The canvas takes its controls from Figma.
+
+| Action | Control |
+|---|---|
+| Pan the DM view | The wheel, or `Space` with a drag, or the middle button |
+| Pan sideways | `Shift` with the wheel |
+| Zoom the DM view | `Ctrl` with the wheel, or a pinch on a touchpad |
+| Put the whole TV box on the screen | `T` |
+
+The DM view is the game master's own. The TV never moves with it.
+
+Pick a tool in the rail on the left.
+
+**Select** works on one map.
+
+| Action | Control |
+|---|---|
+| Pick a map | Click it |
+| Move it | Drag it. The corner snaps to the grid |
+| Move it freely | `Ctrl` with a drag. The map keeps the spot it gets, and later steps run through that spot |
+| Scale it | Drag a corner handle |
+| Turn it | Drag the handle above the top edge. The angle snaps to 15 degrees |
+| Turn it a quarter | `R` |
+| Flip it | `F` for left to right, `Shift` with `F` for top to bottom |
+| Grow or shrink it a tenth | `+` or `-` |
+| Move it up or down the stack | `Page Up` or `Page Down` |
+| Set the pixels in one grid cell | Type the number in the panel, or press Measure a cell and click two corners of one cell |
+| Give up a measure | `Escape` |
+
+**Table** works on the TV box, the part of the canvas the TV shows.
+
+| Action | Control |
+|---|---|
+| Move the box | Drag it |
+| Resize the box | Drag a corner handle. A size close to true size snaps to it |
+| Keep a size the snap would take | Hold `Alt` as the drag ends |
+| Move the box one grid cell | The arrow keys |
+| Zoom the box | `Ctrl` and `Alt` with the wheel, or the Zoom field in the panel |
+
+Add a map with the Add map button, or drop an image file on the DM window.
+
 Read [PLAN.md](PLAN.md) for the architecture and the milestones. Read [DESIGN.md](DESIGN.md) for the visual language of the DM window.
