@@ -66,6 +66,9 @@ const ON_ACCENT: egui::Color32 = egui::Color32::from_rgb(0xf5, 0xef, 0xe2);
 /// The `ink` token of the light theme, from DESIGN.md.
 const INK: egui::Color32 = egui::Color32::from_rgb(0x2b, 0x24, 0x19);
 
+/// What the DM takes hold of to drag a row through the tree.
+const GRIP: &str = "::";
+
 /// The `mute` token of the light theme, from DESIGN.md. Helper text.
 const MUTE: egui::Color32 = egui::Color32::from_rgb(0x7d, 0x74, 0x62);
 
@@ -195,6 +198,8 @@ struct Select {
     chosen: Vec<NodeId>,
     /// The list that says what a drag over the canvas picked.
     popup: bool,
+    /// What the program has to say about the last thing the DM asked.
+    note: String,
     drag: Option<Drag>,
     measure: Option<Measure>,
 }
@@ -842,8 +847,12 @@ fn tree_panel(ui: &mut egui::Ui, scene: &mut Scene, select: &mut Select, tree: &
         }
         ui.label(egui::RichText::new(&scene.root.name).color(MUTE));
     });
+    let mut moved = None;
     if tree.open.contains(&ROOT_ID) {
-        edited |= tree_rows(ui, &mut scene.root.children, select, tree, 1);
+        edited |= tree_rows(ui, &mut scene.root.children, select, tree, 1, &mut moved);
+    }
+    if let Some((node, target)) = moved {
+        edited |= crate::scene::move_above(scene, node, target);
     }
     if ui.button("New group").clicked() {
         let id = scene.next_id();
@@ -853,7 +862,11 @@ fn tree_panel(ui: &mut egui::Ui, scene: &mut Scene, select: &mut Select, tree: &
         tree.active = id;
         edited = true;
     }
-    ui.label(egui::RichText::new("A new asset joins the marked group.").color(MUTE));
+    if select.note.is_empty() {
+        ui.label(egui::RichText::new("A new asset joins the marked group.").color(MUTE));
+    } else {
+        ui.label(egui::RichText::new(&select.note).color(ACCENT));
+    }
     edited
 }
 
@@ -864,6 +877,7 @@ fn tree_rows(
     select: &mut Select,
     tree: &mut Tree,
     depth: usize,
+    moved: &mut Option<(NodeId, NodeId)>,
 ) -> bool {
     let mut edited = false;
     // The list reads from the top down, and the last node draws over the
@@ -873,8 +887,9 @@ fn tree_rows(
             Node::Group(group) => {
                 let id = group.id;
                 let open = tree.open.contains(&id);
-                ui.horizontal(|ui| {
+                let row = ui.horizontal(|ui| {
                     indent(ui, depth);
+                    grip(ui, id);
                     if ui.add(mark(tree.active == id)).clicked() {
                         tree.active = id;
                     }
@@ -886,14 +901,16 @@ fn tree_rows(
                     edited |= ui.checkbox(&mut group.shown.dm, "").changed();
                     edited |= ui.checkbox(&mut group.shown.tv, "").changed();
                 });
+                dropped_on(&row.response, id, moved);
                 if open {
-                    edited |= tree_rows(ui, &mut group.children, select, tree, depth + 1);
+                    edited |= tree_rows(ui, &mut group.children, select, tree, depth + 1, moved);
                 }
             }
             Node::Asset(asset) => {
                 let picked = select.holds(asset.id);
-                ui.horizontal(|ui| {
+                let row = ui.horizontal(|ui| {
                     indent(ui, depth);
+                    grip(ui, asset.id);
                     let name = asset.path.to_string_lossy().into_owned();
                     let text = if picked {
                         egui::RichText::new(name).color(ACCENT)
@@ -909,10 +926,34 @@ fn tree_rows(
                     edited |= ui.checkbox(&mut asset.shown.dm, "").changed();
                     edited |= ui.checkbox(&mut asset.shown.tv, "").changed();
                 });
+                dropped_on(&row.response, asset.id, moved);
             }
         }
     }
     edited
+}
+
+/// The handle a DM takes hold of to move a row through the tree.
+///
+/// Only the grip drags. A drag source over the whole row would swallow
+/// every click meant for the switches.
+fn grip(ui: &mut egui::Ui, id: NodeId) {
+    ui.dnd_drag_source(egui::Id::new(("node", id)), id, |ui| {
+        ui.label(egui::RichText::new(GRIP).color(MUTE));
+    });
+}
+
+/// Marks where a row on its way through the tree would land.
+fn dropped_on(row: &egui::Response, id: NodeId, moved: &mut Option<(NodeId, NodeId)>) {
+    if row.dnd_hover_payload::<NodeId>().is_some() {
+        let rect = row.rect;
+        row.ctx
+            .debug_painter()
+            .hline(rect.x_range(), rect.top(), egui::Stroke::new(2.0, ACCENT));
+    }
+    if let Some(dragged) = row.dnd_release_payload::<NodeId>() {
+        *moved = Some((*dragged, id));
+    }
 }
 
 /// The mark that says where a new asset goes.
@@ -1512,9 +1553,11 @@ fn keys(ui: &egui::Ui, select: &mut Select, scene: &mut Scene) -> bool {
     // Keys act on the selection when no drag is in progress, since a drag
     // rewrites the map from its start state every frame. Held keys do not
     // repeat: one press is one turn, one flip, or one step in the stack.
-    let (None, Some(id)) = (select.drag.as_ref(), select.only()) else {
+    if select.drag.is_some() || select.chosen.is_empty() {
         return edited;
-    };
+    }
+    let held = crate::scene::normalize(scene, &select.chosen);
+    let one = select.only();
     ui.input(|input| {
         for event in &input.events {
             let egui::Event::Key {
@@ -1527,13 +1570,19 @@ fn keys(ui: &egui::Ui, select: &mut Select, scene: &mut Scene) -> bool {
             else {
                 continue;
             };
-            // Order lives inside one group, so these two keys move the node
-            // past its brothers and sisters and never leave its parent.
+            // Order lives inside one group, so these two keys move nodes
+            // past their brothers and sisters and never leave the parent.
             if matches!(key, egui::Key::PageUp | egui::Key::PageDown) {
-                edited |= crate::scene::reorder(scene, id, *key == egui::Key::PageUp);
+                if crate::scene::share_parent(scene, &held).is_none() {
+                    "Order works inside one group. Pick nodes that sit together."
+                        .clone_into(&mut select.note);
+                    continue;
+                }
+                select.note.clear();
+                edited |= crate::scene::reorder_all(scene, &held, *key == egui::Key::PageUp);
                 continue;
             }
-            let Some(asset) = crate::scene::asset_mut(scene, id) else {
+            let Some(asset) = one.and_then(|id| crate::scene::asset_mut(scene, id)) else {
                 continue;
             };
             match key {

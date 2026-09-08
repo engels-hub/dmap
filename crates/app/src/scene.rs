@@ -288,37 +288,6 @@ pub fn assets(scene: &Scene) -> Vec<&Asset> {
     draw_order(scene, Audience::Dm)
 }
 
-/// Moves a node one place among the nodes it sits with.
-///
-/// Order lives inside one group, so a node moves past its brothers and
-/// sisters and never leaves its parent. Returns `true` when it moved.
-pub fn reorder(scene: &mut Scene, id: NodeId, toward_top: bool) -> bool {
-    reorder_in(&mut scene.root, id, toward_top)
-}
-
-fn reorder_in(group: &mut Group, id: NodeId, toward_top: bool) -> bool {
-    if let Some(place) = group.children.iter().position(|node| node.id() == id) {
-        let next = if toward_top {
-            (place + 1 < group.children.len()).then(|| place + 1)
-        } else {
-            place.checked_sub(1)
-        };
-        if let Some(next) = next {
-            group.children.swap(place, next);
-            return true;
-        }
-        return false;
-    }
-    for child in &mut group.children {
-        if let Node::Group(inside) = child
-            && reorder_in(inside, id, toward_top)
-        {
-            return true;
-        }
-    }
-    false
-}
-
 /// The group that holds this node, and where in it the node sits.
 pub fn parent_of(scene: &Scene, id: NodeId) -> Option<(NodeId, usize)> {
     parent_in(&scene.root, id)
@@ -410,6 +379,82 @@ fn take_in(group: &mut Group, id: NodeId) -> Option<Node> {
         }
     }
     None
+}
+
+/// The group that holds every node in a selection, when one does.
+///
+/// Order lives inside one group, so a move in order asks this first.
+pub fn share_parent(scene: &Scene, ids: &[NodeId]) -> Option<NodeId> {
+    let mut parents = ids
+        .iter()
+        .map(|id| parent_of(scene, *id).map(|(group, _)| group));
+    let first = parents.next()??;
+    parents.all(|parent| parent == Some(first)).then_some(first)
+}
+
+/// Moves a selection one place among its brothers and sisters.
+///
+/// The whole selection moves, or none of it does. A set that has reached
+/// the end stays where it is, so two nodes in it never step over one
+/// another and the order they draw in holds.
+pub fn reorder_all(scene: &mut Scene, ids: &[NodeId], toward_top: bool) -> bool {
+    let Some(parent) = share_parent(scene, ids) else {
+        return false;
+    };
+    let Some(group) = group_mut(scene, parent) else {
+        return false;
+    };
+    let mut places: Vec<usize> = ids
+        .iter()
+        .filter_map(|id| group.children.iter().position(|node| node.id() == *id))
+        .collect();
+    places.sort_unstable();
+    let (Some(first), Some(last)) = (places.first(), places.last()) else {
+        return false;
+    };
+    if toward_top {
+        if last + 1 >= group.children.len() {
+            return false;
+        }
+        for place in places.iter().rev() {
+            group.children.swap(*place, place + 1);
+        }
+    } else {
+        if *first == 0 {
+            return false;
+        }
+        for place in &places {
+            group.children.swap(*place, place - 1);
+        }
+    }
+    true
+}
+
+/// Moves a node to where another node stands.
+///
+/// The node joins the group that holds `target`, and takes the place
+/// `target` had, so it lands under `target` in the list. A group cannot go
+/// into itself, or into anything it holds. Returns `true` when it moved.
+pub fn move_above(scene: &mut Scene, id: NodeId, target: NodeId) -> bool {
+    if id == target || target == ROOT_ID || ancestors(scene, target).contains(&id) {
+        return false;
+    }
+    let Some(node) = take_node(scene, id) else {
+        return false;
+    };
+    // The tree is one node shorter now, so the place of the target is the
+    // place the node takes.
+    let Some((parent, place)) = parent_of(scene, target) else {
+        scene.root.children.push(node);
+        return false;
+    };
+    let Some(group) = group_mut(scene, parent) else {
+        scene.root.children.push(node);
+        return false;
+    };
+    let place = place.min(group.children.len());
+    group.children.insert(place, node);
+    true
 }
 
 /// Every asset a node holds: the asset itself, or all under a group.
@@ -786,7 +831,7 @@ mod tests {
 
     use super::{
         Asset, Audience, Group, Node, NodeId, ROOT_ID, Scene, assets, assets_of, copy_into_scene,
-        draw_order, find, free_name, group_selection, normalize, parent_of, path_of, reorder,
+        draw_order, find, free_name, group_selection, move_above, normalize, parent_of, path_of,
     };
 
     /// A folder of its own for one test, under the system's temp folder.
@@ -1107,19 +1152,19 @@ mod tests {
     fn a_node_moves_among_the_nodes_it_sits_with() {
         let mut scene = nested();
         // The asset at the bottom of the root moves over the group.
-        assert!(reorder(&mut scene, 1, true));
+        assert!(super::reorder_all(&mut scene, &[1], true));
         assert_eq!(scene.root.children[0].id(), 2);
         assert_eq!(scene.root.children[1].id(), 1);
         // It cannot go any further.
-        assert!(!reorder(&mut scene, 1, true));
+        assert!(!super::reorder_all(&mut scene, &[1], true));
     }
 
     #[test]
     fn a_node_inside_a_group_moves_inside_that_group() {
         let mut scene = nested();
         // The only child of the group has nowhere to go.
-        assert!(!reorder(&mut scene, 3, true));
-        assert!(!reorder(&mut scene, 3, false));
+        assert!(!super::reorder_all(&mut scene, &[3], true));
+        assert!(!super::reorder_all(&mut scene, &[3], false));
         assert_eq!(parent_of(&scene, 3), Some((2, 0)));
     }
 
@@ -1286,5 +1331,58 @@ mod tests {
             names.len(),
             "two nodes share a name: {names:?}"
         );
+    }
+
+    #[test]
+    fn a_node_moves_to_where_another_node_stands() {
+        let mut scene = family();
+        // floor.png joins Notes, under note.png.
+        assert!(move_above(&mut scene, 1, 4));
+        assert_eq!(path_of(&scene, 1), Some(vec![1, 0]));
+        assert_eq!(assets_of(&scene, 3), vec![1, 4, 5]);
+    }
+
+    #[test]
+    fn a_node_moves_among_the_nodes_it_already_sits_with() {
+        let mut scene = family();
+        // wall.png drops to where floor.png stands.
+        assert!(move_above(&mut scene, 2, 1));
+        assert_eq!(
+            scene.root.children.iter().map(Node::id).collect::<Vec<_>>(),
+            vec![2, 1, 3]
+        );
+    }
+
+    #[test]
+    fn a_group_cannot_go_inside_itself() {
+        let mut scene = family();
+        assert!(!move_above(&mut scene, 3, 4));
+        assert!(!move_above(&mut scene, 3, 3));
+        // Nothing moved, and nothing was lost.
+        assert_eq!(assets_of(&scene, 3), vec![4, 5]);
+        assert_eq!(scene.root.children.len(), 3);
+    }
+
+    #[test]
+    fn a_move_in_order_asks_whether_the_nodes_sit_together() {
+        let scene = family();
+        assert_eq!(super::share_parent(&scene, &[1, 2]), Some(ROOT_ID));
+        assert_eq!(super::share_parent(&scene, &[4, 5]), Some(3));
+        // floor.png sits in the root, pin.png sits in Notes.
+        assert_eq!(super::share_parent(&scene, &[1, 5]), None);
+        assert_eq!(super::share_parent(&scene, &[]), None);
+    }
+
+    #[test]
+    fn brothers_and_sisters_move_in_order_and_keep_theirs() {
+        let mut scene = family();
+        // floor.png and wall.png stand under Notes. Both step up.
+        assert!(super::reorder_all(&mut scene, &[1, 2], true));
+        assert_eq!(
+            scene.root.children.iter().map(Node::id).collect::<Vec<_>>(),
+            vec![3, 1, 2]
+        );
+        // They cannot climb past the top.
+        assert!(!super::reorder_all(&mut scene, &[1, 2], true));
     }
 }
