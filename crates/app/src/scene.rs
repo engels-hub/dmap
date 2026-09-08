@@ -61,6 +61,37 @@ impl Layer {
     }
 }
 
+/// Where an index lands once a layer moves from `from` to `to`.
+///
+/// A layer that moves takes every map on it along, and the layers it steps
+/// over move by one to make room.
+pub fn index_after_move(index: usize, from: usize, to: usize) -> usize {
+    if index == from {
+        to
+    } else if from < to && index > from && index <= to {
+        index - 1
+    } else if from > to && index >= to && index < from {
+        index + 1
+    } else {
+        index
+    }
+}
+
+/// Moves a layer to another place in the pile.
+///
+/// Every map keeps the layer it sits on, so the maps move with it. An index
+/// outside the pile leaves everything alone.
+pub fn move_layer(layers: &mut Vec<Layer>, maps: &mut [MapObject], from: usize, to: usize) {
+    if from == to || from >= layers.len() || to >= layers.len() {
+        return;
+    }
+    let layer = layers.remove(from);
+    layers.insert(to, layer);
+    for map in maps {
+        map.layer = index_after_move(map.layer, from, to);
+    }
+}
+
 /// The maps one screen draws, in the order they draw.
 ///
 /// A layer draws over the layers under it. Inside a layer, a later map
@@ -283,7 +314,10 @@ impl MapObject {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Audience, Layer, MapObject, Scene, copy_into_scene, draw_order, free_name};
+    use super::{
+        Audience, Layer, MapObject, Scene, copy_into_scene, draw_order, free_name,
+        index_after_move, move_layer,
+    };
 
     /// A folder of its own for one test, under the system's temp folder.
     fn scratch(name: &str) -> PathBuf {
@@ -594,5 +628,46 @@ mod tests {
             ..Scene::default()
         };
         assert_eq!(Scene::from_json(&scene.to_json()).unwrap(), scene);
+    }
+
+    #[test]
+    fn a_layer_that_moves_up_takes_its_maps_with_it() {
+        let (mut maps, mut layers) = stack();
+        move_layer(&mut layers, &mut maps, 0, 2);
+        assert_eq!(layers[2].name, "Layer 0");
+        // The map that sat on layer 0 sits on layer 2 now.
+        assert_eq!(maps[0].layer, 2);
+        assert_eq!(maps[1].layer, 0);
+        assert_eq!(maps[2].layer, 1);
+    }
+
+    #[test]
+    fn a_layer_that_moves_down_takes_its_maps_with_it() {
+        let (mut maps, mut layers) = stack();
+        move_layer(&mut layers, &mut maps, 2, 0);
+        assert_eq!(layers[0].name, "Layer 2");
+        assert_eq!(maps[2].layer, 0);
+        assert_eq!(maps[0].layer, 1);
+        assert_eq!(maps[1].layer, 2);
+    }
+
+    #[test]
+    fn a_move_that_goes_nowhere_changes_nothing() {
+        let (mut maps, mut layers) = stack();
+        let before = (maps.clone(), layers.clone());
+        move_layer(&mut layers, &mut maps, 1, 1);
+        move_layer(&mut layers, &mut maps, 0, 9);
+        move_layer(&mut layers, &mut maps, 9, 0);
+        assert_eq!((maps, layers), before);
+    }
+
+    #[test]
+    fn every_index_lands_somewhere_of_its_own() {
+        for (from, to) in [(0_usize, 2_usize), (2, 0), (1, 2), (2, 1)] {
+            let landed: Vec<usize> = (0..3).map(|i| index_after_move(i, from, to)).collect();
+            let mut sorted = landed.clone();
+            sorted.sort_unstable();
+            assert_eq!(sorted, vec![0, 1, 2], "from {from} to {to} gave {landed:?}");
+        }
     }
 }

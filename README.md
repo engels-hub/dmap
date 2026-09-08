@@ -108,13 +108,16 @@ Every map sits on a layer. The **Layers** list in the settings panel holds one r
 
 | Column | What it does |
 |---|---|
+| Mark | The layer a new map joins. Click it to move the mark |
 | Name | Type a name for the layer |
 | Me | Draw this layer on the DM screen |
 | TV | Draw this layer on the TV |
 
+Drag a row up or down to move a layer through the pile. The maps on it go with it.
+
 The two switches work on their own. A layer with **Me** on and **TV** off holds what the players must not see. Keep the room they have not found there, or a note on a door. **New layer** puts another layer on top.
 
-Pick a map with the Select tool, and the **Layer** field in the Map section moves it to another layer. A layer that is off for you takes no clicks, so a hidden map stays where you put it.
+A map you add joins the marked layer. To move a map you placed before, pick it with the Select tool. The **Layer** field in the Map section then moves it. A layer that is off for you takes no clicks, so a hidden map stays where you put it.
 
 **Scenes** in the rail opens the list of your scenes. Every row is a folder.
 

@@ -197,6 +197,8 @@ struct Running {
     maps: Vec<MapObject>,
     /// The layers of the open scene, bottom one first.
     layers: Vec<Layer>,
+    /// The layer a new map joins.
+    active_layer: usize,
     map_layer: MapLayer,
     loader: Loader,
     camera: Camera,
@@ -264,6 +266,7 @@ impl Running {
             scene_error: String::new(),
             maps: scene.maps.clone(),
             layers: scene.layers.clone(),
+            active_layer: 0,
             map_layer,
             loader,
             camera: DM_CAMERA,
@@ -340,7 +343,12 @@ impl Running {
             }
         };
         self.loader.request(self.scene_dir.join(&stored));
-        self.maps.push(MapObject::new(stored, self.camera.center));
+        // A new map joins the layer the DM marked in the panel.
+        let map = MapObject {
+            layer: self.active_layer.min(self.layers.len().saturating_sub(1)),
+            ..MapObject::new(stored, self.camera.center)
+        };
+        self.maps.push(map);
         true
     }
 
@@ -406,6 +414,7 @@ impl Running {
         if output.edited {
             self.tv.window.request_redraw();
         }
+        self.active_layer = output.active_layer;
         let added = output.add_map && self.pick_map_file();
         let settings_changed = self.settings != before;
         // Only a display or a swap moves a window. Every other setting, such
@@ -474,6 +483,7 @@ impl Running {
         self.scene_dir = dir;
         self.maps.clone_from(&scene.maps);
         self.layers.clone_from(&scene.layers);
+        self.active_layer = 0;
         self.tv_box = scene.tv_box.clamped();
         self.map_layer.clear();
         self.reload_images();

@@ -11,7 +11,7 @@ use egui_winit::winit::{event::WindowEvent, monitor::MonitorHandle};
 use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::color;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
-use crate::scene::{Audience, Layer, MapObject};
+use crate::scene::{Audience, Layer, MapObject, index_after_move, move_layer};
 use crate::transform::{
     MAX_GRID_PX, MIN_GRID_PX, corner_offset, edge_midpoint, grid_px_from_measure, hit_test,
     pick_handle, reorder, rotation_from_drag, rotation_handle, scale_from_drag, snap_corner,
@@ -105,6 +105,8 @@ pub struct DmUi {
     select: Select,
     table: Table,
     scenes: Scenes,
+    /// The layer a new map joins, as a place in the scene's layers.
+    active_layer: usize,
     /// Who takes the zoom gesture that is running: the TV box, or the
     /// camera. `None` while no gesture runs.
     zoom_goes_to: Option<bool>,
@@ -360,6 +362,7 @@ impl DmUi {
             select: Select::default(),
             table: Table::default(),
             scenes: Scenes::default(),
+            active_layer: 0,
             zoom_goes_to: None,
             dirty: false,
         }
@@ -376,6 +379,7 @@ impl DmUi {
 
     /// Runs one UI frame: the rail, the settings and the Select tool.
     pub fn run(&mut self, pane: &Pane, mut frame: Frame<'_>) -> UiOutput {
+        let frame_layers = frame.layers.len();
         let raw_input = self.state.take_egui_input(&pane.window);
         let ctx = self.state.egui_ctx().clone();
         let viewport = (pane.config.width, pane.config.height);
@@ -386,12 +390,13 @@ impl DmUi {
         let table = &mut self.table;
         let tool = &mut self.tool;
         let scenes = &mut self.scenes;
+        let active_layer = &mut self.active_layer;
         let zoom_goes_to = &mut self.zoom_goes_to;
         let selected_before = select.selected;
         let output = ctx.run_ui(raw_input, |ui| {
             // A click that closes a popup must not reach the canvas.
             let popup_open = egui::Popup::is_any_open(ui.ctx());
-            let rail = rail_and_settings(ui, &mut frame, select, tool, scenes);
+            let rail = rail_and_settings(ui, &mut frame, select, tool, scenes, active_layer);
             add_map = rail.add_map;
             edited = rail.edited;
             scene = scenes_dialog(ui, scenes, &frame);
@@ -436,6 +441,7 @@ impl DmUi {
             edited,
             save,
             scene,
+            active_layer: self.active_layer.min(frame_layers.saturating_sub(1)),
             paint: Paint {
                 jobs: paint_jobs,
                 textures_delta,
@@ -511,6 +517,8 @@ pub struct UiOutput {
     pub edited: bool,
     /// The maps changed and no drag is in progress: write the project.
     pub save: bool,
+    /// The layer a new map joins.
+    pub active_layer: usize,
     /// What the DM asked the scenes dialog to do.
     pub scene: Option<SceneCommand>,
     /// What `DmUi::render` needs.
@@ -540,6 +548,7 @@ fn rail_and_settings(
     select: &mut Select,
     tool: &mut Tool,
     scenes: &mut Scenes,
+    active_layer: &mut usize,
 ) -> Rail {
     let displays = frame.displays;
     let mut add_map = false;
@@ -606,7 +615,7 @@ fn rail_and_settings(
             ui.add(field);
             ui.label(egui::RichText::new("either side of 100 %").color(MUTE));
         });
-        edited |= layer_panel(ui, frame.layers);
+        edited |= layer_panel(ui, frame, active_layer);
         if *tool == Tool::Select {
             edited |= map_properties(ui, select, frame.maps, frame.layers);
         } else {
@@ -758,7 +767,7 @@ fn shown_to_dm(map: &MapObject, layers: &[Layer]) -> bool {
 ///
 /// Each layer carries two switches, one for each screen. A layer with the
 /// DM switch on and the TV switch off holds what the players must not see.
-fn layer_panel(ui: &mut egui::Ui, layers: &mut Vec<Layer>) -> bool {
+fn layer_panel(ui: &mut egui::Ui, frame: &mut Frame<'_>, active: &mut usize) -> bool {
     let mut edited = false;
     ui.separator();
     ui.heading("Layers");
@@ -769,18 +778,62 @@ fn layer_panel(ui: &mut egui::Ui, layers: &mut Vec<Layer>) -> bool {
     });
     // The list reads from the top down, and the top layer draws over the
     // rest, so the last layer comes first.
-    for layer in layers.iter_mut().rev() {
-        ui.horizontal(|ui| {
-            let name = egui::TextEdit::singleline(&mut layer.name).desired_width(120.0);
-            edited |= ui.add(name).changed();
-            edited |= ui.checkbox(&mut layer.show_dm, "").changed();
-            edited |= ui.checkbox(&mut layer.show_tv, "").changed();
+    let mut moved = None;
+    for index in (0..frame.layers.len()).rev() {
+        let row = ui.dnd_drag_source(egui::Id::new(("layer", index)), index, |ui| {
+            edited |= layer_row(ui, frame.layers, index, active);
         });
+        // A row under a layer on its way shows where that layer lands.
+        if row.response.dnd_hover_payload::<usize>().is_some() {
+            let rect = row.response.rect;
+            ui.painter()
+                .hline(rect.x_range(), rect.top(), egui::Stroke::new(2.0, ACCENT));
+        }
+        if let Some(from) = row.response.dnd_release_payload::<usize>() {
+            moved = Some((*from, index));
+        }
     }
-    if ui.button("New layer").clicked() {
-        layers.push(Layer::new(format!("Layer {}", layers.len() + 1)));
+    if let Some((from, to)) = moved {
+        move_layer(frame.layers, frame.maps, from, to);
+        *active = index_after_move(*active, from, to);
         edited = true;
     }
+    if ui.button("New layer").clicked() {
+        let name = format!("Layer {}", frame.layers.len() + 1);
+        frame.layers.push(Layer::new(name));
+        *active = frame.layers.len() - 1;
+        edited = true;
+    }
+    ui.label(egui::RichText::new("A new map joins the marked layer.").color(MUTE));
+    edited
+}
+
+/// One layer in the panel. Returns `true` when the DM changed it.
+///
+/// The mark on the left says where a new map goes, and a drag on the row
+/// moves the layer up or down the pile.
+fn layer_row(ui: &mut egui::Ui, layers: &mut [Layer], index: usize, active: &mut usize) -> bool {
+    let mut edited = false;
+    let Some(layer) = layers.get_mut(index) else {
+        return false;
+    };
+    ui.horizontal(|ui| {
+        let marked = *active == index;
+        let mark = if marked { "*" } else { "\u{00b7}" };
+        let color = if marked { ACCENT } else { MUTE };
+        let button = egui::Button::new(egui::RichText::new(mark).color(color)).frame(false);
+        if ui.add(button).clicked() {
+            *active = index;
+        }
+        let name = egui::TextEdit::singleline(&mut layer.name).desired_width(105.0);
+        let field = ui.add(name);
+        if field.gained_focus() {
+            *active = index;
+        }
+        edited |= field.changed();
+        edited |= ui.checkbox(&mut layer.show_dm, "").changed();
+        edited |= ui.checkbox(&mut layer.show_tv, "").changed();
+    });
     edited
 }
 
