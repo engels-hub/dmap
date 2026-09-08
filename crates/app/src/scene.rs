@@ -92,6 +92,28 @@ pub fn move_layer(layers: &mut Vec<Layer>, maps: &mut [MapObject], from: usize, 
     }
 }
 
+/// Takes a layer out of the pile, with every map that sits on it.
+///
+/// The last layer stays: a scene with no layer has nowhere to put a map.
+/// A map on a layer above the one that goes steps down to keep its place.
+pub fn delete_layer(layers: &mut Vec<Layer>, maps: &mut Vec<MapObject>, index: usize) {
+    if index >= layers.len() || layers.len() == 1 {
+        return;
+    }
+    layers.remove(index);
+    maps.retain(|map| map.layer != index);
+    for map in maps {
+        if map.layer > index {
+            map.layer -= 1;
+        }
+    }
+}
+
+/// How many maps sit on one layer.
+pub fn maps_on(maps: &[MapObject], index: usize) -> usize {
+    maps.iter().filter(|map| map.layer == index).count()
+}
+
 /// The maps one screen draws, in the order they draw.
 ///
 /// A layer draws over the layers under it. Inside a layer, a later map
@@ -315,8 +337,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        Audience, Layer, MapObject, Scene, copy_into_scene, draw_order, free_name,
-        index_after_move, move_layer,
+        Audience, Layer, MapObject, Scene, copy_into_scene, delete_layer, draw_order, free_name,
+        index_after_move, maps_on, move_layer,
     };
 
     /// A folder of its own for one test, under the system's temp folder.
@@ -669,5 +691,44 @@ mod tests {
             sorted.sort_unstable();
             assert_eq!(sorted, vec![0, 1, 2], "from {from} to {to} gave {landed:?}");
         }
+    }
+
+    #[test]
+    fn a_layer_that_goes_takes_its_maps_with_it() {
+        let (mut maps, mut layers) = stack();
+        delete_layer(&mut layers, &mut maps, 1);
+        assert_eq!(layers.len(), 2);
+        assert_eq!(maps.len(), 2);
+        // The map above the one that went steps down to keep its place.
+        assert_eq!(maps[0].layer, 0);
+        assert_eq!(maps[1].layer, 1);
+        assert_eq!(layers[1].name, "Layer 2");
+    }
+
+    #[test]
+    fn the_last_layer_stays() {
+        let mut layers = vec![Layer::new("only".to_owned())];
+        let mut maps = vec![MapObject::new(PathBuf::from("m.png"), (0.0, 0.0))];
+        delete_layer(&mut layers, &mut maps, 0);
+        assert_eq!(layers.len(), 1);
+        assert_eq!(maps.len(), 1);
+    }
+
+    #[test]
+    fn a_layer_that_is_not_there_takes_nothing() {
+        let (mut maps, mut layers) = stack();
+        delete_layer(&mut layers, &mut maps, 9);
+        assert_eq!((layers.len(), maps.len()), (3, 3));
+    }
+
+    #[test]
+    fn a_layer_knows_how_many_maps_stand_on_it() {
+        let (mut maps, _) = stack();
+        maps.push(MapObject {
+            layer: 1,
+            ..MapObject::new(PathBuf::from("extra.png"), (0.0, 0.0))
+        });
+        assert_eq!(maps_on(&maps, 1), 2);
+        assert_eq!(maps_on(&maps, 2), 1);
     }
 }

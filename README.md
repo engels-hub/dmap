@@ -108,12 +108,16 @@ Every map sits on a layer. The **Layers** list in the settings panel holds one r
 
 | Column | What it does |
 |---|---|
+| `::` | Take hold here and drag the layer up or down the pile |
 | Mark | The layer a new map joins. Click it to move the mark |
 | Name | Type a name for the layer |
 | Me | Draw this layer on the DM screen |
 | TV | Draw this layer on the TV |
+| `x` | Delete the layer |
 
-Drag a row up or down to move a layer through the pile. The maps on it go with it.
+A layer that moves takes its maps with it.
+
+Caution: a layer you delete takes its maps with it, and nothing brings them back. The panel asks you once, and names how many maps go. The last layer has no `x`, since a scene needs somewhere to put a map. The image files stay in the scene folder.
 
 The two switches work on their own. A layer with **Me** on and **TV** off holds what the players must not see. Keep the room they have not found there, or a note on a door. **New layer** puts another layer on top.
 
