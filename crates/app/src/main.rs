@@ -7,11 +7,11 @@
 
 mod camera;
 mod color;
+mod config;
 mod gpu;
 mod images;
 mod maps;
 mod pointer;
-mod project;
 mod scene;
 mod transform;
 mod tv;
@@ -21,7 +21,7 @@ mod ui;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use egui_winit::winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -32,15 +32,16 @@ use egui_winit::winit::{
 };
 
 use crate::camera::{Camera, DEFAULT_PIXELS_PER_INCH};
+use crate::config::Config;
 use crate::gpu::{Gpu, Pane};
 use crate::images::Loader;
 use crate::maps::{MapLayer, relative_path};
 use crate::pointer::PointerDisc;
-use crate::project::Project;
 use crate::scene::MapObject;
+use crate::scene::{Scene, copy_into_scene};
 use crate::tv::{display_at, dm_move_target, placement_for, resolve_tv_display};
 use crate::tvbox::{TvBox, clamp_snap_percent};
-use crate::ui::{DmUi, Frame, Settings};
+use crate::ui::{DmUi, Frame, SceneCommand, Settings};
 
 /// Size the DM window opens with. The design mockups use this frame.
 const DM_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(1440.0, 900.0);
@@ -48,8 +49,11 @@ const DM_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(1440.0, 900.0);
 /// Size of the TV window when no display is free for it.
 const TV_FALLBACK_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 540.0);
 
-/// Project file used when no path is given on the command line.
-const DEFAULT_PROJECT: &str = "project.json";
+/// The file that holds one scene, inside the scene's own folder.
+const SCENE_FILE: &str = "scene.json";
+
+/// The scene a first run opens.
+const FIRST_SCENE: &str = "New scene";
 
 /// The DM camera at start: the origin in the middle of the view.
 const DM_CAMERA: Camera = Camera {
@@ -58,14 +62,27 @@ const DM_CAMERA: Camera = Camera {
 };
 
 fn main() -> Result<()> {
-    let path = std::env::args_os()
-        .nth(1)
-        .map_or_else(|| PathBuf::from(DEFAULT_PROJECT), PathBuf::from);
-    let project = load_project(&path)?;
+    let mut config = load_config()?;
+    let scene_dir = scene_to_open(&mut config)?;
+    std::fs::create_dir_all(&scene_dir)
+        .with_context(|| format!("{}: cannot make the scene folder", scene_dir.display()))?;
+    let scene = load_scene(&scene_dir)?;
+    // The config remembers this scene for the next run. The scene file is
+    // written only when it is missing, so a scene on a read-only stick
+    // still opens, and a write that fails does not end the run.
+    if let Err(error) = save_config(&config) {
+        eprintln!("{error:#}");
+    }
+    if !scene_dir.join(SCENE_FILE).exists()
+        && let Err(error) = save_scene(&scene, &scene_dir)
+    {
+        eprintln!("{error:#}");
+    }
     let event_loop = EventLoop::new()?;
     let mut app = App {
-        path,
-        project,
+        config,
+        scene_dir,
+        scene,
         running: None,
         error: None,
     };
@@ -73,22 +90,86 @@ fn main() -> Result<()> {
     app.error.map_or(Ok(()), Err)
 }
 
-/// Reads the project file, or starts a new project when there is none.
-fn load_project(path: &Path) -> Result<Project> {
-    match std::fs::read_to_string(path) {
+/// Reads the config, or starts a new one when there is none.
+fn load_config() -> Result<Config> {
+    let path = config::config_path();
+    match std::fs::read_to_string(&path) {
         Ok(json) => {
-            Project::from_json(&json).with_context(|| format!("{}: broken project", path.display()))
+            Config::from_json(&json).with_context(|| format!("{}: broken config", path.display()))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Project::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
         Err(error) => Err(error).with_context(|| format!("{}: cannot read", path.display())),
+    }
+}
+
+/// The folder of the scene this run opens.
+///
+/// A folder on the command line wins. A path to a scene file names its own
+/// folder. Without an argument the program opens the scene of the last run,
+/// and a first run gets a new one. `config.last_scene` follows the choice.
+fn scene_to_open(config: &mut Config) -> Result<PathBuf> {
+    if let Some(argument) = std::env::args_os().nth(1) {
+        // A path from the shell is often relative to the folder the DM
+        // stood in. The config outlives that folder, so it holds a whole
+        // path or a name, and never a way back to somewhere else.
+        let given = std::path::absolute(PathBuf::from(argument))
+            .context("cannot work out the folder of that scene")?;
+        let dir = if given.file_name().is_some_and(|name| name == SCENE_FILE) {
+            given
+                .parent()
+                .context("a scene file needs a folder around it")?
+                .to_path_buf()
+        } else if given.is_file() {
+            bail!("{}: a scene is a folder, not a file", given.display());
+        } else {
+            given
+        };
+        config.last_scene = Some(config.remember(&dir));
+        return Ok(dir);
+    }
+    let scene = config.last_scene.clone().unwrap_or_else(|| {
+        let first = PathBuf::from(FIRST_SCENE);
+        config.last_scene = Some(first.clone());
+        first
+    });
+    Ok(config.scene_dir(&scene))
+}
+
+/// Reads the scene file, or starts an empty scene when there is none.
+fn load_scene(dir: &Path) -> Result<Scene> {
+    let path = dir.join(SCENE_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(json) => {
+            Scene::from_json(&json).with_context(|| format!("{}: broken scene", path.display()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Scene::default()),
+        Err(error) => Err(error).with_context(|| format!("{}: cannot read", path.display())),
+    }
+}
+
+/// What one event left for the program to do.
+#[derive(Debug, Default)]
+struct Outcome {
+    /// Write the config and the scene.
+    save: bool,
+    /// What the DM asked the scenes dialog to do.
+    scene: Option<SceneCommand>,
+}
+
+impl Outcome {
+    /// An outcome that only writes the files.
+    fn saving(save: bool) -> Self {
+        Self { save, scene: None }
     }
 }
 
 /// Application state across the event loop.
 #[derive(Debug)]
 struct App {
-    path: PathBuf,
-    project: Project,
+    config: Config,
+    /// The folder of the open scene. Its images sit beside its scene file.
+    scene_dir: PathBuf,
+    scene: Scene,
     running: Option<Running>,
     error: Option<anyhow::Error>,
 }
@@ -107,8 +188,12 @@ struct Running {
     placed: bool,
     /// Where the pointer is over the TV window, in pixels, or `None` when outside.
     tv_pointer: Option<(f32, f32)>,
-    /// Folder of the project file; map paths are relative to it.
-    project_dir: PathBuf,
+    /// Folder of the open scene; every map path is a name inside it.
+    scene_dir: PathBuf,
+    /// The folder that holds every scene.
+    scenes_dir: PathBuf,
+    /// What went wrong with the last thing the scenes dialog asked for.
+    scene_error: String,
     maps: Vec<MapObject>,
     map_layer: MapLayer,
     loader: Loader,
@@ -118,18 +203,23 @@ struct Running {
 }
 
 impl Running {
-    fn new(event_loop: &ActiveEventLoop, project: &Project, project_dir: PathBuf) -> Result<Self> {
+    fn new(
+        event_loop: &ActiveEventLoop,
+        config: &Config,
+        scene: &Scene,
+        scene_dir: PathBuf,
+    ) -> Result<Self> {
         let dm_window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
-                    .with_title("dmap")
+                    .with_title(window_title(&scene_dir))
                     .with_inner_size(DM_WINDOW_SIZE),
             )?,
         );
         let displays: Vec<_> = event_loop.available_monitors().collect();
         let dm_display = display_of(&dm_window, &displays);
         let tv_display =
-            resolve_tv_display(&project.tv_display, &display_names(&displays), dm_display);
+            resolve_tv_display(&config.tv_display, &display_names(&displays), dm_display);
         let tv_window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
@@ -150,8 +240,8 @@ impl Running {
         let loader = Loader::spawn(gpu.device.limits().max_texture_dimension_2d, move || {
             wake_window.request_redraw();
         });
-        for map in &project.maps {
-            loader.request(project_dir.join(&map.path));
+        for map in &scene.maps {
+            loader.request(scene_dir.join(&map.path));
         }
         Ok(Self {
             gpu,
@@ -162,28 +252,30 @@ impl Running {
             displays,
             settings: Settings {
                 tv_display,
-                swap_windows: project.swap_windows,
-                snap_percent: clamp_snap_percent(project.snap_percent),
+                swap_windows: config.swap_windows,
+                snap_percent: clamp_snap_percent(config.snap_percent),
             },
             placed: false,
             tv_pointer: None,
-            project_dir,
-            maps: project.maps.clone(),
+            scene_dir,
+            scenes_dir: config.scenes_dir.clone(),
+            scene_error: String::new(),
+            maps: scene.maps.clone(),
             map_layer,
             loader,
             camera: DM_CAMERA,
-            tv_box: project.tv_box.clamped(),
+            tv_box: scene.tv_box.clamped(),
         })
     }
 
-    /// Handles a window event. Returns `true` when the DM changed a setting.
-    fn window_event(&mut self, id: WindowId, event: &WindowEvent) -> Result<bool> {
+    /// Handles a window event. Returns what the program must do next.
+    fn window_event(&mut self, id: WindowId, event: &WindowEvent) -> Result<Outcome> {
         let is_dm = id == self.dm.window.id();
         if let (true, WindowEvent::DroppedFile(path)) = (is_dm, event) {
-            return Ok(self.add_map(path));
+            return Ok(Outcome::saving(self.add_map(path)));
         }
         if is_dm && self.ui.on_event(&self.dm, event) {
-            return Ok(false);
+            return Ok(Outcome::default());
         }
         let pane = if is_dm { &mut self.dm } else { &mut self.tv };
         match event {
@@ -229,13 +321,21 @@ impl Running {
             }
             _ => {}
         }
-        Ok(false)
+        Ok(Outcome::default())
     }
 
-    /// Adds a map file at the middle of the DM view. Returns `true`: the project changed.
+    /// Adds a map file at the middle of the DM view.
+    ///
+    /// Returns `true` when the scene changed.
     fn add_map(&mut self, file: &Path) -> bool {
-        let stored = relative_path(&self.project_dir, file);
-        self.loader.request(self.project_dir.join(&stored));
+        let stored = match copy_into_scene(&self.scene_dir, file) {
+            Ok(name) => name,
+            Err(error) => {
+                eprintln!("{error:#}");
+                return false;
+            }
+        };
+        self.loader.request(self.scene_dir.join(&stored));
         self.maps.push(MapObject::new(stored, self.camera.center));
         true
     }
@@ -244,7 +344,7 @@ impl Running {
     fn pick_map_file(&mut self) -> bool {
         let picked = rfd::FileDialog::new()
             .add_filter("Images", &["png", "jpg", "jpeg"])
-            .set_directory(&self.project_dir)
+            .set_directory(&self.scene_dir)
             .pick_file();
         picked.is_some_and(|file| self.add_map(&file))
     }
@@ -252,7 +352,12 @@ impl Running {
     /// Moves finished image files to the GPU.
     fn upload_loaded_images(&mut self) {
         while let Some((file, result)) = self.loader.poll() {
-            let stored = relative_path(&self.project_dir, &file);
+            // The scene may have changed while the image decoded. A result
+            // from another folder is not part of what the canvas shows.
+            if file.parent() != Some(self.scene_dir.as_path()) {
+                continue;
+            }
+            let stored = relative_path(&self.scene_dir, &file);
             match result {
                 Ok(decoded) => {
                     self.map_layer
@@ -264,8 +369,8 @@ impl Running {
         }
     }
 
-    /// Runs a DM frame. Returns `true` when the DM changed a setting.
-    fn redraw_dm(&mut self) -> Result<bool> {
+    /// Runs a DM frame. Returns what the program must do next.
+    fn redraw_dm(&mut self) -> Result<Outcome> {
         self.upload_loaded_images();
         let before = self.settings.clone();
         let map_layer = &self.map_layer;
@@ -276,6 +381,10 @@ impl Running {
                 settings: &mut self.settings,
                 maps: &mut self.maps,
                 camera: &mut self.camera,
+                scene_dir: &self.scene_dir,
+                list_scenes: &|| config::scene_list(&self.scenes_dir),
+                scene_error: &self.scene_error,
+                scenes_dir: &self.scenes_dir,
                 tv_box: &mut self.tv_box,
                 tv_viewport: (self.tv.config.width, self.tv.config.height),
                 size_of: &|path| map_layer.size_of(path),
@@ -305,7 +414,10 @@ impl Running {
                 place_tv(&self.tv.window, &self.displays, self.settings.tv_display);
             }
         }
-        Ok(added || output.save || settings_changed)
+        Ok(Outcome {
+            save: added || output.save || settings_changed,
+            scene: output.scene,
+        })
     }
 
     /// Keeps the DM window off the TV display, by a move or by a role swap.
@@ -347,14 +459,39 @@ impl Running {
         self.ui = DmUi::new(&self.gpu, &self.dm);
     }
 
-    /// Copies the settings into the project.
-    fn update_project(&self, project: &mut Project) {
-        project.tv_display =
-            placement_for(self.settings.tv_display, &display_names(&self.displays));
-        project.swap_windows = self.settings.swap_windows;
-        project.snap_percent = self.settings.snap_percent;
-        project.maps.clone_from(&self.maps);
-        project.tv_box = self.tv_box;
+    /// Puts another scene on the canvas.
+    ///
+    /// The images of the old scene leave the GPU. A scene names its images
+    /// by the file beside it, so two scenes can hold a `grid.png` and the
+    /// new one must not draw the old one.
+    fn open_scene(&mut self, dir: PathBuf, scene: &Scene) {
+        self.scene_dir = dir;
+        self.maps.clone_from(&scene.maps);
+        self.tv_box = scene.tv_box.clamped();
+        self.map_layer.clear();
+        self.reload_images();
+        self.dm.window.set_title(&window_title(&self.scene_dir));
+        self.dm.window.request_redraw();
+        self.tv.window.request_redraw();
+    }
+
+    /// Asks the loader for every image of the open scene again.
+    ///
+    /// A scene that moves takes its images with it, so what is in flight
+    /// carries the old folder and never arrives.
+    fn reload_images(&self) {
+        for map in &self.maps {
+            self.loader.request(self.scene_dir.join(&map.path));
+        }
+    }
+
+    /// Copies what the DM changed into the config and the scene.
+    fn update(&self, config: &mut Config, scene: &mut Scene) {
+        config.tv_display = placement_for(self.settings.tv_display, &display_names(&self.displays));
+        config.swap_windows = self.settings.swap_windows;
+        config.snap_percent = self.settings.snap_percent;
+        scene.maps.clone_from(&self.maps);
+        scene.tv_box = self.tv_box;
     }
 }
 
@@ -418,9 +555,197 @@ fn display_names(displays: &[MonitorHandle]) -> Vec<Option<String>> {
     displays.iter().map(MonitorHandle::name).collect()
 }
 
+/// The title of the DM window: the program and the open scene.
+fn window_title(scene_dir: &Path) -> String {
+    format!("dmap: {}", scene_name(scene_dir))
+}
+
+/// The name of a scene, which is the name of its folder.
+fn scene_name(scene_dir: &Path) -> String {
+    scene_dir.file_name().map_or_else(
+        || "scene".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
+/// Shows a folder in the file manager of the desktop.
+///
+/// # Errors
+///
+/// Returns an error when the file manager cannot be started.
+fn reveal(dir: &Path) -> Result<()> {
+    let program = if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program)
+        .arg(dir)
+        .spawn()
+        .with_context(|| format!("{}: cannot show the folder", dir.display()))?;
+    Ok(())
+}
+
+/// Writes the scene beside its images, and the config in its own folder.
+///
+/// # Errors
+///
+/// Returns an error when a folder cannot be made or a file cannot be written.
+fn save(config: &Config, scene: &Scene, scene_dir: &Path) -> Result<()> {
+    save_scene(scene, scene_dir)?;
+    save_config(config)
+}
+
+/// Writes the scene file beside its images.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be written.
+fn save_scene(scene: &Scene, scene_dir: &Path) -> Result<()> {
+    let scene_file = scene_dir.join(SCENE_FILE);
+    std::fs::write(&scene_file, scene.to_json())
+        .with_context(|| format!("{}: cannot save the scene", scene_file.display()))
+}
+
+/// Writes the config in the folder the desktop keeps configs in.
+///
+/// # Errors
+///
+/// Returns an error when the folder or the file cannot be written.
+fn save_config(config: &Config) -> Result<()> {
+    let config_file = config::config_path();
+    if let Some(folder) = config_file.parent() {
+        std::fs::create_dir_all(folder)
+            .with_context(|| format!("{}: cannot make the config folder", folder.display()))?;
+    }
+    std::fs::write(&config_file, config.to_json())
+        .with_context(|| format!("{}: cannot save the config", config_file.display()))
+}
+
 /// Borderless full screen on the chosen display, or `None` for a normal window.
 fn fullscreen_on(displays: &[MonitorHandle], index: Option<usize>) -> Option<Fullscreen> {
     index.map(|i| Fullscreen::Borderless(Some(displays[i].clone())))
+}
+
+impl App {
+    /// Handles one window event and does what it left behind.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a file cannot be written or read.
+    fn handle_event(
+        &mut self,
+        running: &mut Running,
+        window_id: WindowId,
+        event: &WindowEvent,
+    ) -> Result<()> {
+        let outcome = running.window_event(window_id, event)?;
+        if outcome.save {
+            running.update(&mut self.config, &mut self.scene);
+            // A write that fails leaves the session alone. The DM keeps
+            // working, and the message says what went wrong.
+            if let Err(error) = save(&self.config, &self.scene, &self.scene_dir) {
+                eprintln!("{error:#}");
+                running.scene_error = format!("{error:#}");
+            }
+        }
+        if let Some(command) = outcome.scene {
+            // A dialog that asks for the impossible, such as a name another
+            // scene holds, says so and the session carries on.
+            running.scene_error = match self.run_scene_command(running, command) {
+                Ok(()) => String::new(),
+                Err(error) => format!("{error:#}"),
+            };
+            running.dm.window.request_redraw();
+        }
+        Ok(())
+    }
+
+    /// Does what the scenes dialog asked for.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the folder work fails, such as a name another
+    /// scene already holds.
+    fn run_scene_command(&mut self, running: &mut Running, command: SceneCommand) -> Result<()> {
+        let scenes_dir = self.config.scenes_dir.clone();
+        match command {
+            SceneCommand::Open(name) => self.open_scene(running, &name)?,
+            SceneCommand::New => {
+                let name = config::new_scene(&scenes_dir, FIRST_SCENE)?;
+                self.open_scene(running, &name)?;
+            }
+            SceneCommand::Rename { from, to } => {
+                let to = config::rename_scene(&scenes_dir, &from, &to)?;
+                if self.scene_dir == scenes_dir.join(&from) {
+                    self.scene_dir = scenes_dir.join(&to);
+                    running.scene_dir.clone_from(&self.scene_dir);
+                    self.config.last_scene = Some(self.config.remember(&self.scene_dir));
+                    running.dm.window.set_title(&window_title(&self.scene_dir));
+                    running.reload_images();
+                }
+            }
+            SceneCommand::Delete(name) => {
+                config::delete_scene(&scenes_dir, &name)?;
+                if self.scene_dir == scenes_dir.join(&name) {
+                    // The open scene went with the folder, so another one
+                    // takes the canvas, and a new one when none is left.
+                    let next = match config::scene_list(&scenes_dir).first() {
+                        Some(name) => name.clone(),
+                        None => config::new_scene(&scenes_dir, FIRST_SCENE)?,
+                    };
+                    // The folder of the open scene is gone, so there is
+                    // nothing left to save it into.
+                    self.load_scene(running, &next)?;
+                }
+            }
+            SceneCommand::Reveal(name) => reveal(&scenes_dir.join(&name))?,
+            SceneCommand::ScenesFolder => {
+                let Some(picked) = rfd::FileDialog::new()
+                    .set_directory(&scenes_dir)
+                    .pick_folder()
+                else {
+                    return Ok(());
+                };
+                std::fs::create_dir_all(&picked)
+                    .with_context(|| format!("{}: cannot use this folder", picked.display()))?;
+                self.config.scenes_dir = picked;
+                running.scenes_dir.clone_from(&self.config.scenes_dir);
+                // The open scene may sit outside the new folder, and then
+                // it is remembered by its whole path.
+                self.config.last_scene = Some(self.config.remember(&self.scene_dir));
+            }
+        }
+        save(&self.config, &self.scene, &self.scene_dir)
+    }
+
+    /// Saves the open scene, then puts another one on the canvas.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a file cannot be written or read.
+    fn open_scene(&mut self, running: &mut Running, name: &str) -> Result<()> {
+        running.update(&mut self.config, &mut self.scene);
+        save(&self.config, &self.scene, &self.scene_dir)?;
+        self.load_scene(running, name)
+    }
+
+    /// Puts a scene on the canvas without a word about the last one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the folder cannot be made or the scene file
+    /// cannot be read.
+    fn load_scene(&mut self, running: &mut Running, name: &str) -> Result<()> {
+        let dir = self.config.scene_dir(Path::new(name));
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("{}: cannot make the scene folder", dir.display()))?;
+        self.scene = load_scene(&dir)?;
+        self.scene_dir.clone_from(&dir);
+        self.config.last_scene = Some(self.config.remember(&dir));
+        running.open_scene(dir, &self.scene);
+        Ok(())
+    }
 }
 
 impl ApplicationHandler for App {
@@ -428,12 +753,12 @@ impl ApplicationHandler for App {
         if self.running.is_some() {
             return;
         }
-        let project_dir = self
-            .path
-            .parent()
-            .filter(|dir| !dir.as_os_str().is_empty())
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        match Running::new(event_loop, &self.project, project_dir) {
+        match Running::new(
+            event_loop,
+            &self.config,
+            &self.scene,
+            self.scene_dir.clone(),
+        ) {
             Ok(running) => self.running = Some(running),
             Err(error) => {
                 self.error = Some(error);
@@ -452,17 +777,13 @@ impl ApplicationHandler for App {
             event_loop.exit();
             return;
         }
-        let Some(running) = self.running.as_mut() else {
+        // The running half comes out of its place for the call, so that
+        // a scene command can borrow it and the program at the same time.
+        let Some(mut running) = self.running.take() else {
             return;
         };
-        let result = running.window_event(window_id, &event).and_then(|changed| {
-            if changed {
-                running.update_project(&mut self.project);
-                std::fs::write(&self.path, self.project.to_json())
-                    .with_context(|| format!("{}: cannot save", self.path.display()))?;
-            }
-            Ok(())
-        });
+        let result = self.handle_event(&mut running, window_id, &event);
+        self.running = Some(running);
         if let Err(error) = result {
             self.error = Some(error);
             event_loop.exit();

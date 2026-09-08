@@ -104,6 +104,7 @@ pub struct DmUi {
     tool: Tool,
     select: Select,
     table: Table,
+    scenes: Scenes,
     /// Who takes the zoom gesture that is running: the TV box, or the
     /// camera. `None` while no gesture runs.
     zoom_goes_to: Option<bool>,
@@ -162,6 +163,14 @@ pub struct Frame<'a> {
     pub tv_viewport: (u32, u32),
     /// Pixel size of a map's image, once loaded.
     pub size_of: &'a dyn Fn(&Path) -> Option<(u32, u32)>,
+    /// The folder of the open scene.
+    pub scene_dir: &'a Path,
+    /// The scenes the DM can open. Read only while the dialog is open.
+    pub list_scenes: &'a dyn Fn() -> Vec<String>,
+    /// What went wrong with the last thing the dialog asked for.
+    pub scene_error: &'a str,
+    /// The folder that holds the scenes.
+    pub scenes_dir: &'a Path,
 }
 
 impl std::fmt::Debug for Frame<'_> {
@@ -176,6 +185,33 @@ struct Select {
     selected: Option<usize>,
     drag: Option<Drag>,
     measure: Option<Measure>,
+}
+
+/// What the DM asked the scenes dialog to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SceneCommand {
+    /// Put this scene on the canvas.
+    Open(String),
+    /// Make a scene and open it.
+    New,
+    /// Give a scene another name.
+    Rename { from: String, to: String },
+    /// Delete a scene and everything in its folder.
+    Delete(String),
+    /// Ask for another folder to keep the scenes in.
+    ScenesFolder,
+    /// Show the scene's folder in the file manager.
+    Reveal(String),
+}
+
+/// The scenes dialog between frames.
+#[derive(Debug, Default)]
+struct Scenes {
+    open: bool,
+    /// The scene the DM is renaming, and the name as typed so far.
+    renaming: Option<(String, String)>,
+    /// The scene the DM asked to delete, before they answered the question.
+    deleting: Option<String>,
 }
 
 /// The Table tool's state between frames.
@@ -321,6 +357,7 @@ impl DmUi {
             tool: Tool::default(),
             select: Select::default(),
             table: Table::default(),
+            scenes: Scenes::default(),
             zoom_goes_to: None,
             dirty: false,
         }
@@ -342,18 +379,24 @@ impl DmUi {
         let viewport = (pane.config.width, pane.config.height);
         let mut add_map = false;
         let mut edited = false;
+        let mut scene = None;
         let select = &mut self.select;
         let table = &mut self.table;
         let tool = &mut self.tool;
+        let scenes = &mut self.scenes;
         let zoom_goes_to = &mut self.zoom_goes_to;
         let selected_before = select.selected;
         let output = ctx.run_ui(raw_input, |ui| {
             // A click that closes a popup must not reach the canvas.
             let popup_open = egui::Popup::is_any_open(ui.ctx());
-            let (pressed, panel_edited) = rail_and_settings(ui, &mut frame, select, tool);
-            add_map = pressed;
-            edited = panel_edited;
-            if !popup_open {
+            let rail = rail_and_settings(ui, &mut frame, select, tool, scenes);
+            add_map = rail.add_map;
+            edited = rail.edited;
+            scene = scenes_dialog(ui, scenes, &frame);
+            // A dialog over the canvas takes the keyboard too. egui holds
+            // the pointer back on its own, but `R` and the arrow keys would
+            // still reach the map behind it.
+            if !popup_open && !scenes.open {
                 let rect = ui.available_rect_before_wrap();
                 frame_tv_box(ui, &mut frame, rect, viewport);
                 edited |= match *tool {
@@ -390,6 +433,7 @@ impl DmUi {
             add_map,
             edited,
             save,
+            scene,
             paint: Paint {
                 jobs: paint_jobs,
                 textures_delta,
@@ -465,6 +509,8 @@ pub struct UiOutput {
     pub edited: bool,
     /// The maps changed and no drag is in progress: write the project.
     pub save: bool,
+    /// What the DM asked the scenes dialog to do.
+    pub scene: Option<SceneCommand>,
     /// What `DmUi::render` needs.
     pub paint: Paint,
 }
@@ -491,7 +537,8 @@ fn rail_and_settings(
     frame: &mut Frame<'_>,
     select: &mut Select,
     tool: &mut Tool,
-) -> (bool, bool) {
+    scenes: &mut Scenes,
+) -> Rail {
     let displays = frame.displays;
     let mut add_map = false;
     let mut edited = false;
@@ -521,6 +568,9 @@ fn rail_and_settings(
             }
             ui.separator();
             add_map = ui.button("Add map").clicked();
+            if ui.button("Scenes").clicked() {
+                scenes.open = !scenes.open;
+            }
         });
     egui::Panel::right("settings").show(ui, |ui| {
         ui.heading("Settings");
@@ -563,7 +613,135 @@ fn rail_and_settings(
             edited = box_properties(ui, frame.tv_box);
         }
     });
-    (add_map, edited)
+    Rail { add_map, edited }
+}
+
+/// What the rail and the settings panel decided this frame.
+struct Rail {
+    /// The DM pressed Add map.
+    add_map: bool,
+    /// A value in the panel changed.
+    edited: bool,
+}
+
+/// The scenes dialog: open, make, rename, delete, and show the folder.
+///
+/// Returns what the DM asked for. The program does the work, so an error
+/// on the disk has one place to go.
+fn scenes_dialog(ui: &egui::Ui, scenes: &mut Scenes, frame: &Frame<'_>) -> Option<SceneCommand> {
+    if !scenes.open {
+        return None;
+    }
+    let mut command = None;
+    let modal = egui::Modal::new(egui::Id::new("scenes")).show(ui.ctx(), |ui| {
+        ui.set_width(420.0);
+        ui.heading("Scenes");
+        ui.label(
+            egui::RichText::new("Every scene is a folder of its own, with its maps beside it.")
+                .color(MUTE),
+        );
+        ui.separator();
+        for name in (frame.list_scenes)() {
+            // Two scenes of one name can live in two folders, so the row
+            // that stands out is the one whose folder is open.
+            let open = frame.scenes_dir.join(&name) == *frame.scene_dir;
+            scene_row(ui, scenes, open, &name, &mut command);
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Scenes folder").color(MUTE));
+            if ui.button("Change").clicked() {
+                command = Some(SceneCommand::ScenesFolder);
+            }
+        });
+        let path = frame.scenes_dir.display().to_string();
+        ui.add(egui::Label::new(egui::RichText::new(&path).color(MUTE)).truncate())
+            .on_hover_text(&path);
+        if !frame.scene_error.is_empty() {
+            ui.label(egui::RichText::new(frame.scene_error).color(ACCENT));
+        }
+        ui.horizontal(|ui| {
+            if ui.button("New scene").clicked() {
+                command = Some(SceneCommand::New);
+            }
+            if ui.button("Close").clicked() {
+                scenes.open = false;
+            }
+        });
+    });
+    if modal.should_close() {
+        scenes.open = false;
+    }
+    // A half-typed name, or a question no one answered, does not wait for
+    // the next time the dialog opens.
+    if command.is_some() || !scenes.open {
+        scenes.renaming = None;
+        scenes.deleting = None;
+    }
+    command
+}
+
+/// One scene in the dialog: its name, and what the DM can do to it.
+fn scene_row(
+    ui: &mut egui::Ui,
+    scenes: &mut Scenes,
+    open: bool,
+    name: &str,
+    command: &mut Option<SceneCommand>,
+) {
+    // A question stands in for the row until the DM answers it. Deleting a
+    // scene takes its maps with it, so it never happens on one click.
+    if scenes.deleting.as_deref() == Some(name) {
+        ui.horizontal(|ui| {
+            ui.label(format!("Delete {name} and its maps?"));
+            if ui.button("Delete").clicked() {
+                *command = Some(SceneCommand::Delete(name.to_owned()));
+            }
+            if ui.button("Keep").clicked() {
+                scenes.deleting = None;
+            }
+        });
+        return;
+    }
+    ui.horizontal(|ui| {
+        if let Some((from, typed)) = scenes.renaming.as_mut().filter(|(from, _)| from == name) {
+            let field = ui.add(egui::TextEdit::singleline(typed).desired_width(180.0));
+            let done = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            field.request_focus();
+            if done || ui.button("Save").clicked() {
+                *command = Some(SceneCommand::Rename {
+                    from: from.clone(),
+                    to: typed.clone(),
+                });
+            }
+            if ui.button("Cancel").clicked() {
+                scenes.renaming = None;
+            }
+            return;
+        }
+        let label = if open {
+            egui::RichText::new(name).color(ACCENT)
+        } else {
+            egui::RichText::new(name)
+        };
+        ui.allocate_ui_with_layout(
+            egui::vec2(200.0, 20.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| ui.add(egui::Label::new(label).truncate()),
+        );
+        if ui.add_enabled(!open, egui::Button::new("Open")).clicked() {
+            *command = Some(SceneCommand::Open(name.to_owned()));
+        }
+        if ui.button("Rename").clicked() {
+            scenes.renaming = Some((name.to_owned(), name.to_owned()));
+        }
+        if ui.button("Folder").clicked() {
+            *command = Some(SceneCommand::Reveal(name.to_owned()));
+        }
+        if ui.button("Delete").clicked() {
+            scenes.deleting = Some(name.to_owned());
+        }
+    });
 }
 
 /// The properties of the TV box. Returns `true` when the zoom changed.
