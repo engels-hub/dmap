@@ -6,17 +6,30 @@ use serde::{Deserialize, Serialize};
 
 use crate::camera::Camera;
 
-/// Width of a new box, in inches.
+/// The width of the TV screen in inches, until the DM can enter its size.
 ///
-/// A 55 inch TV is about 48 inches wide. At 4K that gives 80 pixels to the
-/// inch, which is the zoom the TV used before the box existed.
-const DEFAULT_WIDTH: f64 = 48.0;
+/// A 55 inch 16:9 TV is about 48 inches wide. A box this wide draws the
+/// world at true size, so this is also the width of a new box. Issue #6
+/// lets the DM enter the resolution and the diagonal of the real TV, and
+/// this constant then goes away.
+///
+/// The pixels of the TV do not appear here on purpose. The TV spreads the
+/// box across every pixel it has, so a 1080p TV and a 4K TV of the same
+/// size agree on what true size is.
+pub const TV_WIDTH_INCHES: f64 = 48.0;
 
 /// The smallest box, in inches. A smaller box zooms past any use.
 const MIN_WIDTH: f64 = 1.0;
 
 /// The largest box, in inches. Wider than any table.
 const MAX_WIDTH: f64 = 1000.0;
+
+/// The snap window a new project uses, in percent. PLAN.md section 3.2.
+pub const DEFAULT_SNAP_PERCENT: f64 = 8.0;
+
+/// The widest snap window a project may hold, in percent. Half of that
+/// already reaches from 50 to 150 percent.
+pub const MAX_SNAP_PERCENT: f64 = 50.0;
 
 /// The rectangle of the canvas that the TV shows.
 ///
@@ -34,7 +47,7 @@ impl Default for TvBox {
     fn default() -> Self {
         Self {
             center: (0.0, 0.0),
-            width: DEFAULT_WIDTH,
+            width: TV_WIDTH_INCHES,
         }
     }
 }
@@ -46,6 +59,14 @@ impl TvBox {
             return self.width;
         }
         self.width * f64::from(viewport.1) / f64::from(viewport.0)
+    }
+
+    /// The zoom of the box. 1.0 draws the world at true size on the TV.
+    ///
+    /// A wider box shows more of the canvas, so its zoom is below 1.0.
+    /// `tv_width` is the width of the TV screen in inches.
+    pub fn zoom(&self, tv_width: f64) -> f64 {
+        tv_width / self.width
     }
 
     /// The same box, with a width the camera can divide by.
@@ -80,6 +101,39 @@ impl TvBox {
     }
 }
 
+/// Whether a zoom stands at true size, so the label can say so.
+pub fn at_true_size(zoom: f64) -> bool {
+    (zoom - 1.0).abs() < 1e-9
+}
+
+/// The box width once the snap to true size has had its say.
+///
+/// A box within `percent` of a 100 percent zoom takes true size exactly, so
+/// that a miniature on the table covers the cell it stands in. A box outside
+/// that window keeps the width the DM gave it.
+pub fn snap_to_true_size(width: f64, tv_width: f64, percent: f64) -> f64 {
+    let box_at = TvBox {
+        center: (0.0, 0.0),
+        width,
+    };
+    if (box_at.zoom(tv_width) - 1.0).abs() * 100.0 <= percent {
+        tv_width
+    } else {
+        width
+    }
+}
+
+/// Holds a snap window inside the range the settings offer.
+///
+/// A window that is not a number falls back to the default.
+pub fn clamp_snap_percent(percent: f64) -> f64 {
+    if percent.is_finite() {
+        percent.clamp(0.0, MAX_SNAP_PERCENT)
+    } else {
+        DEFAULT_SNAP_PERCENT
+    }
+}
+
 /// Holds a box width inside the range the program draws.
 ///
 /// A width that is not a number falls back to the default, since a camera
@@ -88,13 +142,16 @@ pub fn clamp_width(width: f64) -> f64 {
     if width.is_finite() {
         width.clamp(MIN_WIDTH, MAX_WIDTH)
     } else {
-        DEFAULT_WIDTH
+        TV_WIDTH_INCHES
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_WIDTH, MIN_WIDTH, TvBox, clamp_width};
+    use super::{
+        DEFAULT_SNAP_PERCENT, MAX_SNAP_PERCENT, MAX_WIDTH, MIN_WIDTH, TV_WIDTH_INCHES, TvBox,
+        at_true_size, clamp_snap_percent, clamp_width, snap_to_true_size,
+    };
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
@@ -152,6 +209,66 @@ mod tests {
         assert!(close(clamp_width(-5.0), MIN_WIDTH));
         assert!(close(clamp_width(1e9), MAX_WIDTH));
         assert!(close(clamp_width(32.0), 32.0));
+    }
+
+    #[test]
+    fn a_box_as_wide_as_the_tv_screen_is_at_100_percent() {
+        let tv_box = TvBox {
+            center: (0.0, 0.0),
+            width: TV_WIDTH_INCHES,
+        };
+        assert!(close(tv_box.zoom(TV_WIDTH_INCHES), 1.0));
+        assert!(at_true_size(tv_box.zoom(TV_WIDTH_INCHES)));
+    }
+
+    #[test]
+    fn the_zoom_does_not_follow_the_pixels_of_the_tv() {
+        // The TV shows the box across every pixel it has, whatever that
+        // count is, so only the inches of the screen decide true size. A
+        // 1080p TV and a 4K TV of the same size agree on 100 %.
+        let tv_box = TvBox {
+            center: (0.0, 0.0),
+            width: 48.0,
+        };
+        assert!(close(tv_box.zoom(48.0), 1.0));
+        assert!(close(tv_box.camera(UHD).pixels_per_inch, 80.0));
+        assert!(close(tv_box.camera((1920, 1080)).pixels_per_inch, 40.0));
+    }
+
+    #[test]
+    fn a_wider_box_shows_more_world_at_less_zoom() {
+        let tv_box = TvBox {
+            center: (0.0, 0.0),
+            width: 96.0,
+        };
+        assert!(close(tv_box.zoom(48.0), 0.5));
+        assert!(!at_true_size(tv_box.zoom(48.0)));
+    }
+
+    #[test]
+    fn a_size_inside_the_snap_window_takes_true_size() {
+        // 50 inches is a zoom of 96 %, which is inside 8 % of 100 %.
+        assert!(close(snap_to_true_size(50.0, 48.0, 8.0), 48.0));
+        // 44 inches is 109 %, which is outside it.
+        assert!(close(snap_to_true_size(44.0, 48.0, 8.0), 44.0));
+    }
+
+    #[test]
+    fn a_snap_window_of_zero_leaves_every_size_alone() {
+        assert!(close(snap_to_true_size(47.9, 48.0, 0.0), 47.9));
+    }
+
+    #[test]
+    fn a_box_already_at_true_size_does_not_move() {
+        assert!(close(snap_to_true_size(48.0, 48.0, 8.0), 48.0));
+    }
+
+    #[test]
+    fn a_snap_window_from_a_file_is_held_inside_the_range() {
+        assert!(close(clamp_snap_percent(-5.0), 0.0));
+        assert!(close(clamp_snap_percent(1e9), MAX_SNAP_PERCENT));
+        assert!(close(clamp_snap_percent(f64::NAN), DEFAULT_SNAP_PERCENT));
+        assert!(close(clamp_snap_percent(12.0), 12.0));
     }
 
     #[test]

@@ -39,7 +39,7 @@ use crate::pointer::PointerDisc;
 use crate::project::Project;
 use crate::scene::MapObject;
 use crate::tv::{display_at, dm_move_target, placement_for, resolve_tv_display};
-use crate::tvbox::TvBox;
+use crate::tvbox::{TvBox, clamp_snap_percent};
 use crate::ui::{DmUi, Frame, Settings};
 
 /// Size the DM window opens with. The design mockups use this frame.
@@ -167,6 +167,7 @@ impl Running {
             settings: Settings {
                 tv_display,
                 swap_windows: project.swap_windows,
+                snap_percent: clamp_snap_percent(project.snap_percent),
             },
             placed: false,
             tv_pointer: None,
@@ -296,13 +297,15 @@ impl Running {
         }
         let added = output.add_map && self.pick_map_file();
         let settings_changed = self.settings != before;
-        if settings_changed || !self.placed {
+        // Only a display or a swap moves a window. Every other setting, such
+        // as the snap window, must leave the TV alone.
+        if self.settings.moves_windows(&before) || !self.placed {
             self.placed = true;
             // Swap first: the swap decides which window is the TV.
             let swapped = self.keep_dm_off_tv();
             // Only a placement change touches the TV window: re-entering full
             // screen takes the keyboard focus away from the DM window.
-            if settings_changed || swapped {
+            if self.settings.moves_windows(&before) || swapped {
                 place_tv(&self.tv.window, &self.displays, self.settings.tv_display);
             }
         }
@@ -353,6 +356,7 @@ impl Running {
         project.tv_display =
             placement_for(self.settings.tv_display, &display_names(&self.displays));
         project.swap_windows = self.settings.swap_windows;
+        project.snap_percent = self.settings.snap_percent;
         project.maps.clone_from(&self.maps);
         project.tv_box = self.tv_box;
     }
