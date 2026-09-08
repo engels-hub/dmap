@@ -351,6 +351,142 @@ pub fn ancestors(scene: &Scene, id: NodeId) -> Vec<NodeId> {
     above
 }
 
+/// Where a node sits: the place it takes at each level from the root.
+///
+/// The order of two paths is the order the two nodes draw in.
+pub fn path_of(scene: &Scene, id: NodeId) -> Option<Vec<usize>> {
+    let mut path = Vec::new();
+    path_in(&scene.root, id, &mut path).then_some(path)
+}
+
+fn path_in(group: &Group, id: NodeId, path: &mut Vec<usize>) -> bool {
+    for (place, node) in group.children.iter().enumerate() {
+        if node.id() == id {
+            path.push(place);
+            return true;
+        }
+        if let Node::Group(inside) = node {
+            path.push(place);
+            if path_in(inside, id, path) {
+                return true;
+            }
+            path.pop();
+        }
+    }
+    false
+}
+
+/// The selection with nothing in it twice, and no node a group in it holds.
+///
+/// A group already carries its children, so a selection of a group and one
+/// of its children is a selection of the group.
+pub fn normalize(scene: &Scene, ids: &[NodeId]) -> Vec<NodeId> {
+    let mut kept: Vec<NodeId> = Vec::new();
+    for id in ids {
+        let held = ancestors(scene, *id)
+            .iter()
+            .any(|above| ids.contains(above));
+        if !held && !kept.contains(id) {
+            kept.push(*id);
+        }
+    }
+    kept
+}
+
+/// Takes a node out of the tree and hands it over.
+pub fn take_node(scene: &mut Scene, id: NodeId) -> Option<Node> {
+    take_in(&mut scene.root, id)
+}
+
+fn take_in(group: &mut Group, id: NodeId) -> Option<Node> {
+    if let Some(place) = group.children.iter().position(|node| node.id() == id) {
+        return Some(group.children.remove(place));
+    }
+    for child in &mut group.children {
+        if let Node::Group(inside) = child
+            && let Some(taken) = take_in(inside, id)
+        {
+            return Some(taken);
+        }
+    }
+    None
+}
+
+/// Every asset a node holds: the asset itself, or all under a group.
+pub fn assets_of(scene: &Scene, id: NodeId) -> Vec<NodeId> {
+    match find(scene, id) {
+        Some(Node::Asset(asset)) => vec![asset.id],
+        Some(Node::Group(group)) => under(group).iter().map(|asset| asset.id).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Puts a selection into a new group, and gives back its name.
+///
+/// The new group lands in the lowest group that holds every member, and
+/// sits over what that group already holds. Every member leaves the group
+/// it sat in, and they keep the order they drew in.
+pub fn group_selection(scene: &mut Scene, ids: &[NodeId], name: String) -> Option<NodeId> {
+    let ids = normalize(scene, ids);
+    if ids.is_empty() {
+        return None;
+    }
+    let mut members: Vec<(Vec<usize>, NodeId)> = ids
+        .iter()
+        .filter_map(|id| Some((path_of(scene, *id)?, *id)))
+        .collect();
+    if members.is_empty() {
+        return None;
+    }
+    members.sort();
+    // The name comes first. A node that has left the tree is not there to
+    // count, so a name taken later could be one of theirs.
+    let id = scene.next_id();
+    let depth = shared_depth(&members);
+    let holder = group_at(scene, &members[0].0[..depth])?;
+    // The new group takes the place of the highest member. Every member
+    // that sat in the holder itself leaves a gap, so the place moves down.
+    let highest = members.iter().map(|(path, _)| path[depth]).max()?;
+    let gaps = members
+        .iter()
+        .filter(|(path, _)| path.len() == depth + 1 && path[depth] <= highest)
+        .count();
+    let place = highest + 1 - gaps;
+    let taken: Vec<Node> = members
+        .iter()
+        .filter_map(|(_, id)| take_node(scene, *id))
+        .collect();
+    let mut group = Group::new(id, name);
+    group.children = taken;
+    let holder = group_mut(scene, holder)?;
+    let place = place.min(holder.children.len());
+    holder.children.insert(place, Node::Group(group));
+    Some(id)
+}
+
+/// How deep the paths of a selection run together.
+fn shared_depth(members: &[(Vec<usize>, NodeId)]) -> usize {
+    let first = &members[0].0;
+    let mut depth = 0;
+    while depth + 1 < first.len()
+        && members
+            .iter()
+            .all(|(path, _)| path.len() > depth + 1 && path[depth] == first[depth])
+    {
+        depth += 1;
+    }
+    depth
+}
+
+/// The group at a path from the root.
+fn group_at(scene: &Scene, path: &[usize]) -> Option<NodeId> {
+    let mut group = &scene.root;
+    for place in path {
+        group = group.children.get(*place)?.group()?;
+    }
+    Some(group.id)
+}
+
 /// Puts a node into a group, on top of what the group already holds.
 pub fn push_into(scene: &mut Scene, parent: NodeId, node: Node) -> bool {
     let Some(group) = group_mut(scene, parent) else {
@@ -649,8 +785,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        Asset, Audience, Group, Node, ROOT_ID, Scene, assets, copy_into_scene, draw_order, find,
-        free_name, parent_of, reorder,
+        Asset, Audience, Group, Node, NodeId, ROOT_ID, Scene, assets, assets_of, copy_into_scene,
+        draw_order, find, free_name, group_selection, normalize, parent_of, path_of, reorder,
     };
 
     /// A folder of its own for one test, under the system's temp folder.
@@ -996,5 +1132,159 @@ mod tests {
         assert_eq!(parent_of(&scene, 9), None);
         assert!(find(&scene, 3).is_some());
         assert!(find(&scene, 9).is_none());
+    }
+
+    /// A root with two assets, and a group holding two more.
+    ///
+    /// ```text
+    /// root
+    ///   1 floor.png
+    ///   2 wall.png
+    ///   3 Notes
+    ///       4 note.png
+    ///       5 pin.png
+    /// ```
+    fn family() -> Scene {
+        let mut scene = Scene::default();
+        let mut notes = Group::new(3, "Notes".to_owned());
+        for (id, name) in [(4, "note.png"), (5, "pin.png")] {
+            notes
+                .children
+                .push(Node::Asset(Asset::new(id, PathBuf::from(name), (0.0, 0.0))));
+        }
+        for (id, name) in [(1, "floor.png"), (2, "wall.png")] {
+            scene
+                .root
+                .children
+                .push(Node::Asset(Asset::new(id, PathBuf::from(name), (0.0, 0.0))));
+        }
+        scene.root.children.push(Node::Group(notes));
+        scene
+    }
+
+    #[test]
+    fn a_path_says_where_a_node_sits() {
+        let scene = family();
+        assert_eq!(path_of(&scene, 1), Some(vec![0]));
+        assert_eq!(path_of(&scene, 3), Some(vec![2]));
+        assert_eq!(path_of(&scene, 5), Some(vec![2, 1]));
+        assert_eq!(path_of(&scene, 9), None);
+    }
+
+    #[test]
+    fn a_selection_drops_what_a_group_in_it_already_holds() {
+        let scene = family();
+        // The group and one of its children: the group carries it.
+        assert_eq!(normalize(&scene, &[3, 4]), vec![3]);
+        assert_eq!(normalize(&scene, &[4, 3]), vec![3]);
+        // Two nodes that hold each other, and one that holds neither.
+        assert_eq!(normalize(&scene, &[1, 3, 5]), vec![1, 3]);
+        // The same node twice is one node.
+        assert_eq!(normalize(&scene, &[1, 1]), vec![1]);
+    }
+
+    #[test]
+    fn a_group_holds_every_asset_under_it() {
+        let scene = family();
+        assert_eq!(assets_of(&scene, 1), vec![1]);
+        assert_eq!(assets_of(&scene, 3), vec![4, 5]);
+        assert!(assets_of(&scene, 9).is_empty());
+    }
+
+    #[test]
+    fn two_brothers_group_where_they_stood() {
+        let mut scene = family();
+        let id = group_selection(&mut scene, &[1, 2], "New".to_owned()).unwrap();
+        // The root holds the new group and the old group, nothing else.
+        assert_eq!(scene.root.children.len(), 2);
+        assert_eq!(scene.root.children[0].id(), id);
+        assert_eq!(scene.root.children[1].id(), 3);
+        let Some(Node::Group(new)) = scene.root.children.first() else {
+            panic!("the first child is the new group");
+        };
+        // They keep the order they drew in.
+        assert_eq!(
+            new.children.iter().map(Node::id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn an_uncle_and_a_nephew_group_in_the_root() {
+        let mut scene = family();
+        // floor.png sits in the root, pin.png sits in Notes.
+        let id = group_selection(&mut scene, &[1, 5], "New".to_owned()).unwrap();
+        assert_eq!(
+            path_of(&scene, 1),
+            Some(vec![path_of(&scene, id).unwrap()[0], 0])
+        );
+        // The nephew left Notes, which keeps its other child.
+        let Some(Node::Group(notes)) = scene.root.children.iter().find(|n| n.id() == 3) else {
+            panic!("Notes is still in the root");
+        };
+        assert_eq!(notes.children.len(), 1);
+        assert_eq!(notes.children[0].id(), 4);
+    }
+
+    #[test]
+    fn two_children_of_one_group_stay_in_that_group() {
+        let mut scene = family();
+        let id = group_selection(&mut scene, &[4, 5], "New".to_owned()).unwrap();
+        // The new group sits inside Notes, since Notes holds them both.
+        assert_eq!(path_of(&scene, id), Some(vec![2, 0]));
+        assert_eq!(assets_of(&scene, id), vec![4, 5]);
+    }
+
+    #[test]
+    fn a_group_and_its_own_child_group_as_one() {
+        let mut scene = family();
+        // The group carries the child, so this groups the group alone.
+        let id = group_selection(&mut scene, &[3, 4], "New".to_owned()).unwrap();
+        assert_eq!(assets_of(&scene, id), vec![4, 5]);
+        assert_eq!(scene.root.children.len(), 3);
+    }
+
+    #[test]
+    fn a_group_of_nothing_is_no_group() {
+        let mut scene = family();
+        assert_eq!(group_selection(&mut scene, &[], "New".to_owned()), None);
+        assert_eq!(group_selection(&mut scene, &[9], "New".to_owned()), None);
+    }
+
+    #[test]
+    fn a_group_draws_where_its_highest_member_drew() {
+        let mut scene = family();
+        // wall.png draws over floor.png, and Notes draws over both.
+        let id = group_selection(&mut scene, &[2, 3], "New".to_owned()).unwrap();
+        // The new group takes the place Notes had, over floor.png.
+        assert_eq!(
+            scene.root.children.iter().map(Node::id).collect::<Vec<_>>(),
+            vec![1, id]
+        );
+    }
+
+    #[test]
+    fn a_new_group_takes_a_name_no_member_holds() {
+        let mut scene = family();
+        let id = group_selection(&mut scene, &[1, 2], "New".to_owned()).unwrap();
+        // The members leave the tree while the group is made, so a name
+        // counted then would land on one of them.
+        assert!(!assets_of(&scene, id).contains(&id));
+        let mut names: Vec<NodeId> = Vec::new();
+        let mut walk: Vec<&Node> = scene.root.children.iter().collect();
+        while let Some(node) = walk.pop() {
+            names.push(node.id());
+            if let Node::Group(group) = node {
+                walk.extend(group.children.iter());
+            }
+        }
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            names.len(),
+            "two nodes share a name: {names:?}"
+        );
     }
 }

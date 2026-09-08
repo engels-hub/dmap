@@ -191,7 +191,10 @@ impl std::fmt::Debug for Frame<'_> {
 /// The Select tool's state between frames.
 #[derive(Debug, Default)]
 struct Select {
-    selected: Option<NodeId>,
+    /// What the DM holds, in the order the tree draws it.
+    chosen: Vec<NodeId>,
+    /// The list that says what a drag over the canvas picked.
+    popup: bool,
     drag: Option<Drag>,
     measure: Option<Measure>,
 }
@@ -299,6 +302,34 @@ impl Pointer {
     }
 }
 
+impl Select {
+    /// The one node the DM holds, when they hold one and no more.
+    ///
+    /// The handles, the properties and the keys work on one node.
+    fn only(&self) -> Option<NodeId> {
+        (self.chosen.len() == 1).then(|| self.chosen[0])
+    }
+
+    /// Whether the DM holds this node.
+    fn holds(&self, id: NodeId) -> bool {
+        self.chosen.contains(&id)
+    }
+
+    /// Takes hold of one node, or adds it when `add` is true.
+    fn take(&mut self, id: NodeId, add: bool) {
+        if !add {
+            self.chosen.clear();
+            self.chosen.push(id);
+            return;
+        }
+        if let Some(place) = self.chosen.iter().position(|held| *held == id) {
+            self.chosen.remove(place);
+        } else {
+            self.chosen.push(id);
+        }
+    }
+}
+
 /// The measure tool, once the DM started it from the map properties.
 #[derive(Debug, Clone, Copy)]
 enum Measure {
@@ -322,12 +353,15 @@ enum BoxDrag {
 }
 
 /// A drag in progress, all positions in world inches.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Drag {
+    /// Every asset the DM holds, and where each one stood.
     Move {
-        start_center: (f64, f64),
+        starts: Vec<(NodeId, (f64, f64))>,
         start_cursor: (f64, f64),
     },
+    /// A rectangle over the canvas that picks what it covers.
+    Band { start_cursor: (f64, f64) },
     Scale {
         start_scale: f64,
         start_cursor: (f64, f64),
@@ -396,7 +430,7 @@ impl DmUi {
         let scenes = &mut self.scenes;
         let tree = &mut self.tree;
         let zoom_goes_to = &mut self.zoom_goes_to;
-        let selected_before = select.selected;
+        let selected_before = select.chosen.clone();
         let output = ctx.run_ui(raw_input, |ui| {
             // A click that closes a popup must not reach the canvas.
             let popup_open = egui::Popup::is_any_open(ui.ctx());
@@ -432,7 +466,7 @@ impl DmUi {
             .any(|viewport| viewport.repaint_delay.is_zero())
             // The settings panel draws before the canvas picks a map, so the
             // properties of a new selection need one more frame to show.
-            || self.select.selected != selected_before;
+            || self.select.chosen != selected_before;
 
         // Save once a drag is over, not on every frame of it.
         self.dirty |= edited;
@@ -790,9 +824,9 @@ fn tree_panel(ui: &mut egui::Ui, scene: &mut Scene, select: &mut Select, tree: &
     let mut edited = false;
     // A node the DM picked on the canvas opens the groups above it, so the
     // list shows the row without a hunt.
-    if tree.shown != select.selected {
-        tree.shown = select.selected;
-        if let Some(id) = select.selected {
+    if tree.shown != select.only() {
+        tree.shown = select.only();
+        if let Some(id) = select.only() {
             tree.open.extend(crate::scene::ancestors(scene, id));
         }
     }
@@ -857,7 +891,7 @@ fn tree_rows(
                 }
             }
             Node::Asset(asset) => {
-                let picked = select.selected == Some(asset.id);
+                let picked = select.holds(asset.id);
                 ui.horizontal(|ui| {
                     indent(ui, depth);
                     let name = asset.path.to_string_lossy().into_owned();
@@ -870,7 +904,7 @@ fn tree_rows(
                         .add(egui::Button::new(text).frame(false).truncate())
                         .clicked()
                     {
-                        select.selected = Some(asset.id);
+                        select.take(asset.id, ui.input(|i| i.modifiers.ctrl));
                     }
                     edited |= ui.checkbox(&mut asset.shown.dm, "").changed();
                     edited |= ui.checkbox(&mut asset.shown.tv, "").changed();
@@ -936,7 +970,7 @@ fn box_properties(ui: &mut egui::Ui, tv_box: &mut TvBox) -> bool {
 /// number, so for a plain PNG or JPEG the DM types it or measures it.
 fn map_properties(ui: &mut egui::Ui, select: &mut Select, scene: &mut Scene) -> bool {
     let Some(map) = select
-        .selected
+        .only()
         .and_then(|id| crate::scene::asset_mut(scene, id))
     else {
         return false;
@@ -1007,7 +1041,7 @@ fn canvas(
 
     // Handles of the selected map, in points: four corners, then rotation.
     let handles: Vec<egui::Pos2> = select
-        .selected
+        .only()
         .and_then(|id| crate::scene::find(frame.scene, id).and_then(Node::asset))
         .and_then(|map| (frame.size_of)(&map.path).map(|size| map.corners(size)))
         .map(|corners| {
@@ -1024,24 +1058,43 @@ fn canvas(
     // under the cursor. The same press starts a drag that moves, scales or
     // turns until the button goes up.
     if let (true, true, Some(pos)) = (pointer.pressed(), pointer.hovered, pointer.pos) {
-        press(select, frame, &handles, pos, view.to_world(pos), &view);
+        // Ctrl adds to the selection, as it does in a file manager.
+        let add = ui.input(|i| i.modifiers.ctrl);
+        press(select, frame, &handles, pos, view.to_world(pos), &view, add);
     }
     let mut edited = false;
     if let (true, Some(pos)) = (pointer.down(), pointer.pos) {
         edited |= apply_drag(select, frame, view.to_world(pos), snap);
-    } else {
-        select.drag = None;
+    } else if let Some(Drag::Band { start_cursor }) = select.drag.take() {
+        // The band is over: what it covered is what the DM now holds.
+        if let Some(pos) = pointer.pos {
+            let covered = band_covers(frame, start_cursor, view.to_world(pos));
+            select.chosen.extend(covered);
+            select.popup = !select.chosen.is_empty();
+        }
     }
-    let icon = select.drag.and_then(|drag| match drag {
+    let icon = select.drag.as_ref().and_then(|drag| match drag {
         Drag::Scale { .. } => Some(egui::CursorIcon::ResizeNwSe),
         Drag::Rotate { .. } => Some(egui::CursorIcon::Grabbing),
-        Drag::Move { .. } => None,
+        Drag::Move { .. } | Drag::Band { .. } => None,
     });
     set_cursor(ui, select.drag.is_some(), icon, pointer, &handles);
 
     edited |= keys(ui, select, frame.scene);
+    edited |= selection_popup(ui, select, frame, rect);
 
-    draw_group_boxes(&ui.painter_at(rect), frame, select.selected, &view);
+    if let (Some(Drag::Band { start_cursor }), Some(pos)) = (select.drag.as_ref(), pointer.pos) {
+        let band = egui::Rect::from_two_pos(view.to_screen(*start_cursor), pos);
+        let on_canvas = ui.painter_at(rect);
+        on_canvas.rect_filled(band, 0.0, DIM);
+        on_canvas.rect_stroke(
+            band,
+            0.0,
+            egui::Stroke::new(1.0, ACCENT),
+            egui::StrokeKind::Inside,
+        );
+    }
+    draw_group_boxes(&ui.painter_at(rect), frame, &select.chosen, &view);
     if handles.len() == 5 {
         draw_selection(&ui.painter_at(rect), &handles);
     }
@@ -1052,12 +1105,7 @@ fn canvas(
 ///
 /// The root has no box: it holds the whole scene, so a box around it says
 /// nothing. The group the DM picked draws its box solid.
-fn draw_group_boxes(
-    painter: &egui::Painter,
-    frame: &Frame<'_>,
-    picked: Option<NodeId>,
-    view: &View,
-) {
+fn draw_group_boxes(painter: &egui::Painter, frame: &Frame<'_>, picked: &[NodeId], view: &View) {
     for group in crate::scene::groups(frame.scene) {
         if !group.shown.dm {
             continue;
@@ -1075,12 +1123,82 @@ fn draw_group_boxes(
             box_rect.left_bottom(),
             box_rect.left_top(),
         ];
-        if picked == Some(group.id) {
+        if picked.contains(&group.id) {
             painter.add(egui::Shape::line(corners.to_vec(), stroke));
         } else {
             painter.add(egui::Shape::dashed_line(&corners, stroke, DASH, DASH));
         }
     }
+}
+
+/// The list that says what the DM holds, and offers to group it.
+///
+/// A drag over the canvas opens it. It stands in the corner of the canvas,
+/// out of the way of the maps.
+fn selection_popup(
+    ui: &egui::Ui,
+    select: &mut Select,
+    frame: &mut Frame<'_>,
+    canvas: egui::Rect,
+) -> bool {
+    if !select.popup || select.chosen.is_empty() {
+        return false;
+    }
+    let mut edited = false;
+    let mut group_them = false;
+    egui::Area::new(egui::Id::new("selection"))
+        .fixed_pos(canvas.left_top() + egui::vec2(12.0, 12.0))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_max_width(220.0);
+                let held = crate::scene::normalize(frame.scene, &select.chosen);
+                ui.label(format!("{} picked", held.len()));
+                for id in &held {
+                    let name = match crate::scene::find(frame.scene, *id) {
+                        Some(Node::Group(group)) => group.name.clone(),
+                        Some(Node::Asset(asset)) => asset.path.to_string_lossy().into_owned(),
+                        None => continue,
+                    };
+                    ui.label(egui::RichText::new(name).color(MUTE));
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Group").clicked() {
+                        group_them = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        select.popup = false;
+                    }
+                });
+            });
+        });
+    if group_them {
+        let name = format!("Group {}", frame.scene.next_id());
+        if let Some(id) = crate::scene::group_selection(frame.scene, &select.chosen, name) {
+            select.chosen = vec![id];
+            select.popup = false;
+            edited = true;
+        }
+    }
+    edited
+}
+
+/// The assets a band from `start` to `end` covers.
+///
+/// An asset counts when its middle lies inside the band, so a DM who drags
+/// over a room takes the maps of that room and not the floor under it.
+fn band_covers(frame: &Frame<'_>, start: (f64, f64), end: (f64, f64)) -> Vec<NodeId> {
+    let (low, high) = (
+        (start.0.min(end.0), start.1.min(end.1)),
+        (start.0.max(end.0), start.1.max(end.1)),
+    );
+    crate::scene::draw_order(frame.scene, crate::scene::Audience::Dm)
+        .iter()
+        .filter(|asset| {
+            let middle = asset.center;
+            middle.0 >= low.0 && middle.0 <= high.0 && middle.1 >= low.1 && middle.1 <= high.1
+        })
+        .map(|asset| asset.id)
+        .collect()
 }
 
 /// The group whose box holds `pos`, if the DM aimed at one.
@@ -1303,6 +1421,7 @@ fn press(
     pos: egui::Pos2,
     cursor: (f64, f64),
     view: &View,
+    add: bool,
 ) {
     let handle_points: Vec<(f64, f64)> = handles
         .iter()
@@ -1314,43 +1433,71 @@ fn press(
         HANDLE_REACH,
     );
     let held = select
-        .selected
+        .only()
         .and_then(|id| crate::scene::find(frame.scene, id).and_then(Node::asset));
-    select.drag = match (hit_handle, held) {
-        (Some(4), Some(map)) => Some(Drag::Rotate {
-            start_rotation: map.rotation,
-            start_cursor: cursor,
-        }),
-        (Some(_), Some(map)) => Some(Drag::Scale {
-            start_scale: map.scale,
-            start_cursor: cursor,
-        }),
-        _ => {
-            // The box of a group takes the press first. Inside the box,
-            // the press goes on to the asset under the pointer.
-            if let Some(group) = group_at(frame, view, pos) {
-                select.selected = Some(group);
-                return;
+    if let (Some(handle), Some(map)) = (hit_handle, held) {
+        select.drag = Some(if handle == 4 {
+            Drag::Rotate {
+                start_rotation: map.rotation,
+                start_cursor: cursor,
             }
-            // The topmost asset under the pointer takes the press. The
-            // list draws bottom first, so the search runs the other way.
-            select.selected = crate::scene::assets(frame.scene)
-                .iter()
-                .rev()
-                .find(|asset| {
-                    (frame.size_of)(&asset.path)
-                        .is_some_and(|size| hit_test(cursor, &asset.corners(size)))
-                })
-                .map(|asset| asset.id);
-            select
-                .selected
-                .and_then(|id| crate::scene::find(frame.scene, id).and_then(Node::asset))
-                .map(|asset| Drag::Move {
-                    start_center: asset.center,
-                    start_cursor: cursor,
-                })
+        } else {
+            Drag::Scale {
+                start_scale: map.scale,
+                start_cursor: cursor,
+            }
+        });
+        return;
+    }
+    // The box of a group takes the press first. Inside the box, the press
+    // goes on to the asset under the pointer.
+    let aimed = group_at(frame, view, pos).or_else(|| {
+        // The topmost asset under the pointer takes the press. The tree
+        // draws the bottom one first, so the search runs the other way.
+        crate::scene::assets(frame.scene)
+            .iter()
+            .rev()
+            .find(|asset| {
+                (frame.size_of)(&asset.path)
+                    .is_some_and(|size| hit_test(cursor, &asset.corners(size)))
+            })
+            .map(|asset| asset.id)
+    });
+    let Some(id) = aimed else {
+        // A press on bare canvas starts a band that picks what it covers.
+        if !add {
+            select.chosen.clear();
         }
+        select.popup = false;
+        select.drag = Some(Drag::Band {
+            start_cursor: cursor,
+        });
+        return;
     };
+    if !select.holds(id) || add {
+        select.take(id, add);
+    }
+    select.drag = Some(Drag::Move {
+        starts: standing(frame.scene, &select.chosen),
+        start_cursor: cursor,
+    });
+}
+
+/// Where every asset the DM holds stands now.
+///
+/// A group in the selection hands over every asset under it, so a drag on
+/// a group moves all of it and nothing loses its place inside.
+fn standing(scene: &Scene, chosen: &[NodeId]) -> Vec<(NodeId, (f64, f64))> {
+    crate::scene::normalize(scene, chosen)
+        .iter()
+        .flat_map(|id| crate::scene::assets_of(scene, *id))
+        .filter_map(|id| {
+            let center = crate::scene::find(scene, id)
+                .and_then(Node::asset)
+                .map(|asset| asset.center)?;
+            Some((id, center))
+        })
+        .collect()
 }
 
 /// What the keyboard does to the selected map. Returns `true` when it
@@ -1365,7 +1512,7 @@ fn keys(ui: &egui::Ui, select: &mut Select, scene: &mut Scene) -> bool {
     // Keys act on the selection when no drag is in progress, since a drag
     // rewrites the map from its start state every frame. Held keys do not
     // repeat: one press is one turn, one flip, or one step in the stack.
-    let (None, Some(id)) = (select.drag, select.selected) else {
+    let (None, Some(id)) = (select.drag.as_ref(), select.only()) else {
         return edited;
     };
     ui.input(|input| {
@@ -1418,7 +1565,7 @@ fn measure_click(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64))
     };
     select.measure = None;
     let Some(map) = select
-        .selected
+        .only()
         .and_then(|id| crate::scene::asset_mut(frame.scene, id))
     else {
         return false;
@@ -1628,59 +1775,83 @@ fn hovered_handle(pos: egui::Pos2, handles: &[egui::Pos2]) -> Option<egui::Curso
 ///
 /// Returns `true` when the map changed.
 fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), snap: bool) -> bool {
-    let (Some(drag), Some(id)) = (select.drag, select.selected) else {
-        return false;
-    };
-    let Some(path) = crate::scene::find(frame.scene, id)
-        .and_then(Node::asset)
-        .map(|asset| asset.path.clone())
-    else {
-        return false;
-    };
-    let size = (frame.size_of)(&path);
-    let Some(map) = crate::scene::asset_mut(frame.scene, id) else {
+    let Some(drag) = select.drag.clone() else {
         return false;
     };
     match drag {
+        // The band picks nothing until the DM lets go of it.
+        Drag::Band { .. } => false,
         Drag::Move {
-            start_center,
+            starts,
             start_cursor,
         } => {
-            // A press without motion selects and nothing more: snapping a
-            // map that was placed off the grid would shift it.
-            if cursor == start_cursor {
+            // A press without motion picks and nothing more: a snap would
+            // shift a map that the DM placed off the grid.
+            if cursor == start_cursor || starts.is_empty() {
                 return false;
             }
-            let moved = (
-                start_center.0 + cursor.0 - start_cursor.0,
-                start_center.1 + cursor.1 - start_cursor.1,
-            );
-            map.center = moved;
-            // A snapped move steps along the map's own grid. A free move
-            // decides where that grid starts, so letting Ctrl go never
-            // pulls the map back off the spot the DM chose.
-            if let Some(size) = size {
-                let corners = map.corners(size);
-                if snap {
-                    map.center = snap_corner(moved, &corners, map.snap_offset);
-                } else {
-                    map.snap_offset = corner_offset(&corners);
+            let step = (cursor.0 - start_cursor.0, cursor.1 - start_cursor.1);
+            // One asset snaps to its own grid. A selection moves as one
+            // piece, so the first asset snaps and the rest follow it.
+            let lead = snap.then(|| snap_step(frame, &starts[0], step)).flatten();
+            let step = lead.unwrap_or(step);
+            for (id, start) in &starts {
+                let Some(asset) = crate::scene::asset_mut(frame.scene, *id) else {
+                    continue;
+                };
+                asset.center = (start.0 + step.0, start.1 + step.1);
+                if !snap && let Some(size) = (frame.size_of)(&asset.path.clone()) {
+                    let corners = asset.corners(size);
+                    asset.snap_offset = corner_offset(&corners);
                 }
             }
+            true
         }
         Drag::Scale {
             start_scale,
             start_cursor,
-        } => map.scale = start_scale * scale_from_drag(map.center, start_cursor, cursor),
+        } => {
+            let Some(map) = select
+                .only()
+                .and_then(|id| crate::scene::asset_mut(frame.scene, id))
+            else {
+                return false;
+            };
+            map.scale = start_scale * scale_from_drag(map.center, start_cursor, cursor);
+            true
+        }
         Drag::Rotate {
             start_rotation,
             start_cursor,
         } => {
+            let Some(map) = select
+                .only()
+                .and_then(|id| crate::scene::asset_mut(frame.scene, id))
+            else {
+                return false;
+            };
             map.rotation =
                 rotation_from_drag(start_rotation, map.center, start_cursor, cursor, snap);
+            true
         }
     }
-    true
+}
+
+/// The step a move takes once the leading asset snaps to its own grid.
+fn snap_step(
+    frame: &Frame<'_>,
+    lead: &(NodeId, (f64, f64)),
+    step: (f64, f64),
+) -> Option<(f64, f64)> {
+    let (id, start) = lead;
+    let asset = crate::scene::find(frame.scene, *id).and_then(Node::asset)?;
+    let size = (frame.size_of)(&asset.path)?;
+    let moved = (start.0 + step.0, start.1 + step.1);
+    let mut settled = asset.clone();
+    settled.center = moved;
+    let corners = settled.corners(size);
+    let snapped = snap_corner(moved, &corners, asset.snap_offset);
+    Some((snapped.0 - start.0, snapped.1 - start.1))
 }
 
 /// The outline, the corner handles and the rotation handle of the selection.
