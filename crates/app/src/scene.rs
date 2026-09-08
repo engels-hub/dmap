@@ -92,21 +92,34 @@ pub fn move_layer(layers: &mut Vec<Layer>, maps: &mut [MapObject], from: usize, 
     }
 }
 
-/// Takes a layer out of the pile, with every map that sits on it.
+/// Takes a layer out of the pile and hands its maps to a neighbour.
 ///
-/// The last layer stays: a scene with no layer has nowhere to put a map.
-/// A map on a layer above the one that goes steps down to keep its place.
-pub fn delete_layer(layers: &mut Vec<Layer>, maps: &mut Vec<MapObject>, index: usize) {
+/// No map is lost. The maps go to the layer under the one that leaves, or
+/// to the one over it when the bottom layer leaves. The last layer stays:
+/// a scene with no layer has nowhere to put a map.
+pub fn delete_layer(layers: &mut Vec<Layer>, maps: &mut [MapObject], index: usize) {
     if index >= layers.len() || layers.len() == 1 {
         return;
     }
     layers.remove(index);
-    maps.retain(|map| map.layer != index);
+    // The list is one shorter now, so the layer under the old one keeps
+    // its place, and the layer over it has stepped down into that place.
+    let takes = index.saturating_sub(1);
     for map in maps {
-        if map.layer > index {
+        if map.layer == index {
+            map.layer = takes;
+        } else if map.layer > index {
             map.layer -= 1;
         }
     }
+}
+
+/// The layer that takes the maps when the layer at `index` goes.
+pub fn layer_taking_maps(layers: &[Layer], index: usize) -> Option<&Layer> {
+    if layers.len() < 2 || index >= layers.len() {
+        return None;
+    }
+    layers.get(if index > 0 { index - 1 } else { 1 })
 }
 
 /// How many maps sit on one layer.
@@ -338,7 +351,7 @@ mod tests {
 
     use super::{
         Audience, Layer, MapObject, Scene, copy_into_scene, delete_layer, draw_order, free_name,
-        index_after_move, maps_on, move_layer,
+        index_after_move, layer_taking_maps, maps_on, move_layer,
     };
 
     /// A folder of its own for one test, under the system's temp folder.
@@ -694,15 +707,38 @@ mod tests {
     }
 
     #[test]
-    fn a_layer_that_goes_takes_its_maps_with_it() {
+    fn a_layer_that_goes_hands_its_maps_to_the_one_under_it() {
         let (mut maps, mut layers) = stack();
         delete_layer(&mut layers, &mut maps, 1);
         assert_eq!(layers.len(), 2);
-        assert_eq!(maps.len(), 2);
-        // The map above the one that went steps down to keep its place.
+        // Every map is still here.
+        assert_eq!(maps.len(), 3);
         assert_eq!(maps[0].layer, 0);
-        assert_eq!(maps[1].layer, 1);
+        // The map of the layer that went joined the layer under it.
+        assert_eq!(maps[1].layer, 0);
+        // The map over it stepped down and keeps its place on top.
+        assert_eq!(maps[2].layer, 1);
         assert_eq!(layers[1].name, "Layer 2");
+    }
+
+    #[test]
+    fn the_bottom_layer_hands_its_maps_to_the_one_over_it() {
+        let (mut maps, mut layers) = stack();
+        delete_layer(&mut layers, &mut maps, 0);
+        assert_eq!(layers[0].name, "Layer 1");
+        assert_eq!(maps.len(), 3);
+        // The map of the bottom layer joined the new bottom layer.
+        assert_eq!(maps[0].layer, 0);
+        assert_eq!(maps[1].layer, 0);
+        assert_eq!(maps[2].layer, 1);
+    }
+
+    #[test]
+    fn the_dialog_can_name_the_layer_that_takes_the_maps() {
+        let (_, layers) = stack();
+        assert_eq!(layer_taking_maps(&layers, 1).unwrap().name, "Layer 0");
+        assert_eq!(layer_taking_maps(&layers, 0).unwrap().name, "Layer 1");
+        assert!(layer_taking_maps(&layers[..1], 0).is_none());
     }
 
     #[test]
@@ -712,6 +748,7 @@ mod tests {
         delete_layer(&mut layers, &mut maps, 0);
         assert_eq!(layers.len(), 1);
         assert_eq!(maps.len(), 1);
+        assert_eq!(maps[0].layer, 0);
     }
 
     #[test]

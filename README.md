@@ -117,7 +117,7 @@ Every map sits on a layer. The **Layers** list in the settings panel holds one r
 
 A layer that moves takes its maps with it.
 
-Caution: a layer you delete takes its maps with it, and nothing brings them back. The panel asks you once, and names how many maps go. The last layer has no `x`, since a scene needs somewhere to put a map. The image files stay in the scene folder.
+A layer you delete hands its maps to the layer under it, so no map is lost. The bottom layer hands its maps up instead. The panel asks you first, and names the layer that takes them. The last layer has no `x`, since a scene needs somewhere to put a map.
 
 The two switches work on their own. A layer with **Me** on and **TV** off holds what the players must not see. Keep the room they have not found there, or a note on a door. **New layer** puts another layer on top.
 

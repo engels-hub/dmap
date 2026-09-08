@@ -12,7 +12,8 @@ use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::color;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::scene::{
-    Audience, Layer, MapObject, delete_layer, index_after_move, maps_on, move_layer,
+    Audience, Layer, MapObject, delete_layer, index_after_move, layer_taking_maps, maps_on,
+    move_layer,
 };
 use crate::transform::{
     MAX_GRID_PX, MIN_GRID_PX, corner_offset, edge_midpoint, grid_px_from_measure, hit_test,
@@ -809,10 +810,12 @@ fn layer_panel(
         if *deleting == Some(index) {
             let maps = maps_on(frame.maps, index);
             let name = frame.layers[index].name.clone();
+            let takes = layer_taking_maps(frame.layers, index)
+                .map_or_else(String::new, |layer| layer.name.clone());
             let carry = if maps == 1 {
-                "1 map goes with it.".to_owned()
+                format!("Its map joins {takes}.")
             } else {
-                format!("{maps} maps go with it.")
+                format!("Its {maps} maps join {takes}.")
             };
             // The panel is narrow, so the question stands on its own line.
             ui.label(format!("Delete {name}?"));
