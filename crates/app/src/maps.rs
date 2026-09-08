@@ -225,7 +225,7 @@ impl MapLayer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         pass: &mut wgpu::RenderPass<'_>,
-        maps: &[MapObject],
+        maps: &[&MapObject],
         camera: &Camera,
         viewport: (u32, u32),
     ) {

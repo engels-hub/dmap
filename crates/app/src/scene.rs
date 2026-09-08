@@ -9,19 +9,101 @@ use serde::{Deserialize, Serialize};
 
 use crate::tvbox::TvBox;
 
+/// Who is looking at the canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Audience {
+    /// The DM window.
+    Dm,
+    /// The TV the players watch.
+    Tv,
+}
+
+/// A layer of the scene.
+///
+/// Every map sits on a layer. A layer shows or hides on each screen by
+/// itself, so the DM keeps a layer of notes that the TV never draws.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Layer {
+    /// What the DM calls this layer.
+    pub name: String,
+    /// Draw this layer on the DM screen.
+    pub show_dm: bool,
+    /// Draw this layer on the TV.
+    pub show_tv: bool,
+}
+
+impl Default for Layer {
+    fn default() -> Self {
+        Self {
+            name: "Layer".to_owned(),
+            show_dm: true,
+            show_tv: true,
+        }
+    }
+}
+
+impl Layer {
+    /// A layer with a name of its own, shown on both screens.
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            ..Self::default()
+        }
+    }
+
+    /// Whether this layer draws for `audience`.
+    pub fn shows(&self, audience: Audience) -> bool {
+        match audience {
+            Audience::Dm => self.show_dm,
+            Audience::Tv => self.show_tv,
+        }
+    }
+}
+
+/// The maps one screen draws, in the order they draw.
+///
+/// A layer draws over the layers under it. Inside a layer, a later map
+/// draws over an earlier one. A layer that is off for this screen puts
+/// nothing on it, and a map on no layer at all draws nowhere.
+pub fn draw_order<'a>(
+    maps: &'a [MapObject],
+    layers: &[Layer],
+    audience: Audience,
+) -> Vec<&'a MapObject> {
+    layers
+        .iter()
+        .enumerate()
+        .filter(|(_, layer)| layer.shows(audience))
+        .flat_map(|(index, _)| maps.iter().filter(move |map| map.layer == index))
+        .collect()
+}
+
 /// Everything one scene holds.
 ///
 /// A scene lives in a folder of its own. The folder holds this file, under
 /// the name `scene.json`, and the images the maps point at. Every path in
 /// it is the name of a file in that folder, so the whole folder moves to
 /// another machine and still opens.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Scene {
-    /// The maps on the canvas, in drawing order.
+    /// The maps on the canvas, in drawing order inside their layer.
     pub maps: Vec<MapObject>,
     /// The part of the canvas the TV shows.
     pub tv_box: TvBox,
+    /// The layers, bottom one first.
+    pub layers: Vec<Layer>,
+}
+
+impl Default for Scene {
+    fn default() -> Self {
+        Self {
+            maps: Vec::new(),
+            tv_box: TvBox::default(),
+            layers: vec![Layer::new("Maps".to_owned())],
+        }
+    }
 }
 
 impl Scene {
@@ -37,7 +119,24 @@ impl Scene {
     /// Returns an error when `json` is not valid JSON or a field has the
     /// wrong type.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(json)
+        Ok(Self::repaired(serde_json::from_str(json)?))
+    }
+
+    /// The same scene, with a layer for every map to stand on.
+    ///
+    /// A scene file is text a DM can edit, and a scene from before layers
+    /// existed has none at all. A map that points at no layer joins the
+    /// bottom one, where the DM can see it and move it.
+    fn repaired(mut self) -> Self {
+        if self.layers.is_empty() {
+            self.layers = Self::default().layers;
+        }
+        for map in &mut self.maps {
+            if map.layer >= self.layers.len() {
+                map.layer = 0;
+            }
+        }
+        self
     }
 }
 
@@ -120,6 +219,9 @@ pub struct MapObject {
     /// Mirror the image top to bottom.
     #[serde(default)]
     pub flip_y: bool,
+    /// The layer this map sits on, as a place in the scene's layers.
+    #[serde(default)]
+    pub layer: usize,
     /// Where the grid this map snaps to starts, in inches.
     ///
     /// Zero is the canvas grid. A free move, with Ctrl held, writes the
@@ -149,6 +251,7 @@ impl MapObject {
             scale: 1.0,
             flip_x: false,
             flip_y: false,
+            layer: 0,
             snap_offset: (0.0, 0.0),
         }
     }
@@ -180,7 +283,7 @@ impl MapObject {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{MapObject, Scene, copy_into_scene, free_name};
+    use super::{Audience, Layer, MapObject, Scene, copy_into_scene, draw_order, free_name};
 
     /// A folder of its own for one test, under the system's temp folder.
     fn scratch(name: &str) -> PathBuf {
@@ -267,6 +370,7 @@ mod tests {
                 center: (3.0, -1.5),
                 width: 36.0,
             },
+            ..Scene::default()
         };
         assert_eq!(Scene::from_json(&scene.to_json()).unwrap(), scene);
     }
@@ -389,5 +493,106 @@ mod tests {
             PathBuf::from("crypt.png")
         );
         assert_eq!(std::fs::read_dir(&scene).unwrap().count(), 1);
+    }
+
+    /// Three maps, one on each of three layers.
+    fn stack() -> (Vec<MapObject>, Vec<Layer>) {
+        let maps = (0..3)
+            .map(|layer| MapObject {
+                layer,
+                ..MapObject::new(PathBuf::from(format!("{layer}.png")), (0.0, 0.0))
+            })
+            .collect();
+        let layers = (0..3)
+            .map(|number| Layer::new(format!("Layer {number}")))
+            .collect();
+        (maps, layers)
+    }
+
+    #[test]
+    fn a_layer_draws_over_the_layers_under_it() {
+        let (maps, layers) = stack();
+        let order: Vec<_> = draw_order(&maps, &layers, Audience::Dm)
+            .iter()
+            .map(|map| map.path.clone())
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                PathBuf::from("0.png"),
+                PathBuf::from("1.png"),
+                PathBuf::from("2.png")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_layer_that_is_off_draws_nothing() {
+        let (maps, mut layers) = stack();
+        layers[1].show_dm = false;
+        let order = draw_order(&maps, &layers, Audience::Dm);
+        assert_eq!(order.len(), 2);
+        assert!(order.iter().all(|map| map.path != Path::new("1.png")));
+    }
+
+    #[test]
+    fn the_two_screens_do_not_have_to_agree() {
+        let (maps, mut layers) = stack();
+        layers[2].show_tv = false;
+        layers[0].show_dm = false;
+        assert_eq!(draw_order(&maps, &layers, Audience::Dm).len(), 2);
+        assert_eq!(draw_order(&maps, &layers, Audience::Tv).len(), 2);
+        assert_eq!(
+            draw_order(&maps, &layers, Audience::Tv)[0].path,
+            PathBuf::from("0.png")
+        );
+    }
+
+    #[test]
+    fn a_map_draws_over_the_maps_before_it_on_its_layer() {
+        let layers = vec![Layer::new("one".to_owned())];
+        let maps: Vec<MapObject> = ["a.png", "b.png"]
+            .iter()
+            .map(|name| MapObject::new(PathBuf::from(*name), (0.0, 0.0)))
+            .collect();
+        let order = draw_order(&maps, &layers, Audience::Dm);
+        assert_eq!(order[0].path, PathBuf::from("a.png"));
+        assert_eq!(order[1].path, PathBuf::from("b.png"));
+    }
+
+    #[test]
+    fn a_scene_from_before_layers_opens_with_one() {
+        let json = r#"{"maps":[{"path":"m.png","center":[0.0,0.0],"grid_px":50.0}]}"#;
+        let scene = Scene::from_json(json).unwrap();
+        assert_eq!(scene.layers.len(), 1);
+        assert_eq!(scene.maps[0].layer, 0);
+    }
+
+    #[test]
+    fn a_map_that_points_past_the_layers_joins_the_bottom_one() {
+        let json = r#"{"maps":[{"path":"m.png","center":[0.0,0.0],"grid_px":50.0,"layer":7}],
+                       "layers":[{"name":"one","show_dm":true,"show_tv":true}]}"#;
+        let scene = Scene::from_json(json).unwrap();
+        assert_eq!(scene.maps[0].layer, 0);
+    }
+
+    #[test]
+    fn the_layers_round_trip_through_json() {
+        let scene = Scene {
+            layers: vec![
+                Layer::new("Maps".to_owned()),
+                Layer {
+                    name: "My notes".to_owned(),
+                    show_dm: true,
+                    show_tv: false,
+                },
+            ],
+            maps: vec![MapObject {
+                layer: 1,
+                ..MapObject::new(PathBuf::from("note.png"), (0.0, 0.0))
+            }],
+            ..Scene::default()
+        };
+        assert_eq!(Scene::from_json(&scene.to_json()).unwrap(), scene);
     }
 }

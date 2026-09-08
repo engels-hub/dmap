@@ -38,7 +38,7 @@ use crate::images::Loader;
 use crate::maps::{MapLayer, relative_path};
 use crate::pointer::PointerDisc;
 use crate::scene::MapObject;
-use crate::scene::{Scene, copy_into_scene};
+use crate::scene::{Audience, Layer, Scene, copy_into_scene, draw_order};
 use crate::tv::{display_at, dm_move_target, placement_for, resolve_tv_display};
 use crate::tvbox::{TvBox, clamp_snap_percent};
 use crate::ui::{DmUi, Frame, SceneCommand, Settings};
@@ -195,6 +195,8 @@ struct Running {
     /// What went wrong with the last thing the scenes dialog asked for.
     scene_error: String,
     maps: Vec<MapObject>,
+    /// The layers of the open scene, bottom one first.
+    layers: Vec<Layer>,
     map_layer: MapLayer,
     loader: Loader,
     camera: Camera,
@@ -261,6 +263,7 @@ impl Running {
             scenes_dir: config.scenes_dir.clone(),
             scene_error: String::new(),
             maps: scene.maps.clone(),
+            layers: scene.layers.clone(),
             map_layer,
             loader,
             camera: DM_CAMERA,
@@ -302,10 +305,11 @@ impl Running {
                 let (device, queue) = (&self.gpu.device, &self.gpu.queue);
                 let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
                 let tv_camera = self.tv_box.camera(viewport);
-                let (map_layer, maps) = (&mut self.map_layer, &self.maps);
+                let shown = draw_order(&self.maps, &self.layers, Audience::Tv);
+                let map_layer = &mut self.map_layer;
                 self.gpu
                     .clear(pane, color::linear_color(color::CANVAS), |pass| {
-                        map_layer.draw(device, queue, pass, maps, &tv_camera, viewport);
+                        map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
                         if let Some(center) = tv_pointer {
                             pointer.draw(queue, pass, center, viewport);
                         }
@@ -380,6 +384,7 @@ impl Running {
                 displays: &self.displays,
                 settings: &mut self.settings,
                 maps: &mut self.maps,
+                layers: &mut self.layers,
                 camera: &mut self.camera,
                 scene_dir: &self.scene_dir,
                 list_scenes: &|| config::scene_list(&self.scenes_dir),
@@ -392,10 +397,11 @@ impl Running {
         );
         let viewport = (self.dm.config.width, self.dm.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
-        let (map_layer, maps, camera) = (&mut self.map_layer, &self.maps, &self.camera);
+        let shown = draw_order(&self.maps, &self.layers, Audience::Dm);
+        let (map_layer, camera) = (&mut self.map_layer, &self.camera);
         self.ui
             .render(&self.gpu, &mut self.dm, output.paint, |pass| {
-                map_layer.draw(device, queue, pass, maps, camera, viewport);
+                map_layer.draw(device, queue, pass, &shown, camera, viewport);
             })?;
         if output.edited {
             self.tv.window.request_redraw();
@@ -467,6 +473,7 @@ impl Running {
     fn open_scene(&mut self, dir: PathBuf, scene: &Scene) {
         self.scene_dir = dir;
         self.maps.clone_from(&scene.maps);
+        self.layers.clone_from(&scene.layers);
         self.tv_box = scene.tv_box.clamped();
         self.map_layer.clear();
         self.reload_images();
@@ -491,6 +498,7 @@ impl Running {
         config.swap_windows = self.settings.swap_windows;
         config.snap_percent = self.settings.snap_percent;
         scene.maps.clone_from(&self.maps);
+        scene.layers.clone_from(&self.layers);
         scene.tv_box = self.tv_box;
     }
 }

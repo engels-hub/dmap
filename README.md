@@ -102,6 +102,20 @@ Pick a tool in the rail on the left.
 
 Add a map with the Add map button, or drop an image file on the DM window.
 
+### Layers
+
+Every map sits on a layer. The **Layers** list in the settings panel holds one row for each layer, the top layer first.
+
+| Column | What it does |
+|---|---|
+| Name | Type a name for the layer |
+| Me | Draw this layer on the DM screen |
+| TV | Draw this layer on the TV |
+
+The two switches work on their own. A layer with **Me** on and **TV** off holds what the players must not see. Keep the room they have not found there, or a note on a door. **New layer** puts another layer on top.
+
+Pick a map with the Select tool, and the **Layer** field in the Map section moves it to another layer. A layer that is off for you takes no clicks, so a hidden map stays where you put it.
+
 **Scenes** in the rail opens the list of your scenes. Every row is a folder.
 
 Caution: Delete takes the scene folder and every map in it. Nothing brings them back. The list asks you once before it does this.

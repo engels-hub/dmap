@@ -11,7 +11,7 @@ use egui_winit::winit::{event::WindowEvent, monitor::MonitorHandle};
 use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::color;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
-use crate::scene::MapObject;
+use crate::scene::{Audience, Layer, MapObject};
 use crate::transform::{
     MAX_GRID_PX, MIN_GRID_PX, corner_offset, edge_midpoint, grid_px_from_measure, hit_test,
     pick_handle, reorder, rotation_from_drag, rotation_handle, scale_from_drag, snap_corner,
@@ -156,6 +156,8 @@ pub struct Frame<'a> {
     pub displays: &'a [MonitorHandle],
     pub settings: &'a mut Settings,
     pub maps: &'a mut Vec<MapObject>,
+    /// The layers of the scene, bottom one first.
+    pub layers: &'a mut Vec<Layer>,
     pub camera: &'a mut Camera,
     /// The part of the canvas the TV shows.
     pub tv_box: &'a mut TvBox,
@@ -604,13 +606,14 @@ fn rail_and_settings(
             ui.add(field);
             ui.label(egui::RichText::new("either side of 100 %").color(MUTE));
         });
+        edited |= layer_panel(ui, frame.layers);
         if *tool == Tool::Select {
-            edited = map_properties(ui, select, frame.maps);
+            edited |= map_properties(ui, select, frame.maps, frame.layers);
         } else {
             // Another tool does not run the measure, so the panel must not
             // leave a measure armed behind it.
             select.measure = None;
-            edited = box_properties(ui, frame.tv_box);
+            edited |= box_properties(ui, frame.tv_box);
         }
     });
     Rail { add_map, edited }
@@ -744,6 +747,43 @@ fn scene_row(
     });
 }
 
+/// Whether the DM screen draws this map, which is what makes it pickable.
+fn shown_to_dm(map: &MapObject, layers: &[Layer]) -> bool {
+    layers
+        .get(map.layer)
+        .is_some_and(|layer| layer.shows(Audience::Dm))
+}
+
+/// The layers of the scene. Returns `true` when one changed.
+///
+/// Each layer carries two switches, one for each screen. A layer with the
+/// DM switch on and the TV switch off holds what the players must not see.
+fn layer_panel(ui: &mut egui::Ui, layers: &mut Vec<Layer>) -> bool {
+    let mut edited = false;
+    ui.separator();
+    ui.heading("Layers");
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Layer").color(MUTE));
+        ui.label(egui::RichText::new("Me").color(MUTE));
+        ui.label(egui::RichText::new("TV").color(MUTE));
+    });
+    // The list reads from the top down, and the top layer draws over the
+    // rest, so the last layer comes first.
+    for layer in layers.iter_mut().rev() {
+        ui.horizontal(|ui| {
+            let name = egui::TextEdit::singleline(&mut layer.name).desired_width(120.0);
+            edited |= ui.add(name).changed();
+            edited |= ui.checkbox(&mut layer.show_dm, "").changed();
+            edited |= ui.checkbox(&mut layer.show_tv, "").changed();
+        });
+    }
+    if ui.button("New layer").clicked() {
+        layers.push(Layer::new(format!("Layer {}", layers.len() + 1)));
+        edited = true;
+    }
+    edited
+}
+
 /// The properties of the TV box. Returns `true` when the zoom changed.
 ///
 /// The DM drags a corner handle to reach a zoom by eye. This field reaches
@@ -772,13 +812,33 @@ fn box_properties(ui: &mut egui::Ui, tv_box: &mut TvBox) -> bool {
 /// The grid size decides the true size of the map: one grid cell is one
 /// inch on the canvas. Only a Foundry or a Universal VTT file carries that
 /// number, so for a plain PNG or JPEG the DM types it or measures it.
-fn map_properties(ui: &mut egui::Ui, select: &mut Select, maps: &mut [MapObject]) -> bool {
+fn map_properties(
+    ui: &mut egui::Ui,
+    select: &mut Select,
+    maps: &mut [MapObject],
+    layers: &[Layer],
+) -> bool {
     let Some(map) = select.selected.and_then(|i| maps.get_mut(i)) else {
         return false;
     };
     let mut edited = false;
     ui.separator();
     ui.heading("Map");
+    ui.horizontal(|ui| {
+        ui.label("Layer");
+        let open = layers
+            .get(map.layer)
+            .map_or("", |layer| layer.name.as_str());
+        egui::ComboBox::from_id_salt("map_layer")
+            .selected_text(open)
+            .show_ui(ui, |ui| {
+                for (index, layer) in layers.iter().enumerate() {
+                    edited |= ui
+                        .selectable_value(&mut map.layer, index, &layer.name)
+                        .changed();
+                }
+            });
+    });
     ui.horizontal(|ui| {
         ui.label("Pixels per cell");
         edited |= ui
@@ -844,6 +904,7 @@ fn canvas(
     let handles: Vec<egui::Pos2> = select
         .selected
         .and_then(|i| frame.maps.get(i))
+        .filter(|map| shown_to_dm(map, frame.layers))
         .and_then(|map| (frame.size_of)(&map.path).map(|size| map.corners(size)))
         .map(|corners| {
             let mut handles: Vec<egui::Pos2> = corners.iter().map(|&c| view.to_screen(c)).collect();
@@ -1102,6 +1163,10 @@ fn press(
         }),
         _ => {
             select.selected = frame.maps.iter().enumerate().rev().find_map(|(i, map)| {
+                // A layer the DM cannot see takes no clicks from the DM.
+                if !shown_to_dm(map, frame.layers) {
+                    return None;
+                }
                 let size = (frame.size_of)(&map.path)?;
                 hit_test(cursor, &map.corners(size)).then_some(i)
             });
