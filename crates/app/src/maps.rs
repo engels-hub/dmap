@@ -143,6 +143,14 @@ impl MapLayer {
         }
     }
 
+    /// Drops every image on the GPU.
+    ///
+    /// A scene names its images by the file beside it, so two scenes can
+    /// both hold a `grid.png`. The new scene must not draw the old one.
+    pub fn clear(&mut self) {
+        self.textures.clear();
+    }
+
     /// Pixel size of the image for `path`, once it is on the GPU.
     pub fn size_of(&self, path: &Path) -> Option<(u32, u32)> {
         self.textures.get(path).map(|texture| texture.size)

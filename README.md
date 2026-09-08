@@ -102,4 +102,16 @@ Pick a tool in the rail on the left.
 
 Add a map with the Add map button, or drop an image file on the DM window.
 
+**Scenes** in the rail opens the list of your scenes. Every row is a folder.
+
+| Action | Control |
+|---|---|
+| Put a scene on the canvas | Open |
+| Make a scene and go to it | New scene |
+| Give a scene another name | Rename, then type and press Enter |
+| Delete a scene and its maps | Delete, then Delete again to answer the question |
+| Show the folder in your file manager | Folder |
+
+The open scene stands out in the accent color. A scene is saved as you work, so a switch never asks you to save.
+
 Read [PLAN.md](PLAN.md) for the architecture and the milestones. Read [DESIGN.md](DESIGN.md) for the visual language of the DM window.
