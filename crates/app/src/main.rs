@@ -31,7 +31,7 @@ use egui_winit::winit::{
     window::{Fullscreen, Window, WindowId},
 };
 
-use crate::camera::Camera;
+use crate::camera::{Camera, DEFAULT_PIXELS_PER_INCH};
 use crate::gpu::{Gpu, Pane};
 use crate::images::Loader;
 use crate::maps::{MapLayer, relative_path};
@@ -51,14 +51,10 @@ const TV_FALLBACK_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 540.0);
 /// Project file used when no path is given on the command line.
 const DEFAULT_PROJECT: &str = "project.json";
 
-/// The DM camera at start: the origin in the middle.
-///
-/// 25 pixels to the inch shows about 59 inches across a 1920 pixel window.
-/// A new TV box is 48 inches wide, so the DM can see it and reach its
-/// handles. The DM cannot pan or zoom yet; that is issue #10.
+/// The DM camera at start: the origin in the middle of the view.
 const DM_CAMERA: Camera = Camera {
     center: (0.0, 0.0),
-    pixels_per_inch: 25.0,
+    pixels_per_inch: DEFAULT_PIXELS_PER_INCH,
 };
 
 fn main() -> Result<()> {

@@ -8,7 +8,7 @@ use anyhow::Result;
 use egui_wgpu::wgpu;
 use egui_winit::winit::{event::WindowEvent, monitor::MonitorHandle};
 
-use crate::camera::{Area, Camera, fit};
+use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::color;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::scene::MapObject;
@@ -73,6 +73,25 @@ const CELL: f64 = 1.0;
 
 /// The share of the canvas the TV box takes when `T` frames it.
 const FRAME_MARGIN: f64 = 0.9;
+
+/// How much one press of the zoom keys changes the DM zoom.
+const KEY_ZOOM_STEP: f64 = 1.1;
+
+/// Zoom in. Figma, a browser and touchegg all send this for a pinch.
+const ZOOM_IN: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Plus);
+
+/// Zoom in from the main row, where `+` needs Shift and `=` does not.
+const ZOOM_IN_EQUALS: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Equals);
+
+/// Zoom out.
+const ZOOM_OUT: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Minus);
+
+/// Back to the zoom a new project opens with.
+const ZOOM_RESET: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Num0);
 
 /// The smallest and the largest zoom the box properties accept, in percent.
 const MIN_ZOOM_PERCENT: f64 = 5.0;
@@ -290,6 +309,12 @@ impl DmUi {
             pane.config.format,
             egui_wgpu::RendererOptions::default(),
         );
+        // egui scales its own UI on Ctrl with plus, minus or zero. The
+        // canvas takes those keys instead: touchegg sends them for a pinch
+        // on a touchpad, and a pinch must zoom the map, not the panel.
+        state
+            .egui_ctx()
+            .options_mut(|options| options.zoom_with_keyboard = false);
         Self {
             state,
             renderer,
@@ -1056,6 +1081,12 @@ fn canvas_area(
             *camera = camera.zoomed_at(screen, f64::from(zoom), viewport);
         }
     }
+    key_zoom(
+        ui,
+        camera,
+        pos.map(|at| (f64::from(at.x) * ppp, f64::from(at.y) * ppp)),
+        viewport,
+    );
 
     let view = View::new(ui, *camera, viewport);
     // A tool must not move a map while the DM moves the camera, so the
@@ -1073,6 +1104,33 @@ fn canvas_area(
         box_zoom,
     };
     (rect, view, pointer)
+}
+
+/// The zoom keys of a browser, on the DM camera.
+///
+/// Ctrl with plus or minus steps the zoom, and Ctrl with zero goes back to
+/// the zoom a new project opens with. The point under the pointer stays
+/// where it is, as it does for the wheel.
+fn key_zoom(ui: &egui::Ui, camera: &mut Camera, pointer: Option<(f64, f64)>, viewport: (u32, u32)) {
+    let (steps, reset) = ui.input_mut(|input| {
+        let in_ = input.consume_shortcut(&ZOOM_IN) || input.consume_shortcut(&ZOOM_IN_EQUALS);
+        let out = input.consume_shortcut(&ZOOM_OUT);
+        (
+            i32::from(in_) - i32::from(out),
+            input.consume_shortcut(&ZOOM_RESET),
+        )
+    });
+    if steps == 0 && !reset {
+        return;
+    }
+    // Without a pointer, hold the middle of the window instead.
+    let at = pointer.unwrap_or((f64::from(viewport.0) / 2.0, f64::from(viewport.1) / 2.0));
+    let factor = if reset {
+        DEFAULT_PIXELS_PER_INCH / camera.pixels_per_inch
+    } else {
+        KEY_ZOOM_STEP.powi(steps)
+    };
+    *camera = camera.zoomed_at(at, factor, viewport);
 }
 
 /// Whether egui reported a zoom gesture this frame.

@@ -44,7 +44,8 @@ The canvas takes its controls from Figma.
 |---|---|
 | Pan the DM view | The wheel, or `Space` with a drag, or the middle button |
 | Pan sideways | `Shift` with the wheel |
-| Zoom the DM view | `Ctrl` with the wheel, or `Ctrl` with two fingers on a touchpad |
+| Zoom the DM view | `Ctrl` with the wheel, `Ctrl` with `+` or `-`, or a pinch on a touchpad |
+| Back to the zoom a project opens with | `Ctrl` with `0` |
 | Put the whole TV box on the screen | `T` |
 
 The DM view is the game master's own. The TV never moves with it.

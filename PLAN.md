@@ -42,7 +42,7 @@ Other options and the reasons against them:
 
 | Camera | Description | Controls |
 |---|---|---|
-| **DM camera** | The pan and the zoom of the editor. This is editor state only. The TV does not get it. | The controls come from Figma. The wheel pans. Shift with the wheel pans sideways. Ctrl with the wheel zooms. Ctrl with two fingers on a touchpad does the same. Space with a drag pans, and so does the middle button. Home shows all. `T` shows the TV box. |
+| **DM camera** | The pan and the zoom of the editor. This is editor state only. The TV does not get it. | The controls come from Figma. The wheel pans. Shift with the wheel pans sideways. Ctrl with the wheel zooms. Ctrl with plus or minus does the same, and Ctrl with zero goes back to the start zoom. A touchpad tool such as touchegg sends a pinch as those keys, so a pinch zooms the canvas. Space with a drag pans, and so does the middle button. Home shows all. `T` shows the TV box. |
 | **TV camera** | The **TV box**: a rectangle in world space with a position, a rotation and a zoom. | Drag, turn and scale the box on the DM screen. The arrow keys move the box one grid cell. |
 
 The DM camera and the TV box are not related. The DM can zoom out to see the full canvas while the TV shows one room at 1:1. The DM can zoom in to one corner while the TV shows the full map. A "follow TV" option locks the DM camera to the TV box.
@@ -159,7 +159,9 @@ Extension point: `trait RenderPass { fn prepare(&mut self, scene, view); fn rend
 - Hotkeys:
   - Space+drag or middle drag: pan.
   - Wheel: pan. Shift with the wheel: pan sideways.
-  - Ctrl with the wheel: zoom the DM camera. A touchpad sends this as Ctrl with two fingers.
+  - Ctrl with the wheel, or Ctrl with plus or minus: zoom the DM camera.
+  - Ctrl with zero: back to the zoom a project opens with.
+  - egui scales its own UI with these keys. The program turns that off, so a pinch zooms the map.
   - Ctrl and Alt with the wheel: zoom the TV box.
   - F: flip.
   - R: turn 90°.

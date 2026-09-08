@@ -2,6 +2,12 @@
 
 // Rust guideline compliant 2026-02-21
 
+/// The zoom a new project opens with, in window pixels for one inch.
+///
+/// This shows about 59 inches across a 1920 pixel window, so a new TV box
+/// of 48 inches fits with its handles.
+pub const DEFAULT_PIXELS_PER_INCH: f64 = 25.0;
+
 /// The closest the DM camera may look. Below this a map is a few pixels.
 pub const MIN_PIXELS_PER_INCH: f64 = 2.0;
 
