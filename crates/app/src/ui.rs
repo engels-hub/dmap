@@ -8,7 +8,7 @@ use anyhow::Result;
 use egui_wgpu::wgpu;
 use egui_winit::winit::{event::WindowEvent, monitor::MonitorHandle};
 
-use crate::camera::Camera;
+use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::color;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::scene::MapObject;
@@ -71,6 +71,32 @@ const ZOOM_LABEL_GAP: f32 = 6.0;
 /// by this much.
 const CELL: f64 = 1.0;
 
+/// The share of the canvas the TV box takes when `T` frames it.
+const FRAME_MARGIN: f64 = 0.9;
+
+/// How much one press of the zoom keys changes the DM zoom.
+const KEY_ZOOM_STEP: f64 = 1.1;
+
+/// Zoom in. Figma, a browser and touchegg all send this for a pinch.
+const ZOOM_IN: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Plus);
+
+/// Zoom in from the main row, where `+` needs Shift and `=` does not.
+const ZOOM_IN_EQUALS: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Equals);
+
+/// Zoom out.
+const ZOOM_OUT: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Minus);
+
+/// Back to the zoom a new project opens with.
+const ZOOM_RESET: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Num0);
+
+/// The smallest and the largest zoom the box properties accept, in percent.
+const MIN_ZOOM_PERCENT: f64 = 5.0;
+const MAX_ZOOM_PERCENT: f64 = 500.0;
+
 /// egui state and renderer for one window.
 pub struct DmUi {
     state: egui_winit::State,
@@ -78,6 +104,9 @@ pub struct DmUi {
     tool: Tool,
     select: Select,
     table: Table,
+    /// Who takes the zoom gesture that is running: the TV box, or the
+    /// camera. `None` while no gesture runs.
+    zoom_goes_to: Option<bool>,
     /// A map or the TV box changed since the last save.
     dirty: bool,
 }
@@ -126,7 +155,7 @@ pub struct Frame<'a> {
     pub displays: &'a [MonitorHandle],
     pub settings: &'a mut Settings,
     pub maps: &'a mut Vec<MapObject>,
-    pub camera: &'a Camera,
+    pub camera: &'a mut Camera,
     /// The part of the canvas the TV shows.
     pub tv_box: &'a mut TvBox,
     /// Pixel size of the TV window. It gives the box its shape.
@@ -184,17 +213,45 @@ impl View {
     }
 }
 
+/// What the primary button is doing over the canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Button {
+    /// Not down.
+    Up,
+    /// It went down this frame.
+    Pressed,
+    /// It is down, and it went down before this frame.
+    Held,
+}
+
 /// What one canvas frame reads from the pointer.
 #[derive(Debug, Clone, Copy)]
 struct Pointer {
-    /// The primary button went down this frame.
-    pressed: bool,
-    /// The primary button is down now.
-    down: bool,
+    /// What the primary button is doing.
+    button: Button,
     /// Where the pointer is, in points, or `None` when it is away.
     pos: Option<egui::Pos2>,
     /// The pointer is over the canvas.
     hovered: bool,
+    /// The DM is moving the camera, so the tools keep their hands off.
+    panning: bool,
+    /// The zoom gesture that belongs to the TV box, if this one does.
+    ///
+    /// One read of the keyboard decides who takes a zoom gesture, so the
+    /// camera and the box can never both act on the same one.
+    box_zoom: Option<f32>,
+}
+
+impl Pointer {
+    /// The button went down this frame, so a tool may start something.
+    fn pressed(self) -> bool {
+        self.button == Button::Pressed
+    }
+
+    /// The button is down, so a drag in progress carries on.
+    fn down(self) -> bool {
+        self.button != Button::Up
+    }
 }
 
 /// The measure tool, once the DM started it from the map properties.
@@ -252,12 +309,19 @@ impl DmUi {
             pane.config.format,
             egui_wgpu::RendererOptions::default(),
         );
+        // egui scales its own UI on Ctrl with plus, minus or zero. The
+        // canvas takes those keys instead: touchegg sends them for a pinch
+        // on a touchpad, and a pinch must zoom the map, not the panel.
+        state
+            .egui_ctx()
+            .options_mut(|options| options.zoom_with_keyboard = false);
         Self {
             state,
             renderer,
             tool: Tool::default(),
             select: Select::default(),
             table: Table::default(),
+            zoom_goes_to: None,
             dirty: false,
         }
     }
@@ -281,6 +345,7 @@ impl DmUi {
         let select = &mut self.select;
         let table = &mut self.table;
         let tool = &mut self.tool;
+        let zoom_goes_to = &mut self.zoom_goes_to;
         let selected_before = select.selected;
         let output = ctx.run_ui(raw_input, |ui| {
             // A click that closes a popup must not reach the canvas.
@@ -289,9 +354,11 @@ impl DmUi {
             add_map = pressed;
             edited = panel_edited;
             if !popup_open {
+                let rect = ui.available_rect_before_wrap();
+                frame_tv_box(ui, &mut frame, rect, viewport);
                 edited |= match *tool {
-                    Tool::Select => canvas(ui, select, &mut frame, viewport),
-                    Tool::Table => table_tool(ui, table, &mut frame, viewport),
+                    Tool::Select => canvas(ui, select, &mut frame, viewport, zoom_goes_to),
+                    Tool::Table => table_tool(ui, table, &mut frame, viewport, zoom_goes_to),
                 };
             }
         });
@@ -493,9 +560,33 @@ fn rail_and_settings(
             // Another tool does not run the measure, so the panel must not
             // leave a measure armed behind it.
             select.measure = None;
+            edited = box_properties(ui, frame.tv_box);
         }
     });
     (add_map, edited)
+}
+
+/// The properties of the TV box. Returns `true` when the zoom changed.
+///
+/// The DM drags a corner handle to reach a zoom by eye. This field reaches
+/// an exact one, such as 50 percent for a map twice the size of the table.
+fn box_properties(ui: &mut egui::Ui, tv_box: &mut TvBox) -> bool {
+    let mut percent = tv_box.zoom(TV_WIDTH_INCHES) * 100.0;
+    let mut edited = false;
+    ui.separator();
+    ui.heading("TV box");
+    ui.horizontal(|ui| {
+        ui.label("Zoom");
+        let field = egui::DragValue::new(&mut percent)
+            .suffix(" %")
+            .range(MIN_ZOOM_PERCENT..=MAX_ZOOM_PERCENT);
+        if ui.add(field).changed() {
+            tv_box.width = clamp_width(TV_WIDTH_INCHES / (percent / 100.0));
+            edited = true;
+        }
+    });
+    ui.label(egui::RichText::new("100 % is true size on the TV").color(MUTE));
+    edited
 }
 
 /// The properties of the selected map. Returns `true` when one changed.
@@ -546,8 +637,9 @@ fn canvas(
     select: &mut Select,
     frame: &mut Frame<'_>,
     viewport: (u32, u32),
+    zoom_goes_to: &mut Option<bool>,
 ) -> bool {
-    let (rect, view, pointer) = canvas_area(ui, *frame.camera, viewport);
+    let (rect, view, pointer) = canvas_area(ui, frame.camera, viewport, false, zoom_goes_to);
     let snap = !ui.input(|i| i.modifiers.ctrl);
 
     // The measure tool takes the canvas for two clicks. Escape gives up.
@@ -558,7 +650,7 @@ fn canvas(
         }
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         let mut edited = false;
-        if let (true, true, Some(pos)) = (pointer.pressed, pointer.hovered, pointer.pos) {
+        if let (true, true, Some(pos)) = (pointer.pressed(), pointer.hovered, pointer.pos) {
             edited = measure_click(select, frame, view.to_world(pos));
         }
         // A line from the first corner to the cursor, so the DM sees the
@@ -588,11 +680,11 @@ fn canvas(
     // A press selects: a handle of the selected map, else the topmost map
     // under the cursor. The same press starts a drag that moves, scales or
     // turns until the button goes up.
-    if let (true, true, Some(pos)) = (pointer.pressed, pointer.hovered, pointer.pos) {
+    if let (true, true, Some(pos)) = (pointer.pressed(), pointer.hovered, pointer.pos) {
         press(select, frame, &handles, pos, view.to_world(pos));
     }
     let mut edited = false;
-    if let (true, Some(pos)) = (pointer.down, pointer.pos) {
+    if let (true, Some(pos)) = (pointer.down(), pointer.pos) {
         edited |= apply_drag(select, frame, view.to_world(pos), snap);
     } else {
         select.drag = None;
@@ -622,8 +714,9 @@ fn table_tool(
     table: &mut Table,
     frame: &mut Frame<'_>,
     viewport: (u32, u32),
+    zoom_goes_to: &mut Option<bool>,
 ) -> bool {
-    let (rect, view, pointer) = canvas_area(ui, *frame.camera, viewport);
+    let (rect, view, pointer) = canvas_area(ui, frame.camera, viewport, true, zoom_goes_to);
     let corners = frame.tv_box.corners(frame.tv_viewport);
     let handles: Vec<egui::Pos2> = corners.iter().map(|&c| view.to_screen(c)).collect();
     let handle_points: Vec<(f64, f64)> = handles
@@ -631,7 +724,7 @@ fn table_tool(
         .map(|h| (f64::from(h.x), f64::from(h.y)))
         .collect();
 
-    if let (true, true, Some(pos)) = (pointer.pressed, pointer.hovered, pointer.pos) {
+    if let (true, true, Some(pos)) = (pointer.pressed(), pointer.hovered, pointer.pos) {
         let point = (f64::from(pos.x), f64::from(pos.y));
         let cursor = view.to_world(pos);
         table.drag = if pick_handle(point, &handle_points, HANDLE_REACH).is_some() {
@@ -651,7 +744,7 @@ fn table_tool(
 
     let mut edited = false;
     let alt = ui.input(|i| i.modifiers.alt);
-    match (pointer.down, pointer.pos, table.drag) {
+    match (pointer.down(), pointer.pos, table.drag) {
         (true, Some(pos), Some(drag)) => {
             edited = drag_box(frame.tv_box, drag, view.to_world(pos));
         }
@@ -681,6 +774,15 @@ fn table_tool(
     // start state every frame, so a key press in the middle of one is lost.
     if table.drag.is_none() {
         edited |= arrow_keys(ui, frame.tv_box);
+    }
+
+    // Ctrl and Alt with the wheel reach a zoom without a drag on a handle.
+    // Figma has no gesture that resizes an object with the wheel, so Alt
+    // marks this one as ours. The canvas already gave the gesture up.
+    if let (Some(pinch), true) = (pointer.box_zoom, pointer.hovered) {
+        let zoom = frame.tv_box.zoom(TV_WIDTH_INCHES) * f64::from(pinch);
+        frame.tv_box.width = clamp_width(TV_WIDTH_INCHES / zoom);
+        edited = true;
     }
 
     let icon = table.drag.map(|_| egui::CursorIcon::ResizeNwSe);
@@ -920,26 +1022,142 @@ fn measure_click(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64))
 /// The canvas area, and how this frame reads the pointer over it.
 fn canvas_area(
     ui: &mut egui::Ui,
-    camera: Camera,
+    camera: &mut Camera,
     viewport: (u32, u32),
+    box_takes_zoom: bool,
+    zoom_goes_to: &mut Option<bool>,
 ) -> (egui::Rect, View, Pointer) {
     let rect = ui.available_rect_before_wrap();
     let response = ui.interact(rect, ui.id().with("canvas"), egui::Sense::click_and_drag());
-    let view = View::new(ui, camera, viewport);
-    let (pressed, down, pos) = ui.input(|i| {
+    let ppp = f64::from(ui.ctx().pixels_per_point());
+    let (pressed, down, pos, space, middle, drag, scroll, zoom, shift, alt) = ui.input(|i| {
         (
             i.pointer.primary_pressed(),
             i.pointer.primary_down(),
             i.pointer.interact_pos(),
+            i.key_down(egui::Key::Space),
+            i.pointer.middle_down(),
+            i.pointer.delta(),
+            i.smooth_scroll_delta,
+            i.zoom_delta(),
+            i.modifiers.shift,
+            i.modifiers.alt,
         )
     });
+
+    // The canvas takes its controls from Figma. Space with a drag and the
+    // middle button pan. The wheel pans, and Shift with the wheel pans
+    // sideways. Ctrl with the wheel zooms. Alt marks the one gesture Figma
+    // has no answer for, the zoom of the TV box, so the camera leaves that
+    // one alone. PLAN.md section 3.1.
+    let panning = (space && down) || middle;
+    // egui smooths one wheel notch into a stream of small factors over
+    // many frames. Whoever the gesture started with keeps it to the end,
+    // or a DM who lets Alt go too early would hand the rest of a box zoom
+    // to the camera.
+    if zoomed(zoom) {
+        zoom_goes_to.get_or_insert(box_takes_zoom && alt);
+    } else {
+        *zoom_goes_to = None;
+    }
+    let box_zoom = (*zoom_goes_to == Some(true)).then_some(zoom);
+    if panning {
+        *camera = camera.panned((f64::from(drag.x) * ppp, f64::from(drag.y) * ppp));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    if response.hovered() {
+        // Some platforms turn Shift and the wheel into a sideways scroll
+        // before egui sees it, and some leave that to the program.
+        let wheel = if shift && scroll.x == 0.0 {
+            egui::vec2(scroll.y, 0.0)
+        } else {
+            scroll
+        };
+        if wheel != egui::Vec2::ZERO {
+            *camera = camera.panned((f64::from(wheel.x) * ppp, f64::from(wheel.y) * ppp));
+        }
+        if let (true, None, Some(at)) = (zoomed(zoom), box_zoom, pos) {
+            let screen = (f64::from(at.x) * ppp, f64::from(at.y) * ppp);
+            *camera = camera.zoomed_at(screen, f64::from(zoom), viewport);
+        }
+    }
+    key_zoom(
+        ui,
+        camera,
+        pos.map(|at| (f64::from(at.x) * ppp, f64::from(at.y) * ppp)),
+        viewport,
+    );
+
+    let view = View::new(ui, *camera, viewport);
+    // A tool must not move a map while the DM moves the camera, so the
+    // button reads as up for as long as the pan runs.
+    let button = match (panning, pressed, down) {
+        (false, true, _) => Button::Pressed,
+        (false, false, true) => Button::Held,
+        _ => Button::Up,
+    };
     let pointer = Pointer {
-        pressed,
-        down,
+        button,
         pos,
         hovered: response.hovered(),
+        panning,
+        box_zoom,
     };
     (rect, view, pointer)
+}
+
+/// The zoom keys of a browser, on the DM camera.
+///
+/// Ctrl with plus or minus steps the zoom, and Ctrl with zero goes back to
+/// the zoom a new project opens with. The point under the pointer stays
+/// where it is, as it does for the wheel.
+fn key_zoom(ui: &egui::Ui, camera: &mut Camera, pointer: Option<(f64, f64)>, viewport: (u32, u32)) {
+    let (steps, reset) = ui.input_mut(|input| {
+        let in_ = input.consume_shortcut(&ZOOM_IN) || input.consume_shortcut(&ZOOM_IN_EQUALS);
+        let out = input.consume_shortcut(&ZOOM_OUT);
+        (
+            i32::from(in_) - i32::from(out),
+            input.consume_shortcut(&ZOOM_RESET),
+        )
+    });
+    if steps == 0 && !reset {
+        return;
+    }
+    // Without a pointer, hold the middle of the window instead.
+    let at = pointer.unwrap_or((f64::from(viewport.0) / 2.0, f64::from(viewport.1) / 2.0));
+    let factor = if reset {
+        DEFAULT_PIXELS_PER_INCH / camera.pixels_per_inch
+    } else {
+        KEY_ZOOM_STEP.powi(steps)
+    };
+    *camera = camera.zoomed_at(at, factor, viewport);
+}
+
+/// Whether egui reported a zoom gesture this frame.
+///
+/// egui reads Ctrl with the wheel as a zoom factor, and gives 1.0 when no
+/// gesture happened. A pinch arrives the same way, but only from macOS and
+/// iOS: winit 0.30 never sends `PinchGesture` from X11 or from Wayland.
+fn zoomed(factor: f32) -> bool {
+    (factor - 1.0).abs() > f32::EPSILON
+}
+
+/// `T` puts the whole TV box on the DM screen. PLAN.md section 5.4.
+fn frame_tv_box(ui: &egui::Ui, frame: &mut Frame<'_>, rect: egui::Rect, viewport: (u32, u32)) {
+    let asked = ui.input(|i| i.key_pressed(egui::Key::T)) && !ui.ctx().egui_wants_keyboard_input();
+    if !asked {
+        return;
+    }
+    let ppp = f64::from(ui.ctx().pixels_per_point());
+    let area = Area {
+        min: (f64::from(rect.min.x) * ppp, f64::from(rect.min.y) * ppp),
+        size: (
+            f64::from(rect.width()) * ppp,
+            f64::from(rect.height()) * ppp,
+        ),
+    };
+    let size = (frame.tv_box.width, frame.tv_box.height(frame.tv_viewport));
+    *frame.camera = fit(frame.tv_box.center, size, area, viewport, FRAME_MARGIN);
 }
 
 /// Shows the cursor of the drag while one runs, and the cursor of the
@@ -954,6 +1172,9 @@ fn set_cursor(
     pointer: Pointer,
     handles: &[egui::Pos2],
 ) {
+    if pointer.panning {
+        return;
+    }
     let icon = if dragging {
         drag_icon
     } else {
