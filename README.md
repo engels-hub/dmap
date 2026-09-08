@@ -2,6 +2,9 @@
 
 [![aislop](https://badges.scanaislop.com/score/engels-hub/dmap.svg)](https://scanaislop.com/engels-hub/dmap)
 
+## WARNING: This is a work in progress. Keep track of feature completion in the "Issues" section
+
+
 dmap shows maps for a tabletop role-playing game on a TV.
 
 - The program has one canvas with no limits. The canvas holds many maps.
