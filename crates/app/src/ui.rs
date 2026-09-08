@@ -1022,9 +1022,9 @@ fn canvas_area(
 
     // The canvas takes its controls from Figma. Space with a drag and the
     // middle button pan. The wheel pans, and Shift with the wheel pans
-    // sideways. Ctrl with the wheel zooms, and so does a pinch. Alt marks
-    // the one gesture Figma has no answer for, the zoom of the TV box, so
-    // the camera leaves that one alone. PLAN.md section 3.1.
+    // sideways. Ctrl with the wheel zooms. Alt marks the one gesture Figma
+    // has no answer for, the zoom of the TV box, so the camera leaves that
+    // one alone. PLAN.md section 3.1.
     let panning = (space && down) || middle;
     // egui smooths one wheel notch into a stream of small factors over
     // many frames. Whoever the gesture started with keeps it to the end,
@@ -1077,8 +1077,9 @@ fn canvas_area(
 
 /// Whether egui reported a zoom gesture this frame.
 ///
-/// egui reads Ctrl with the wheel, and a pinch on a touchpad, as one zoom
-/// factor. It gives 1.0 when neither happened.
+/// egui reads Ctrl with the wheel as a zoom factor, and gives 1.0 when no
+/// gesture happened. A pinch arrives the same way, but only from macOS and
+/// iOS: winit 0.30 never sends `PinchGesture` from X11 or from Wayland.
 fn zoomed(factor: f32) -> bool {
     (factor - 1.0).abs() > f32::EPSILON
 }

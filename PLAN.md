@@ -42,7 +42,7 @@ Other options and the reasons against them:
 
 | Camera | Description | Controls |
 |---|---|---|
-| **DM camera** | The pan and the zoom of the editor. This is editor state only. The TV does not get it. | The controls come from Figma. The wheel pans. Shift with the wheel pans sideways. Ctrl with the wheel zooms, and so does a pinch. Space with a drag pans, and so does the middle button. Home shows all. `T` shows the TV box. |
+| **DM camera** | The pan and the zoom of the editor. This is editor state only. The TV does not get it. | The controls come from Figma. The wheel pans. Shift with the wheel pans sideways. Ctrl with the wheel zooms. Ctrl with two fingers on a touchpad does the same. Space with a drag pans, and so does the middle button. Home shows all. `T` shows the TV box. |
 | **TV camera** | The **TV box**: a rectangle in world space with a position, a rotation and a zoom. | Drag, turn and scale the box on the DM screen. The arrow keys move the box one grid cell. |
 
 The DM camera and the TV box are not related. The DM can zoom out to see the full canvas while the TV shows one room at 1:1. The DM can zoom in to one corner while the TV shows the full map. A "follow TV" option locks the DM camera to the TV box.
@@ -159,7 +159,7 @@ Extension point: `trait RenderPass { fn prepare(&mut self, scene, view); fn rend
 - Hotkeys:
   - Space+drag or middle drag: pan.
   - Wheel: pan. Shift with the wheel: pan sideways.
-  - Ctrl with the wheel, or a pinch: zoom the DM camera.
+  - Ctrl with the wheel: zoom the DM camera. A touchpad sends this as Ctrl with two fingers.
   - Ctrl and Alt with the wheel: zoom the TV box.
   - F: flip.
   - R: turn 90°.
