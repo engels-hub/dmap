@@ -831,6 +831,11 @@ impl Default for Tree {
 /// a handful of rows.
 fn tree_panel(ui: &mut egui::Ui, scene: &mut Scene, select: &mut Select, tree: &mut Tree) -> bool {
     let mut edited = false;
+    // A group the DM marked can go, by Ungroup or by a hand-edited file.
+    // The root is always there to take a new asset.
+    if !crate::scene::has_group(scene, tree.active) {
+        tree.active = ROOT_ID;
+    }
     // A node the DM picked on the canvas opens the groups above it, so the
     // list shows the row without a hunt.
     if tree.shown != select.only() {
@@ -936,7 +941,7 @@ fn tree_rows(
                     edited |= ui.checkbox(&mut group.shown.dm, "").changed();
                     edited |= ui.checkbox(&mut group.shown.tv, "").changed();
                 });
-                dropped_on(&row.response, id, true, moved);
+                dropped_on(ui, &row.response, id, true, moved);
                 if open {
                     edited |= tree_rows(ui, &mut group.children, select, tree, depth + 1, moved);
                 }
@@ -961,7 +966,7 @@ fn tree_rows(
                     edited |= ui.checkbox(&mut asset.shown.dm, "").changed();
                     edited |= ui.checkbox(&mut asset.shown.tv, "").changed();
                 });
-                dropped_on(&row.response, asset.id, false, moved);
+                dropped_on(ui, &row.response, asset.id, false, moved);
             }
         }
     }
@@ -983,6 +988,7 @@ fn grip(ui: &mut egui::Ui, id: NodeId) {
 /// A drop on a group goes into that group. A drop on an asset takes the
 /// place of that asset, in the group that holds it.
 fn dropped_on(
+    ui: &egui::Ui,
     row: &egui::Response,
     id: NodeId,
     is_group: bool,
@@ -990,8 +996,7 @@ fn dropped_on(
 ) {
     if row.dnd_hover_payload::<NodeId>().is_some() {
         let rect = row.rect;
-        row.ctx
-            .debug_painter()
+        ui.painter()
             .hline(rect.x_range(), rect.top(), egui::Stroke::new(2.0, ACCENT));
     }
     if let Some(dragged) = row.dnd_release_payload::<NodeId>() {
@@ -1175,8 +1180,11 @@ fn canvas(
     } else if let Some(Drag::Band { start_cursor }) = select.drag.take() {
         // The band is over: what it covered is what the DM now holds.
         if let Some(pos) = pointer.pos {
-            let covered = band_covers(frame, start_cursor, view.to_world(pos));
-            select.chosen.extend(covered);
+            for id in band_covers(frame, start_cursor, view.to_world(pos)) {
+                if !select.holds(id) {
+                    select.chosen.push(id);
+                }
+            }
             select.popup = !select.chosen.is_empty();
         }
     }
@@ -1964,10 +1972,13 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             pivot,
             start_cursor,
         } => {
-            // A group turns as one piece, so the angle it sweeps is the
-            // angle every asset in it takes on.
-            let angle = rotation_from_drag(0.0, pivot, start_cursor, cursor, snap);
-            crate::scene::rotate_about(frame.scene, &starts, pivot, angle);
+            // The snap lands the turn of the first asset on a step, not
+            // the sweep of the drag, so an asset that starts off a step
+            // can get back on one. A group turns as one piece, so every
+            // asset in it takes the same angle.
+            let base = starts.first().map_or(0.0, |first| first.rotation);
+            let turned = rotation_from_drag(base, pivot, start_cursor, cursor, snap);
+            crate::scene::rotate_about(frame.scene, &starts, pivot, turned - base);
             true
         }
     }

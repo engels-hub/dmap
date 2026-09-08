@@ -465,7 +465,12 @@ pub fn move_into(scene: &mut Scene, id: NodeId, parent: NodeId) -> bool {
     if id == parent || ancestors(scene, parent).contains(&id) {
         return false;
     }
-    if parent_of(scene, id) == Some((parent, 0)) && assets_of(scene, parent).len() == 1 {
+    // A node already on top of that group has nowhere to go.
+    if children_of(scene, parent)
+        .and_then(<[Node]>::last)
+        .map(Node::id)
+        == Some(id)
+    {
         return false;
     }
     let Some(node) = take_node(scene, id) else {
@@ -562,6 +567,22 @@ pub fn rotate_about(scene: &mut Scene, starts: &[Placed], pivot: (f64, f64), ang
         asset.center = (pivot.0 + dx * cos - dy * sin, pivot.1 + dx * sin + dy * cos);
         asset.rotation = start.rotation + angle;
     }
+}
+
+/// What a group holds, the root included.
+pub fn children_of(scene: &Scene, id: NodeId) -> Option<&[Node]> {
+    if id == ROOT_ID {
+        return Some(&scene.root.children);
+    }
+    Some(find(scene, id)?.group()?.children.as_slice())
+}
+
+/// Whether the tree still holds this group.
+///
+/// A group the DM marked can go while the mark stays behind, and a caller
+/// that puts something in it must know.
+pub fn has_group(scene: &Scene, id: NodeId) -> bool {
+    children_of(scene, id).is_some()
 }
 
 /// Every group in the scene, the root first, each with how deep it sits.
@@ -1624,5 +1645,26 @@ mod tests {
         // A quarter turn takes it to two inches below the middle.
         assert!(pin.center.0.abs() < 1e-9 && (pin.center.1 - 2.0).abs() < 1e-9);
         assert!((pin.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_node_on_top_of_a_group_stays_where_it_is() {
+        let mut scene = family();
+        // pin.png is the top child of Notes, so a drop on Notes is a no-op.
+        assert!(!super::move_into(&mut scene, 5, 3));
+        // note.png is under it, and has somewhere to go.
+        assert!(super::move_into(&mut scene, 4, 3));
+        assert_eq!(assets_of(&scene, 3), vec![5, 4]);
+    }
+
+    #[test]
+    fn a_group_that_went_is_no_longer_there_to_fill() {
+        let mut scene = family();
+        assert!(super::has_group(&scene, 3));
+        assert!(super::has_group(&scene, ROOT_ID));
+        // An asset is not a group, and neither is a name nothing holds.
+        assert!(!super::has_group(&scene, 1));
+        super::ungroup(&mut scene, 3);
+        assert!(!super::has_group(&scene, 3));
     }
 }

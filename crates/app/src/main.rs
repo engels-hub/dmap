@@ -338,11 +338,14 @@ impl Running {
             }
         };
         self.loader.request(self.scene_dir.join(&stored));
-        // A new asset joins the group the DM works in.
+        // A new asset joins the group the DM works in. That group may
+        // have gone since the DM marked it, and the root is always there.
+        if !scene::has_group(&self.scene, self.active_group) {
+            self.active_group = scene::ROOT_ID;
+        }
         let id = self.scene.next_id();
         let asset = Asset::new(id, stored, self.camera.center);
-        push_into(&mut self.scene, self.active_group, Node::Asset(asset));
-        true
+        push_into(&mut self.scene, self.active_group, Node::Asset(asset))
     }
 
     /// Asks for an image file and adds it. Returns `true` when a file was added.
