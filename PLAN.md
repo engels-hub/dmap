@@ -42,7 +42,7 @@ Other options and the reasons against them:
 
 | Camera | Description | Controls |
 |---|---|---|
-| **DM camera** | The pan and the zoom of the editor. This is editor state only. The TV does not get it. | Scroll to zoom. Space+drag or middle drag to pan. Home shows all. `T` shows the TV box. |
+| **DM camera** | The pan and the zoom of the editor. This is editor state only. The TV does not get it. | The controls come from Figma. The wheel pans. Shift with the wheel pans sideways. Ctrl with the wheel zooms, and so does a pinch. Space with a drag pans, and so does the middle button. Home shows all. `T` shows the TV box. |
 | **TV camera** | The **TV box**: a rectangle in world space with a position, a rotation and a zoom. | Drag, turn and scale the box on the DM screen. The arrow keys move the box one grid cell. |
 
 The DM camera and the TV box are not related. The DM can zoom out to see the full canvas while the TV shows one room at 1:1. The DM can zoom in to one corner while the TV shows the full map. A "follow TV" option locks the DM camera to the TV box.
@@ -52,7 +52,7 @@ The DM camera and the TV box are not related. The DM can zoom out to see the ful
 - The zoom is one number on the TV box. At `zoom = 1.0` (100 %) the box is `W/PPI × H/PPI` inches. One grid cell is one real inch on the TV.
 - The corner handles of the box change the zoom. A larger box shows more world, so the zoom is less than 100 %. A smaller box gives a zoom of more than 100 %. The aspect ratio is always the ratio of the TV.
 - **Snap to 100 %**: the drag stops. If the zoom is in `snap_threshold` of 1.0, the zoom snaps to 1.0. A setting also permits the snap during the drag. The setting `snap_threshold` has a default of 8 %. Settings also hold an optional list of other snap levels (50 %, 200 %). Settings hold the key that stops the snap. The default key is `Alt`. The box outline changes color when the zoom is at 100 %.
-- The DM can type the zoom as a number. `Ctrl`+scroll changes the zoom when the TvBox tool is active. The zoom value is shown next to the box.
+- The DM can type the zoom as a number. `Ctrl` and `Alt` with the wheel change the zoom when the Table tool is active. Figma has no gesture that resizes an object with the wheel, so `Alt` marks this one as ours, and keeps the DM camera out of it. The zoom value is shown next to the box.
 - A change of the box size does not change the map scale. It changes only the area that the TV shows.
 
 ## 4. Grid
@@ -157,8 +157,10 @@ Extension point: `trait RenderPass { fn prepare(&mut self, scene, view); fn rend
 - egui panels: the layer list, the object properties, the TV settings, the light settings, the import dialog, the tool bar.
 - Settings are for the app, not for the project. They hold the TV snap threshold, the other snap levels, the snap stop key, the default grid config and the hotkeys.
 - Hotkeys:
-  - Space+drag: pan.
-  - Scroll: zoom (DM camera only).
+  - Space+drag or middle drag: pan.
+  - Wheel: pan. Shift with the wheel: pan sideways.
+  - Ctrl with the wheel, or a pinch: zoom the DM camera.
+  - Ctrl and Alt with the wheel: zoom the TV box.
   - F: flip.
   - R: turn 90°.
   - Arrows: move the TV box one cell.

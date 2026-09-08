@@ -71,10 +71,6 @@ const ZOOM_LABEL_GAP: f32 = 6.0;
 /// by this much.
 const CELL: f64 = 1.0;
 
-/// How hard the wheel zooms. One notch of a mouse wheel is about 50 units,
-/// so a notch changes the zoom by about a tenth.
-const ZOOM_PER_SCROLL: f64 = 0.002;
-
 /// The share of the canvas the TV box takes when `T` frames it.
 const FRAME_MARGIN: f64 = 0.9;
 
@@ -89,6 +85,9 @@ pub struct DmUi {
     tool: Tool,
     select: Select,
     table: Table,
+    /// Who takes the zoom gesture that is running: the TV box, or the
+    /// camera. `None` while no gesture runs.
+    zoom_goes_to: Option<bool>,
     /// A map or the TV box changed since the last save.
     dirty: bool,
 }
@@ -217,6 +216,11 @@ struct Pointer {
     hovered: bool,
     /// The DM is moving the camera, so the tools keep their hands off.
     panning: bool,
+    /// The zoom gesture that belongs to the TV box, if this one does.
+    ///
+    /// One read of the keyboard decides who takes a zoom gesture, so the
+    /// camera and the box can never both act on the same one.
+    box_zoom: Option<f32>,
 }
 
 impl Pointer {
@@ -292,6 +296,7 @@ impl DmUi {
             tool: Tool::default(),
             select: Select::default(),
             table: Table::default(),
+            zoom_goes_to: None,
             dirty: false,
         }
     }
@@ -315,6 +320,7 @@ impl DmUi {
         let select = &mut self.select;
         let table = &mut self.table;
         let tool = &mut self.tool;
+        let zoom_goes_to = &mut self.zoom_goes_to;
         let selected_before = select.selected;
         let output = ctx.run_ui(raw_input, |ui| {
             // A click that closes a popup must not reach the canvas.
@@ -326,8 +332,8 @@ impl DmUi {
                 let rect = ui.available_rect_before_wrap();
                 frame_tv_box(ui, &mut frame, rect, viewport);
                 edited |= match *tool {
-                    Tool::Select => canvas(ui, select, &mut frame, viewport),
-                    Tool::Table => table_tool(ui, table, &mut frame, viewport),
+                    Tool::Select => canvas(ui, select, &mut frame, viewport, zoom_goes_to),
+                    Tool::Table => table_tool(ui, table, &mut frame, viewport, zoom_goes_to),
                 };
             }
         });
@@ -606,8 +612,9 @@ fn canvas(
     select: &mut Select,
     frame: &mut Frame<'_>,
     viewport: (u32, u32),
+    zoom_goes_to: &mut Option<bool>,
 ) -> bool {
-    let (rect, view, pointer) = canvas_area(ui, frame.camera, viewport);
+    let (rect, view, pointer) = canvas_area(ui, frame.camera, viewport, false, zoom_goes_to);
     let snap = !ui.input(|i| i.modifiers.ctrl);
 
     // The measure tool takes the canvas for two clicks. Escape gives up.
@@ -682,8 +689,9 @@ fn table_tool(
     table: &mut Table,
     frame: &mut Frame<'_>,
     viewport: (u32, u32),
+    zoom_goes_to: &mut Option<bool>,
 ) -> bool {
-    let (rect, view, pointer) = canvas_area(ui, frame.camera, viewport);
+    let (rect, view, pointer) = canvas_area(ui, frame.camera, viewport, true, zoom_goes_to);
     let corners = frame.tv_box.corners(frame.tv_viewport);
     let handles: Vec<egui::Pos2> = corners.iter().map(|&c| view.to_screen(c)).collect();
     let handle_points: Vec<(f64, f64)> = handles
@@ -743,13 +751,11 @@ fn table_tool(
         edited |= arrow_keys(ui, frame.tv_box);
     }
 
-    // Ctrl with the wheel reaches a zoom without a drag on a handle.
-    // PLAN.md section 3.2. egui reads Ctrl and the wheel as one zoom
-    // gesture and takes it out of the scroll, so the DM camera never sees
-    // it. A pinch on a touchpad arrives the same way.
-    let pinch = f64::from(ui.input(egui::InputState::zoom_delta));
-    if (pinch - 1.0).abs() > f64::EPSILON && pointer.hovered {
-        let zoom = frame.tv_box.zoom(TV_WIDTH_INCHES) * pinch;
+    // Ctrl and Alt with the wheel reach a zoom without a drag on a handle.
+    // Figma has no gesture that resizes an object with the wheel, so Alt
+    // marks this one as ours. The canvas already gave the gesture up.
+    if let (Some(pinch), true) = (pointer.box_zoom, pointer.hovered) {
+        let zoom = frame.tv_box.zoom(TV_WIDTH_INCHES) * f64::from(pinch);
         frame.tv_box.width = clamp_width(TV_WIDTH_INCHES / zoom);
         edited = true;
     }
@@ -993,11 +999,13 @@ fn canvas_area(
     ui: &mut egui::Ui,
     camera: &mut Camera,
     viewport: (u32, u32),
+    box_takes_zoom: bool,
+    zoom_goes_to: &mut Option<bool>,
 ) -> (egui::Rect, View, Pointer) {
     let rect = ui.available_rect_before_wrap();
     let response = ui.interact(rect, ui.id().with("canvas"), egui::Sense::click_and_drag());
     let ppp = f64::from(ui.ctx().pixels_per_point());
-    let (pressed, down, pos, space, middle, delta, scroll, ctrl) = ui.input(|i| {
+    let (pressed, down, pos, space, middle, drag, scroll, zoom, shift, alt) = ui.input(|i| {
         (
             i.pointer.primary_pressed(),
             i.pointer.primary_down(),
@@ -1005,22 +1013,48 @@ fn canvas_area(
             i.key_down(egui::Key::Space),
             i.pointer.middle_down(),
             i.pointer.delta(),
-            f64::from(i.smooth_scroll_delta.y),
-            i.modifiers.ctrl,
+            i.smooth_scroll_delta,
+            i.zoom_delta(),
+            i.modifiers.shift,
+            i.modifiers.alt,
         )
     });
 
-    // Space with a drag, or the middle button, pans the DM camera. The
-    // wheel zooms it under the pointer. Ctrl with the wheel belongs to the
-    // TV box, so the camera leaves that alone. PLAN.md section 3.1.
+    // The canvas takes its controls from Figma. Space with a drag and the
+    // middle button pan. The wheel pans, and Shift with the wheel pans
+    // sideways. Ctrl with the wheel zooms, and so does a pinch. Alt marks
+    // the one gesture Figma has no answer for, the zoom of the TV box, so
+    // the camera leaves that one alone. PLAN.md section 3.1.
     let panning = (space && down) || middle;
+    // egui smooths one wheel notch into a stream of small factors over
+    // many frames. Whoever the gesture started with keeps it to the end,
+    // or a DM who lets Alt go too early would hand the rest of a box zoom
+    // to the camera.
+    if zoomed(zoom) {
+        zoom_goes_to.get_or_insert(box_takes_zoom && alt);
+    } else {
+        *zoom_goes_to = None;
+    }
+    let box_zoom = (*zoom_goes_to == Some(true)).then_some(zoom);
     if panning {
-        *camera = camera.panned((f64::from(delta.x) * ppp, f64::from(delta.y) * ppp));
+        *camera = camera.panned((f64::from(drag.x) * ppp, f64::from(drag.y) * ppp));
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     }
-    if let (true, false, true, Some(at)) = (scroll != 0.0, ctrl, response.hovered(), pos) {
-        let screen = (f64::from(at.x) * ppp, f64::from(at.y) * ppp);
-        *camera = camera.zoomed_at(screen, scroll_zoom(scroll), viewport);
+    if response.hovered() {
+        // Some platforms turn Shift and the wheel into a sideways scroll
+        // before egui sees it, and some leave that to the program.
+        let wheel = if shift && scroll.x == 0.0 {
+            egui::vec2(scroll.y, 0.0)
+        } else {
+            scroll
+        };
+        if wheel != egui::Vec2::ZERO {
+            *camera = camera.panned((f64::from(wheel.x) * ppp, f64::from(wheel.y) * ppp));
+        }
+        if let (true, None, Some(at)) = (zoomed(zoom), box_zoom, pos) {
+            let screen = (f64::from(at.x) * ppp, f64::from(at.y) * ppp);
+            *camera = camera.zoomed_at(screen, f64::from(zoom), viewport);
+        }
     }
 
     let view = View::new(ui, *camera, viewport);
@@ -1036,16 +1070,17 @@ fn canvas_area(
         pos,
         hovered: response.hovered(),
         panning,
+        box_zoom,
     };
     (rect, view, pointer)
 }
 
-/// The zoom factor for one wheel event of `scroll` units.
+/// Whether egui reported a zoom gesture this frame.
 ///
-/// The factor grows and shrinks by the same share, so a notch forward and
-/// a notch back leave the zoom where it was.
-fn scroll_zoom(scroll: f64) -> f64 {
-    (scroll * ZOOM_PER_SCROLL).exp()
+/// egui reads Ctrl with the wheel, and a pinch on a touchpad, as one zoom
+/// factor. It gives 1.0 when neither happened.
+fn zoomed(factor: f32) -> bool {
+    (factor - 1.0).abs() > f32::EPSILON
 }
 
 /// `T` puts the whole TV box on the DM screen. PLAN.md section 5.4.
