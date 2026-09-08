@@ -44,7 +44,7 @@ A scene is a folder. The folder holds one `scene.json` and the map images beside
 
 The program keeps its own file in `~/.config/dmap/config.json`. It holds the folder your scenes live in and the scene you had open last. It also holds the settings of this table: the TV display, swap mode and the snap window. A scene carries none of those, so your TV does not travel with a scene you give away.
 
-Both files are JSON, and both are written to be read. Edit them by hand if you like.
+Both files hold plain JSON. Read them, and edit them by hand if you like.
 
 Start the program with no argument and it opens the scene you had open last. Give it a scene folder to open that one:
 
@@ -54,9 +54,9 @@ cargo run --release -- ~/dmap/scenes/The Crypt
 
 To move your scenes somewhere else, such as a campaign folder you already keep, change `scenes_dir` in the config file.
 
-An image you add is copied into the scene folder. The same image twice keeps one copy. A different image of the same name gets a number.
+The program copies an image you add into the scene folder. The same image twice keeps one copy. A different image of the same name gets a number.
 
-Pick the TV display in the Settings panel. The choice is saved in the config file.
+Pick the TV display in the Settings panel. The program keeps the choice in the config file.
 
 ## Controls
 
@@ -104,6 +104,8 @@ Add a map with the Add map button, or drop an image file on the DM window.
 
 **Scenes** in the rail opens the list of your scenes. Every row is a folder.
 
+Caution: Delete takes the scene folder and every map in it. Nothing brings them back. The list asks you once before it does this.
+
 | Action | Control |
 |---|---|
 | Put a scene on the canvas | Open |
@@ -111,7 +113,8 @@ Add a map with the Add map button, or drop an image file on the DM window.
 | Give a scene another name | Rename, then type and press Enter |
 | Delete a scene and its maps | Delete, then Delete again to answer the question |
 | Show the folder in your file manager | Folder |
+| Keep your scenes somewhere else | Change, next to the scenes folder |
 
-The open scene stands out in the accent color. A scene is saved as you work, so a switch never asks you to save.
+The open scene stands out in the accent color. The program saves a scene as you work, so a switch never asks you to save.
 
 Read [PLAN.md](PLAN.md) for the architecture and the milestones. Read [DESIGN.md](DESIGN.md) for the visual language of the DM window.

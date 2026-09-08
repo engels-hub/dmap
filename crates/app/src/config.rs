@@ -188,7 +188,9 @@ pub fn delete_scene(scenes_dir: &Path, name: &str) -> Result<()> {
 
 /// The home folder, or the current folder when there is none.
 fn home() -> PathBuf {
-    std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map_or_else(|| PathBuf::from("."), PathBuf::from)
 }
 
 /// Where the scenes live when the DM has not said otherwise.
@@ -198,11 +200,16 @@ pub fn default_scenes_dir(home: &Path) -> PathBuf {
 
 /// The file that holds the config.
 ///
-/// This follows the XDG base directory rules: `XDG_CONFIG_HOME` when the
-/// desktop sets it, and `~/.config` when it does not.
+/// A Linux desktop follows the XDG base directory rules: `XDG_CONFIG_HOME`
+/// when it sets one, and `~/.config` when it does not. Windows keeps a
+/// config under `APPDATA`.
 pub fn config_path() -> PathBuf {
-    let base =
-        std::env::var_os("XDG_CONFIG_HOME").map_or_else(|| home().join(".config"), PathBuf::from);
+    let folder = if cfg!(windows) {
+        "APPDATA"
+    } else {
+        "XDG_CONFIG_HOME"
+    };
+    let base = std::env::var_os(folder).map_or_else(|| home().join(".config"), PathBuf::from);
     base.join("dmap").join("config.json")
 }
 
@@ -266,6 +273,33 @@ mod tests {
             snap_percent: 12.0,
         };
         assert_eq!(Config::from_json(&config.to_json()).unwrap(), config);
+    }
+
+    #[test]
+    fn every_way_to_place_the_tv_round_trips() {
+        for tv_display in [
+            TvPlacement::Auto,
+            TvPlacement::Window,
+            TvPlacement::Display("HDMI-1".to_owned()),
+        ] {
+            let config = Config {
+                tv_display: tv_display.clone(),
+                ..Config::default()
+            };
+            assert_eq!(
+                Config::from_json(&config.to_json()).unwrap().tv_display,
+                tv_display
+            );
+        }
+    }
+
+    #[test]
+    fn the_display_choice_reads_plainly_in_the_file() {
+        let config = Config {
+            tv_display: TvPlacement::Display("HDMI-1".to_owned()),
+            ..Config::default()
+        };
+        assert!(config.to_json().contains("\"display\": \"HDMI-1\""));
     }
 
     #[test]

@@ -21,7 +21,7 @@ mod ui;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use egui_winit::winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -63,13 +63,21 @@ const DM_CAMERA: Camera = Camera {
 
 fn main() -> Result<()> {
     let mut config = load_config()?;
-    let scene_dir = scene_to_open(&mut config);
+    let scene_dir = scene_to_open(&mut config)?;
     std::fs::create_dir_all(&scene_dir)
         .with_context(|| format!("{}: cannot make the scene folder", scene_dir.display()))?;
     let scene = load_scene(&scene_dir)?;
-    // Write both files at once. The scene folder then exists on disk, and
-    // the next run without an argument finds its way back to it.
-    save(&config, &scene, &scene_dir)?;
+    // The config remembers this scene for the next run. The scene file is
+    // written only when it is missing, so a scene on a read-only stick
+    // still opens, and a write that fails does not end the run.
+    if let Err(error) = save_config(&config) {
+        eprintln!("{error:#}");
+    }
+    if !scene_dir.join(SCENE_FILE).exists()
+        && let Err(error) = save_scene(&scene, &scene_dir)
+    {
+        eprintln!("{error:#}");
+    }
     let event_loop = EventLoop::new()?;
     let mut app = App {
         config,
@@ -99,23 +107,32 @@ fn load_config() -> Result<Config> {
 /// A folder on the command line wins. A path to a scene file names its own
 /// folder. Without an argument the program opens the scene of the last run,
 /// and a first run gets a new one. `config.last_scene` follows the choice.
-fn scene_to_open(config: &mut Config) -> PathBuf {
+fn scene_to_open(config: &mut Config) -> Result<PathBuf> {
     if let Some(argument) = std::env::args_os().nth(1) {
-        let given = PathBuf::from(argument);
+        // A path from the shell is often relative to the folder the DM
+        // stood in. The config outlives that folder, so it holds a whole
+        // path or a name, and never a way back to somewhere else.
+        let given = std::path::absolute(PathBuf::from(argument))
+            .context("cannot work out the folder of that scene")?;
         let dir = if given.file_name().is_some_and(|name| name == SCENE_FILE) {
-            given.parent().unwrap_or(Path::new(".")).to_path_buf()
+            given
+                .parent()
+                .context("a scene file needs a folder around it")?
+                .to_path_buf()
+        } else if given.is_file() {
+            bail!("{}: a scene is a folder, not a file", given.display());
         } else {
             given
         };
         config.last_scene = Some(config.remember(&dir));
-        return dir;
+        return Ok(dir);
     }
     let scene = config.last_scene.clone().unwrap_or_else(|| {
         let first = PathBuf::from(FIRST_SCENE);
         config.last_scene = Some(first.clone());
         first
     });
-    config.scene_dir(&scene)
+    Ok(config.scene_dir(&scene))
 }
 
 /// Reads the scene file, or starts an empty scene when there is none.
@@ -335,6 +352,11 @@ impl Running {
     /// Moves finished image files to the GPU.
     fn upload_loaded_images(&mut self) {
         while let Some((file, result)) = self.loader.poll() {
+            // The scene may have changed while the image decoded. A result
+            // from another folder is not part of what the canvas shows.
+            if file.parent() != Some(self.scene_dir.as_path()) {
+                continue;
+            }
             let stored = relative_path(&self.scene_dir, &file);
             match result {
                 Ok(decoded) => {
@@ -359,9 +381,10 @@ impl Running {
                 settings: &mut self.settings,
                 maps: &mut self.maps,
                 camera: &mut self.camera,
-                scene_name: &scene_name(&self.scene_dir),
+                scene_dir: &self.scene_dir,
                 list_scenes: &|| config::scene_list(&self.scenes_dir),
                 scene_error: &self.scene_error,
+                scenes_dir: &self.scenes_dir,
                 tv_box: &mut self.tv_box,
                 tv_viewport: (self.tv.config.width, self.tv.config.height),
                 size_of: &|path| map_layer.size_of(path),
@@ -446,12 +469,20 @@ impl Running {
         self.maps.clone_from(&scene.maps);
         self.tv_box = scene.tv_box.clamped();
         self.map_layer.clear();
-        for map in &self.maps {
-            self.loader.request(self.scene_dir.join(&map.path));
-        }
+        self.reload_images();
         self.dm.window.set_title(&window_title(&self.scene_dir));
         self.dm.window.request_redraw();
         self.tv.window.request_redraw();
+    }
+
+    /// Asks the loader for every image of the open scene again.
+    ///
+    /// A scene that moves takes its images with it, so what is in flight
+    /// carries the old folder and never arrives.
+    fn reload_images(&self) {
+        for map in &self.maps {
+            self.loader.request(self.scene_dir.join(&map.path));
+        }
     }
 
     /// Copies what the DM changed into the config and the scene.
@@ -561,9 +592,27 @@ fn reveal(dir: &Path) -> Result<()> {
 ///
 /// Returns an error when a folder cannot be made or a file cannot be written.
 fn save(config: &Config, scene: &Scene, scene_dir: &Path) -> Result<()> {
+    save_scene(scene, scene_dir)?;
+    save_config(config)
+}
+
+/// Writes the scene file beside its images.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be written.
+fn save_scene(scene: &Scene, scene_dir: &Path) -> Result<()> {
     let scene_file = scene_dir.join(SCENE_FILE);
     std::fs::write(&scene_file, scene.to_json())
-        .with_context(|| format!("{}: cannot save the scene", scene_file.display()))?;
+        .with_context(|| format!("{}: cannot save the scene", scene_file.display()))
+}
+
+/// Writes the config in the folder the desktop keeps configs in.
+///
+/// # Errors
+///
+/// Returns an error when the folder or the file cannot be written.
+fn save_config(config: &Config) -> Result<()> {
     let config_file = config::config_path();
     if let Some(folder) = config_file.parent() {
         std::fs::create_dir_all(folder)
@@ -593,7 +642,12 @@ impl App {
         let outcome = running.window_event(window_id, event)?;
         if outcome.save {
             running.update(&mut self.config, &mut self.scene);
-            save(&self.config, &self.scene, &self.scene_dir)?;
+            // A write that fails leaves the session alone. The DM keeps
+            // working, and the message says what went wrong.
+            if let Err(error) = save(&self.config, &self.scene, &self.scene_dir) {
+                eprintln!("{error:#}");
+                running.scene_error = format!("{error:#}");
+            }
         }
         if let Some(command) = outcome.scene {
             // A dialog that asks for the impossible, such as a name another
@@ -628,6 +682,7 @@ impl App {
                     running.scene_dir.clone_from(&self.scene_dir);
                     self.config.last_scene = Some(self.config.remember(&self.scene_dir));
                     running.dm.window.set_title(&window_title(&self.scene_dir));
+                    running.reload_images();
                 }
             }
             SceneCommand::Delete(name) => {
@@ -645,6 +700,21 @@ impl App {
                 }
             }
             SceneCommand::Reveal(name) => reveal(&scenes_dir.join(&name))?,
+            SceneCommand::ScenesFolder => {
+                let Some(picked) = rfd::FileDialog::new()
+                    .set_directory(&scenes_dir)
+                    .pick_folder()
+                else {
+                    return Ok(());
+                };
+                std::fs::create_dir_all(&picked)
+                    .with_context(|| format!("{}: cannot use this folder", picked.display()))?;
+                self.config.scenes_dir = picked;
+                running.scenes_dir.clone_from(&self.config.scenes_dir);
+                // The open scene may sit outside the new folder, and then
+                // it is remembered by its whole path.
+                self.config.last_scene = Some(self.config.remember(&self.scene_dir));
+            }
         }
         save(&self.config, &self.scene, &self.scene_dir)
     }

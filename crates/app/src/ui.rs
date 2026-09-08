@@ -163,12 +163,14 @@ pub struct Frame<'a> {
     pub tv_viewport: (u32, u32),
     /// Pixel size of a map's image, once loaded.
     pub size_of: &'a dyn Fn(&Path) -> Option<(u32, u32)>,
-    /// The name of the open scene.
-    pub scene_name: &'a str,
+    /// The folder of the open scene.
+    pub scene_dir: &'a Path,
     /// The scenes the DM can open. Read only while the dialog is open.
     pub list_scenes: &'a dyn Fn() -> Vec<String>,
     /// What went wrong with the last thing the dialog asked for.
     pub scene_error: &'a str,
+    /// The folder that holds the scenes.
+    pub scenes_dir: &'a Path,
 }
 
 impl std::fmt::Debug for Frame<'_> {
@@ -196,6 +198,8 @@ pub enum SceneCommand {
     Rename { from: String, to: String },
     /// Delete a scene and everything in its folder.
     Delete(String),
+    /// Ask for another folder to keep the scenes in.
+    ScenesFolder,
     /// Show the scene's folder in the file manager.
     Reveal(String),
 }
@@ -389,7 +393,10 @@ impl DmUi {
             add_map = rail.add_map;
             edited = rail.edited;
             scene = scenes_dialog(ui, scenes, &frame);
-            if !popup_open {
+            // A dialog over the canvas takes the keyboard too. egui holds
+            // the pointer back on its own, but `R` and the arrow keys would
+            // still reach the map behind it.
+            if !popup_open && !scenes.open {
                 let rect = ui.available_rect_before_wrap();
                 frame_tv_box(ui, &mut frame, rect, viewport);
                 edited |= match *tool {
@@ -635,9 +642,21 @@ fn scenes_dialog(ui: &egui::Ui, scenes: &mut Scenes, frame: &Frame<'_>) -> Optio
         );
         ui.separator();
         for name in (frame.list_scenes)() {
-            scene_row(ui, scenes, frame.scene_name, &name, &mut command);
+            // Two scenes of one name can live in two folders, so the row
+            // that stands out is the one whose folder is open.
+            let open = frame.scenes_dir.join(&name) == *frame.scene_dir;
+            scene_row(ui, scenes, open, &name, &mut command);
         }
         ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Scenes folder").color(MUTE));
+            if ui.button("Change").clicked() {
+                command = Some(SceneCommand::ScenesFolder);
+            }
+        });
+        let path = frame.scenes_dir.display().to_string();
+        ui.add(egui::Label::new(egui::RichText::new(&path).color(MUTE)).truncate())
+            .on_hover_text(&path);
         if !frame.scene_error.is_empty() {
             ui.label(egui::RichText::new(frame.scene_error).color(ACCENT));
         }
@@ -653,7 +672,9 @@ fn scenes_dialog(ui: &egui::Ui, scenes: &mut Scenes, frame: &Frame<'_>) -> Optio
     if modal.should_close() {
         scenes.open = false;
     }
-    if command.is_some() {
+    // A half-typed name, or a question no one answered, does not wait for
+    // the next time the dialog opens.
+    if command.is_some() || !scenes.open {
         scenes.renaming = None;
         scenes.deleting = None;
     }
@@ -664,7 +685,7 @@ fn scenes_dialog(ui: &egui::Ui, scenes: &mut Scenes, frame: &Frame<'_>) -> Optio
 fn scene_row(
     ui: &mut egui::Ui,
     scenes: &mut Scenes,
-    open_scene: &str,
+    open: bool,
     name: &str,
     command: &mut Option<SceneCommand>,
 ) {
@@ -698,7 +719,6 @@ fn scene_row(
             }
             return;
         }
-        let open = name == open_scene;
         let label = if open {
             egui::RichText::new(name).color(ACCENT)
         } else {
