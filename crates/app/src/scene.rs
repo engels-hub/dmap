@@ -1567,6 +1567,24 @@ mod tests {
     }
 
     #[test]
+    fn a_group_that_goes_leaves_every_transform_alone() {
+        let mut scene = family();
+        // Turn and grow the group first, so its children stand apart.
+        let starts = super::placed(&scene, &[3]);
+        super::rotate_about(&mut scene, &starts, (1.0, 1.0), 0.7);
+        let starts = super::placed(&scene, &[3]);
+        super::scale_about(&mut scene, &starts, (1.0, 1.0), 1.4);
+        let before = super::placed(&scene, &[3]);
+
+        assert!(super::ungroup(&mut scene, 3));
+
+        // An asset carries where it stands, so nothing about it changes
+        // when the group around it goes.
+        let after = super::placed(&scene, &[4, 5]);
+        assert_eq!(before, after);
+    }
+
+    #[test]
     fn the_root_never_goes() {
         let mut scene = family();
         assert!(!super::ungroup(&mut scene, ROOT_ID));
