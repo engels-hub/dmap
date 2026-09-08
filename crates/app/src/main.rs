@@ -279,7 +279,7 @@ impl Running {
                 displays: &self.displays,
                 settings: &mut self.settings,
                 maps: &mut self.maps,
-                camera: &self.camera,
+                camera: &mut self.camera,
                 tv_box: &mut self.tv_box,
                 tv_viewport: (self.tv.config.width, self.tv.config.height),
                 size_of: &|path| map_layer.size_of(path),
