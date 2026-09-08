@@ -851,8 +851,12 @@ fn tree_panel(ui: &mut egui::Ui, scene: &mut Scene, select: &mut Select, tree: &
     if tree.open.contains(&ROOT_ID) {
         edited |= tree_rows(ui, &mut scene.root.children, select, tree, 1, &mut moved);
     }
-    if let Some((node, target)) = moved {
-        edited |= crate::scene::move_above(scene, node, target);
+    if let Some((node, target, into)) = moved {
+        edited |= if into {
+            crate::scene::move_into(scene, node, target)
+        } else {
+            crate::scene::move_above(scene, node, target)
+        };
     }
     if ui.button("New group").clicked() {
         let id = scene.next_id();
@@ -877,7 +881,7 @@ fn tree_rows(
     select: &mut Select,
     tree: &mut Tree,
     depth: usize,
-    moved: &mut Option<(NodeId, NodeId)>,
+    moved: &mut Option<(NodeId, NodeId, bool)>,
 ) -> bool {
     let mut edited = false;
     // The list reads from the top down, and the last node draws over the
@@ -901,7 +905,7 @@ fn tree_rows(
                     edited |= ui.checkbox(&mut group.shown.dm, "").changed();
                     edited |= ui.checkbox(&mut group.shown.tv, "").changed();
                 });
-                dropped_on(&row.response, id, moved);
+                dropped_on(&row.response, id, true, moved);
                 if open {
                     edited |= tree_rows(ui, &mut group.children, select, tree, depth + 1, moved);
                 }
@@ -926,7 +930,7 @@ fn tree_rows(
                     edited |= ui.checkbox(&mut asset.shown.dm, "").changed();
                     edited |= ui.checkbox(&mut asset.shown.tv, "").changed();
                 });
-                dropped_on(&row.response, asset.id, moved);
+                dropped_on(&row.response, asset.id, false, moved);
             }
         }
     }
@@ -944,7 +948,15 @@ fn grip(ui: &mut egui::Ui, id: NodeId) {
 }
 
 /// Marks where a row on its way through the tree would land.
-fn dropped_on(row: &egui::Response, id: NodeId, moved: &mut Option<(NodeId, NodeId)>) {
+///
+/// A drop on a group goes into that group. A drop on an asset takes the
+/// place of that asset, in the group that holds it.
+fn dropped_on(
+    row: &egui::Response,
+    id: NodeId,
+    is_group: bool,
+    moved: &mut Option<(NodeId, NodeId, bool)>,
+) {
     if row.dnd_hover_payload::<NodeId>().is_some() {
         let rect = row.rect;
         row.ctx
@@ -952,7 +964,7 @@ fn dropped_on(row: &egui::Response, id: NodeId, moved: &mut Option<(NodeId, Node
             .hline(rect.x_range(), rect.top(), egui::Stroke::new(2.0, ACCENT));
     }
     if let Some(dragged) = row.dnd_release_payload::<NodeId>() {
-        *moved = Some((*dragged, id));
+        *moved = Some((*dragged, id, is_group));
     }
 }
 
@@ -1010,15 +1022,41 @@ fn box_properties(ui: &mut egui::Ui, tv_box: &mut TvBox) -> bool {
 /// inch on the canvas. Only a Foundry or a Universal VTT file carries that
 /// number, so for a plain PNG or JPEG the DM types it or measures it.
 fn map_properties(ui: &mut egui::Ui, select: &mut Select, scene: &mut Scene) -> bool {
-    let Some(map) = select
-        .only()
-        .and_then(|id| crate::scene::asset_mut(scene, id))
-    else {
+    let Some(id) = select.only() else {
         return false;
     };
+    if crate::scene::find(scene, id)
+        .and_then(Node::asset)
+        .is_none()
+    {
+        return false;
+    }
+    let names = crate::scene::group_names(scene);
     let mut edited = false;
     ui.separator();
     ui.heading("Map");
+    ui.horizontal(|ui| {
+        ui.label("Group");
+        let holder = crate::scene::parent_of(scene, id).map(|(group, _)| group);
+        let open = holder
+            .and_then(|group| names.iter().find(|(id, ..)| *id == group))
+            .map_or("", |(_, name, _)| name.as_str());
+        egui::ComboBox::from_id_salt("asset_group")
+            .selected_text(open)
+            .show_ui(ui, |ui| {
+                for (group, name, depth) in &names {
+                    let label = format!("{}{name}", "  ".repeat(*depth));
+                    if ui.selectable_label(holder == Some(*group), label).clicked()
+                        && crate::scene::move_into(scene, id, *group)
+                    {
+                        edited = true;
+                    }
+                }
+            });
+    });
+    let Some(map) = crate::scene::asset_mut(scene, id) else {
+        return edited;
+    };
     ui.horizontal(|ui| {
         ui.label("Pixels per cell");
         edited |= ui

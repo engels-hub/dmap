@@ -112,7 +112,7 @@ A scene is a tree. The root group holds everything else, and under it sit your a
 
 | In a row | What it does |
 |---|---|
-| `::` | Drag the row onto another row to move it there |
+| `::` | Drag the row. Drop it on a group to put it in that group, or on an asset to take that asset's place |
 | Mark | The group a new asset joins. Click it to move the mark |
 | `>` or `v` | Open or close a group. A group starts closed |
 | Name | Type a name for a group. The root keeps its own |
@@ -120,6 +120,8 @@ A scene is a tree. The root group holds everything else, and under it sit your a
 | TV | Draw this node on the TV |
 
 The two switches work on their own, and a group rules the nodes under it. A group with **TV** off keeps every asset in it off the TV, whatever the asset says. Use it for the room the players have not found.
+
+To move something you already placed, drag its row by the `::` grip onto a group. The **Group** field in the Map section does the same without a drag.
 
 A group draws over the groups under it, and its assets draw inside its place. Every group but the root shows a dashed box around what it holds. Click the box to take the group, and drag it to move everything in it as one.
 

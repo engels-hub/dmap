@@ -457,6 +457,44 @@ pub fn move_above(scene: &mut Scene, id: NodeId, target: NodeId) -> bool {
     true
 }
 
+/// Moves a node into a group, on top of what the group holds.
+///
+/// A group cannot go into itself, or into anything it holds. Returns
+/// `true` when it moved.
+pub fn move_into(scene: &mut Scene, id: NodeId, parent: NodeId) -> bool {
+    if id == parent || ancestors(scene, parent).contains(&id) {
+        return false;
+    }
+    if parent_of(scene, id) == Some((parent, 0)) && assets_of(scene, parent).len() == 1 {
+        return false;
+    }
+    let Some(node) = take_node(scene, id) else {
+        return false;
+    };
+    let Some(group) = group_mut(scene, parent) else {
+        scene.root.children.push(node);
+        return false;
+    };
+    group.children.push(node);
+    true
+}
+
+/// Every group in the scene, the root first, each with how deep it sits.
+///
+/// A list of groups for the DM to choose from reads better with the depth.
+pub fn group_names(scene: &Scene) -> Vec<(NodeId, String, usize)> {
+    let mut found = vec![(ROOT_ID, scene.root.name.clone(), 0)];
+    name_groups(&scene.root.children, 1, &mut found);
+    found
+}
+
+fn name_groups(nodes: &[Node], depth: usize, found: &mut Vec<(NodeId, String, usize)>) {
+    for group in nodes.iter().filter_map(Node::group) {
+        found.push((group.id, group.name.clone(), depth));
+        name_groups(&group.children, depth + 1, found);
+    }
+}
+
 /// Every asset a node holds: the asset itself, or all under a group.
 pub fn assets_of(scene: &Scene, id: NodeId) -> Vec<NodeId> {
     match find(scene, id) {
@@ -1384,5 +1422,44 @@ mod tests {
         );
         // They cannot climb past the top.
         assert!(!super::reorder_all(&mut scene, &[1, 2], true));
+    }
+
+    #[test]
+    fn a_node_moves_into_a_group_that_holds_nothing() {
+        let mut scene = family();
+        scene
+            .root
+            .children
+            .push(Node::Group(Group::new(6, "Empty".to_owned())));
+        assert!(super::move_into(&mut scene, 1, 6));
+        assert_eq!(assets_of(&scene, 6), vec![1]);
+    }
+
+    #[test]
+    fn a_node_moves_into_a_group_on_top_of_what_it_holds() {
+        let mut scene = family();
+        assert!(super::move_into(&mut scene, 1, 3));
+        assert_eq!(assets_of(&scene, 3), vec![4, 5, 1]);
+        assert_eq!(scene.root.children.len(), 2);
+    }
+
+    #[test]
+    fn a_group_cannot_move_into_what_it_holds() {
+        let mut scene = family();
+        assert!(!super::move_into(&mut scene, 3, 3));
+        assert_eq!(scene.root.children.len(), 3);
+    }
+
+    #[test]
+    fn the_list_of_groups_starts_at_the_root() {
+        let scene = family();
+        let names: Vec<_> = super::group_names(&scene)
+            .iter()
+            .map(|(id, name, depth)| (*id, name.clone(), *depth))
+            .collect();
+        assert_eq!(
+            names,
+            vec![(ROOT_ID, "Scene".to_owned(), 0), (3, "Notes".to_owned(), 1)]
+        );
     }
 }
