@@ -174,26 +174,13 @@ fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.0 - b.0).hypot(a.1 - b.1)
 }
 
-/// The index one step forward (`toward_end`) or backward in a list of
-/// `len` items, or `None` when already at that end. Used to reorder maps
-/// in their draw order, which is also their stacking order: later draws
-/// on top.
-pub fn reorder(index: usize, len: usize, toward_end: bool) -> Option<usize> {
-    if toward_end {
-        (index + 1 < len).then_some(index + 1)
-    } else {
-        index.checked_sub(1)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
     use super::{
         MAX_GRID_PX, ROTATION_STEP, corner_offset, edge_midpoint, grid_px_from_measure, hit_test,
-        pick_handle, reorder, rotation_from_drag, rotation_handle, scale_from_drag, snap_corner,
-        step_scale,
+        pick_handle, rotation_from_drag, rotation_handle, scale_from_drag, snap_corner, step_scale,
     };
 
     fn close(a: f64, b: f64) -> bool {
@@ -314,20 +301,6 @@ mod tests {
         // The handle sits exactly `offset` from `mid`, along the perpendicular.
         let handle_distance = (handle.0 - mid.0).hypot(handle.1 - mid.1);
         assert!(close(handle_distance, 24.0));
-    }
-
-    #[test]
-    fn reordering_moves_one_step_forward_or_backward() {
-        assert_eq!(reorder(0, 3, true), Some(1));
-        assert_eq!(reorder(1, 3, true), Some(2));
-        assert_eq!(reorder(1, 3, false), Some(0));
-    }
-
-    #[test]
-    fn reordering_stops_at_the_ends() {
-        assert_eq!(reorder(2, 3, true), None);
-        assert_eq!(reorder(0, 3, false), None);
-        assert_eq!(reorder(0, 1, true), None);
     }
 
     #[test]

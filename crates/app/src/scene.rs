@@ -9,19 +9,474 @@ use serde::{Deserialize, Serialize};
 
 use crate::tvbox::TvBox;
 
+/// The name of every node in one scene.
+///
+/// Two assets may point at one image file, so a file name cannot say which
+/// asset the DM means. A hex crawl holds five hex textures and a hundred
+/// assets that point at them.
+pub type NodeId = u64;
+
+/// Who is looking at the canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Audience {
+    /// The DM window.
+    Dm,
+    /// The TV the players watch.
+    Tv,
+}
+
+/// Which screens a node draws on, when the groups above it allow it.
+///
+/// The DM and the players do not have to agree. A group of notes shows for
+/// the DM and stays off the TV.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Shown {
+    /// Draw on the DM screen.
+    pub dm: bool,
+    /// Draw on the TV.
+    pub tv: bool,
+}
+
+impl Default for Shown {
+    fn default() -> Self {
+        Self { dm: true, tv: true }
+    }
+}
+
+impl Shown {
+    /// Whether this pair says yes to one screen.
+    pub fn says(self, audience: Audience) -> bool {
+        match audience {
+            Audience::Dm => self.dm,
+            Audience::Tv => self.tv,
+        }
+    }
+}
+
+/// One thing in the tree: a group, or an asset on the canvas.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Node {
+    /// A group of other nodes.
+    Group(Group),
+    /// One image on the canvas.
+    Asset(Asset),
+}
+
+impl Node {
+    /// The name of this node in the tree.
+    pub fn id(&self) -> NodeId {
+        match self {
+            Self::Group(group) => group.id,
+            Self::Asset(asset) => asset.id,
+        }
+    }
+
+    /// Whether this node draws for `audience`, on its own account.
+    ///
+    /// A group above it can still keep it off the screen.
+    pub fn shows(&self, audience: Audience) -> bool {
+        match self {
+            Self::Group(group) => group.shows(audience),
+            Self::Asset(asset) => asset.shows(audience),
+        }
+    }
+
+    /// The group this node holds, if it is one.
+    pub fn group(&self) -> Option<&Group> {
+        match self {
+            Self::Group(group) => Some(group),
+            Self::Asset(_) => None,
+        }
+    }
+
+    /// The asset this node holds, if it is one.
+    pub fn asset(&self) -> Option<&Asset> {
+        match self {
+            Self::Asset(asset) => Some(asset),
+            Self::Group(_) => None,
+        }
+    }
+}
+
+/// A group of nodes, which the DM moves and hides as one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Group {
+    /// The name of this group in the tree.
+    #[serde(default)]
+    pub id: NodeId,
+    /// What the DM calls this group.
+    #[serde(default = "group_name")]
+    pub name: String,
+    /// Which screens this group draws on.
+    #[serde(default)]
+    pub shown: Shown,
+    /// What sits in this group, bottom one first.
+    #[serde(default)]
+    pub children: Vec<Node>,
+}
+
+fn group_name() -> String {
+    "Group".to_owned()
+}
+
+impl Group {
+    /// An empty group with a name of its own, shown on both screens.
+    pub fn new(id: NodeId, name: String) -> Self {
+        Self {
+            id,
+            name,
+            shown: Shown::default(),
+            children: Vec::new(),
+        }
+    }
+
+    /// Whether this group draws for `audience`.
+    pub fn shows(&self, audience: Audience) -> bool {
+        self.shown.says(audience)
+    }
+}
+
 /// Everything one scene holds.
 ///
 /// A scene lives in a folder of its own. The folder holds this file, under
-/// the name `scene.json`, and the images the maps point at. Every path in
+/// the name `scene.json`, and the images the assets point at. Every path in
 /// it is the name of a file in that folder, so the whole folder moves to
 /// another machine and still opens.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+///
+/// The scene is one tree. The root group holds every other node, keeps its
+/// name, and always shows on both screens.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Scene {
-    /// The maps on the canvas, in drawing order.
-    pub maps: Vec<MapObject>,
+    /// The group that holds everything else.
+    pub root: Group,
     /// The part of the canvas the TV shows.
     pub tv_box: TvBox,
+}
+
+/// The name of the root group. The DM cannot change it.
+pub const ROOT_NAME: &str = "Scene";
+
+/// The id of the root group. Every other node takes a larger one.
+pub const ROOT_ID: NodeId = 0;
+
+impl Default for Scene {
+    fn default() -> Self {
+        Self {
+            root: Group::new(ROOT_ID, ROOT_NAME.to_owned()),
+            tv_box: TvBox::default(),
+        }
+    }
+}
+
+/// What a scene file may hold.
+///
+/// A file from before the tree held a flat list of maps under `maps`. Both
+/// shapes read into a scene, so an older scene opens.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct SceneFile {
+    root: Option<Group>,
+    tv_box: TvBox,
+    maps: Vec<Asset>,
+}
+
+impl<'de> Deserialize<'de> for Scene {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let file = SceneFile::deserialize(deserializer)?;
+        let mut scene = Self {
+            root: file
+                .root
+                .unwrap_or_else(|| Group::new(ROOT_ID, ROOT_NAME.to_owned())),
+            tv_box: file.tv_box,
+        };
+        // A scene from before the tree kept its maps in a flat list. They
+        // join the root, in the order they had.
+        scene
+            .root
+            .children
+            .extend(file.maps.into_iter().map(Node::Asset));
+        Ok(scene.repaired())
+    }
+}
+
+impl Scene {
+    /// The same scene, with a root that follows the rules and no id twice.
+    ///
+    /// A scene file is text a DM can edit, so it may hold a root with
+    /// another name, or two nodes of one id. Every node needs a name of its
+    /// own, since a selection points at nodes by id.
+    fn repaired(mut self) -> Self {
+        self.root.id = ROOT_ID;
+        ROOT_NAME.clone_into(&mut self.root.name);
+        self.root.shown = Shown::default();
+        let mut taken = std::collections::HashSet::from([ROOT_ID]);
+        let mut next = 1;
+        rename_nodes(&mut self.root.children, &mut taken, &mut next);
+        self
+    }
+
+    /// A name no node in this scene holds.
+    pub fn next_id(&self) -> NodeId {
+        let mut highest = ROOT_ID;
+        for_each_node(&self.root.children, &mut |node| {
+            highest = highest.max(node.id());
+        });
+        highest + 1
+    }
+}
+
+/// Gives every node a name of its own, deepest last.
+fn rename_nodes(
+    nodes: &mut [Node],
+    taken: &mut std::collections::HashSet<NodeId>,
+    next: &mut NodeId,
+) {
+    for node in nodes {
+        let id = match node {
+            Node::Group(group) => &mut group.id,
+            Node::Asset(asset) => &mut asset.id,
+        };
+        if *id == ROOT_ID || !taken.insert(*id) {
+            while !taken.insert(*next) {
+                *next += 1;
+            }
+            *id = *next;
+        }
+        if let Node::Group(group) = node {
+            rename_nodes(&mut group.children, taken, next);
+        }
+    }
+}
+
+/// Walks every node under `nodes`, a parent before its children.
+fn for_each_node(nodes: &[Node], visit: &mut impl FnMut(&Node)) {
+    for node in nodes {
+        visit(node);
+        if let Node::Group(group) = node {
+            for_each_node(&group.children, visit);
+        }
+    }
+}
+
+/// The assets one screen draws, in the order they draw.
+///
+/// The walk starts at the root and takes each child in turn, so a group
+/// takes one place in the order of its parent and its children draw inside
+/// that place. A node draws only when it and every group above it show for
+/// this screen.
+pub fn draw_order(scene: &Scene, audience: Audience) -> Vec<&Asset> {
+    let mut drawn = Vec::new();
+    collect_drawn(&scene.root.children, audience, &mut drawn);
+    drawn
+}
+
+fn collect_drawn<'a>(nodes: &'a [Node], audience: Audience, drawn: &mut Vec<&'a Asset>) {
+    for node in nodes {
+        if !node.shows(audience) {
+            continue;
+        }
+        match node {
+            Node::Asset(asset) => drawn.push(asset),
+            Node::Group(group) => collect_drawn(&group.children, audience, drawn),
+        }
+    }
+}
+
+/// Every asset in the scene, in the order they draw for the DM.
+pub fn assets(scene: &Scene) -> Vec<&Asset> {
+    draw_order(scene, Audience::Dm)
+}
+
+/// Moves a node one place among the nodes it sits with.
+///
+/// Order lives inside one group, so a node moves past its brothers and
+/// sisters and never leaves its parent. Returns `true` when it moved.
+pub fn reorder(scene: &mut Scene, id: NodeId, toward_top: bool) -> bool {
+    reorder_in(&mut scene.root, id, toward_top)
+}
+
+fn reorder_in(group: &mut Group, id: NodeId, toward_top: bool) -> bool {
+    if let Some(place) = group.children.iter().position(|node| node.id() == id) {
+        let next = if toward_top {
+            (place + 1 < group.children.len()).then(|| place + 1)
+        } else {
+            place.checked_sub(1)
+        };
+        if let Some(next) = next {
+            group.children.swap(place, next);
+            return true;
+        }
+        return false;
+    }
+    for child in &mut group.children {
+        if let Node::Group(inside) = child
+            && reorder_in(inside, id, toward_top)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// The group that holds this node, and where in it the node sits.
+pub fn parent_of(scene: &Scene, id: NodeId) -> Option<(NodeId, usize)> {
+    parent_in(&scene.root, id)
+}
+
+fn parent_in(group: &Group, id: NodeId) -> Option<(NodeId, usize)> {
+    if let Some(place) = group.children.iter().position(|node| node.id() == id) {
+        return Some((group.id, place));
+    }
+    group
+        .children
+        .iter()
+        .filter_map(Node::group)
+        .find_map(|inside| parent_in(inside, id))
+}
+
+/// Every group above a node, the nearest one first.
+///
+/// A list that shows this node must open all of them.
+pub fn ancestors(scene: &Scene, id: NodeId) -> Vec<NodeId> {
+    let mut above = Vec::new();
+    let mut walk = id;
+    while let Some((parent, _)) = parent_of(scene, walk) {
+        above.push(parent);
+        if parent == ROOT_ID {
+            break;
+        }
+        walk = parent;
+    }
+    above
+}
+
+/// Puts a node into a group, on top of what the group already holds.
+pub fn push_into(scene: &mut Scene, parent: NodeId, node: Node) -> bool {
+    let Some(group) = group_mut(scene, parent) else {
+        return false;
+    };
+    group.children.push(node);
+    true
+}
+
+/// The world rectangle a group covers, as `(min, max)` in inches.
+///
+/// The box holds every asset under the group, however deep. A group with
+/// no asset yet, or one whose images have not loaded, covers nothing.
+pub fn bounds(
+    group: &Group,
+    size_of: &dyn Fn(&Path) -> Option<(u32, u32)>,
+) -> Option<((f64, f64), (f64, f64))> {
+    let mut reach: Option<((f64, f64), (f64, f64))> = None;
+    for asset in under(group) {
+        let Some(size) = size_of(&asset.path) else {
+            continue;
+        };
+        for corner in asset.corners(size) {
+            reach = Some(match reach {
+                None => (corner, corner),
+                Some((min, max)) => (
+                    (min.0.min(corner.0), min.1.min(corner.1)),
+                    (max.0.max(corner.0), max.1.max(corner.1)),
+                ),
+            });
+        }
+    }
+    reach
+}
+
+/// Every asset under a group, however deep.
+pub fn under(group: &Group) -> Vec<&Asset> {
+    let mut found = Vec::new();
+    collect_assets(&group.children, &mut found);
+    found
+}
+
+fn collect_assets<'a>(nodes: &'a [Node], found: &mut Vec<&'a Asset>) {
+    for node in nodes {
+        match node {
+            Node::Asset(asset) => found.push(asset),
+            Node::Group(group) => collect_assets(&group.children, found),
+        }
+    }
+}
+
+/// Every group in the scene that draws for the DM, with the root last.
+///
+/// The root has no box around it, so a caller that draws boxes skips it.
+pub fn groups(scene: &Scene) -> Vec<&Group> {
+    let mut found = Vec::new();
+    collect_groups(&scene.root.children, &mut found);
+    found
+}
+
+fn collect_groups<'a>(nodes: &'a [Node], found: &mut Vec<&'a Group>) {
+    for group in nodes.iter().filter_map(Node::group) {
+        found.push(group);
+        collect_groups(&group.children, found);
+    }
+}
+
+/// The node of this name, wherever it sits.
+pub fn find(scene: &Scene, id: NodeId) -> Option<&Node> {
+    find_in(&scene.root.children, id)
+}
+
+fn find_in(nodes: &[Node], id: NodeId) -> Option<&Node> {
+    for node in nodes {
+        if node.id() == id {
+            return Some(node);
+        }
+        if let Node::Group(group) = node
+            && let Some(found) = find_in(&group.children, id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The asset of this name, ready to change.
+pub fn asset_mut(scene: &mut Scene, id: NodeId) -> Option<&mut Asset> {
+    find_asset(&mut scene.root.children, id)
+}
+
+fn find_asset(nodes: &mut [Node], id: NodeId) -> Option<&mut Asset> {
+    for node in nodes {
+        match node {
+            Node::Asset(asset) if asset.id == id => return Some(asset),
+            Node::Group(group) => {
+                if let Some(found) = find_asset(&mut group.children, id) {
+                    return Some(found);
+                }
+            }
+            Node::Asset(_) => {}
+        }
+    }
+    None
+}
+
+/// The group of this name, ready to change.
+pub fn group_mut(scene: &mut Scene, id: NodeId) -> Option<&mut Group> {
+    if id == ROOT_ID {
+        return Some(&mut scene.root);
+    }
+    find_group(&mut scene.root.children, id)
+}
+
+fn find_group(nodes: &mut [Node], id: NodeId) -> Option<&mut Group> {
+    for node in nodes {
+        if let Node::Group(group) = node {
+            if group.id == id {
+                return Some(group);
+            }
+            if let Some(found) = find_group(&mut group.children, id) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 impl Scene {
@@ -99,9 +554,15 @@ pub fn copy_into_scene(scene_dir: &Path, file: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(name))
 }
 
-/// One map image placed on the canvas.
+/// One image placed on the canvas.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MapObject {
+pub struct Asset {
+    /// The name of this asset in the tree.
+    #[serde(default)]
+    pub id: NodeId,
+    /// Which screens this asset draws on.
+    #[serde(default)]
+    pub shown: Shown,
     /// The image file, relative to the project file.
     pub path: PathBuf,
     /// World point in the middle of the image, in inches.
@@ -133,15 +594,17 @@ fn one() -> f64 {
     1.0
 }
 
-impl MapObject {
+impl Asset {
     /// Pixels per cell for a map whose grid size is not known yet.
     ///
     /// The same default as Foundry VTT, so many maps come out right at once.
     pub const DEFAULT_GRID_PX: f64 = 100.0;
 
-    /// A map at `center` with the default grid size.
-    pub fn new(path: PathBuf, center: (f64, f64)) -> Self {
+    /// An asset at `center` with the default grid size.
+    pub fn new(id: NodeId, path: PathBuf, center: (f64, f64)) -> Self {
         Self {
+            id,
+            shown: Shown::default(),
             path,
             center,
             grid_px: Self::DEFAULT_GRID_PX,
@@ -151,6 +614,11 @@ impl MapObject {
             flip_y: false,
             snap_offset: (0.0, 0.0),
         }
+    }
+
+    /// Whether this asset draws for `audience`, on its own account.
+    pub fn shows(&self, audience: Audience) -> bool {
+        self.shown.says(audience)
     }
 
     /// Half the width and height in inches, with `scale` applied.
@@ -180,7 +648,10 @@ impl MapObject {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{MapObject, Scene, copy_into_scene, free_name};
+    use super::{
+        Asset, Audience, Group, Node, ROOT_ID, Scene, assets, copy_into_scene, draw_order, find,
+        free_name, parent_of, reorder,
+    };
 
     /// A folder of its own for one test, under the system's temp folder.
     fn scratch(name: &str) -> PathBuf {
@@ -197,9 +668,9 @@ mod tests {
 
     #[test]
     fn a_map_spans_its_pixels_divided_by_pixels_per_cell() {
-        let map = MapObject {
+        let map = Asset {
             grid_px: 50.0,
-            ..MapObject::new(PathBuf::from("crypt.png"), (10.0, 5.0))
+            ..Asset::new(0, PathBuf::from("crypt.png"), (10.0, 5.0))
         };
         let corners = map.corners((400, 300));
         assert!(close(corners[0], (6.0, 2.0)));
@@ -208,7 +679,7 @@ mod tests {
 
     #[test]
     fn corners_of_an_unrotated_map_are_its_rect() {
-        let map = MapObject::new(PathBuf::from("m.png"), (10.0, 5.0));
+        let map = Asset::new(0, PathBuf::from("m.png"), (10.0, 5.0));
         let corners = map.corners((400, 300));
         assert!(close(corners[0], (8.0, 3.5)));
         assert!(close(corners[1], (12.0, 3.5)));
@@ -218,7 +689,7 @@ mod tests {
 
     #[test]
     fn a_quarter_turn_swaps_width_and_height() {
-        let mut map = MapObject::new(PathBuf::from("m.png"), (0.0, 0.0));
+        let mut map = Asset::new(0, PathBuf::from("m.png"), (0.0, 0.0));
         map.rotation = std::f64::consts::FRAC_PI_2;
         let corners = map.corners((400, 300));
         // The image's top-left corner moves to the top-right of the turned map.
@@ -228,7 +699,7 @@ mod tests {
 
     #[test]
     fn scale_grows_the_map_around_its_center() {
-        let mut map = MapObject::new(PathBuf::from("m.png"), (0.0, 0.0));
+        let mut map = Asset::new(0, PathBuf::from("m.png"), (0.0, 0.0));
         map.scale = 2.0;
         let corners = map.corners((400, 300));
         assert!(close(corners[0], (-4.0, -3.0)));
@@ -238,7 +709,7 @@ mod tests {
     #[test]
     fn old_project_files_without_transform_fields_still_load() {
         let json = r#"{"path":"m.png","center":[1.0,2.0],"grid_px":50.0}"#;
-        let map: MapObject = serde_json::from_str(json).unwrap();
+        let map: Asset = serde_json::from_str(json).unwrap();
         assert!((map.rotation).abs() < 1e-9);
         assert!((map.scale - 1.0).abs() < 1e-9);
         assert!(!map.flip_x && !map.flip_y);
@@ -248,26 +719,36 @@ mod tests {
 
     #[test]
     fn a_new_map_uses_the_default_pixels_per_cell() {
-        let map = MapObject::new(PathBuf::from("crypt.png"), (0.0, 0.0));
-        assert!((map.grid_px - MapObject::DEFAULT_GRID_PX).abs() < 1e-9);
+        let map = Asset::new(0, PathBuf::from("crypt.png"), (0.0, 0.0));
+        assert!((map.grid_px - Asset::DEFAULT_GRID_PX).abs() < 1e-9);
     }
 
     #[test]
     fn a_scene_round_trips_through_json() {
-        let scene = Scene {
-            maps: vec![MapObject {
-                grid_px: 140.0,
-                rotation: 0.5,
-                scale: 1.5,
-                flip_x: true,
-                snap_offset: (0.25, 0.75),
-                ..MapObject::new(PathBuf::from("crypt.png"), (1.5, -2.0))
-            }],
+        let mut scene = Scene {
             tv_box: TvBox {
                 center: (3.0, -1.5),
                 width: 36.0,
             },
+            ..Scene::default()
         };
+        let asset = Asset {
+            grid_px: 140.0,
+            rotation: 0.5,
+            scale: 1.5,
+            flip_x: true,
+            snap_offset: (0.25, 0.75),
+            ..Asset::new(1, PathBuf::from("crypt.png"), (1.5, -2.0))
+        };
+        let mut notes = Group::new(2, "Notes".to_owned());
+        notes.shown.tv = false;
+        notes.children.push(Node::Asset(Asset::new(
+            3,
+            PathBuf::from("note.png"),
+            (0.0, 0.0),
+        )));
+        scene.root.children.push(Node::Asset(asset));
+        scene.root.children.push(Node::Group(notes));
         assert_eq!(Scene::from_json(&scene.to_json()).unwrap(), scene);
     }
 
@@ -278,11 +759,15 @@ mod tests {
 
     #[test]
     fn a_scene_holds_the_names_of_files_beside_it() {
-        let scene = Scene {
-            maps: vec![MapObject::new(PathBuf::from("crypt.png"), (0.0, 0.0))],
-            ..Scene::default()
-        };
+        let mut scene = Scene::default();
+        scene.root.children.push(Node::Asset(Asset::new(
+            1,
+            PathBuf::from("crypt.png"),
+            (0.0, 0.0),
+        )));
         assert!(scene.to_json().contains("\"crypt.png\""));
+        // The file says what each node is, so a DM can read the tree.
+        assert!(scene.to_json().contains("\"type\": \"asset\""));
     }
 
     #[test]
@@ -389,5 +874,127 @@ mod tests {
             PathBuf::from("crypt.png")
         );
         assert_eq!(std::fs::read_dir(&scene).unwrap().count(), 1);
+    }
+
+    /// A root with an asset, a group, and an asset inside the group.
+    fn nested() -> Scene {
+        let mut scene = Scene::default();
+        let mut notes = Group::new(2, "Notes".to_owned());
+        notes.children.push(Node::Asset(Asset::new(
+            3,
+            PathBuf::from("note.png"),
+            (0.0, 0.0),
+        )));
+        scene.root.children.push(Node::Asset(Asset::new(
+            1,
+            PathBuf::from("floor.png"),
+            (0.0, 0.0),
+        )));
+        scene.root.children.push(Node::Group(notes));
+        scene
+    }
+
+    #[test]
+    fn a_group_draws_inside_the_place_it_holds() {
+        let scene = nested();
+        let order: Vec<_> = draw_order(&scene, Audience::Dm)
+            .iter()
+            .map(|asset| asset.id)
+            .collect();
+        assert_eq!(order, vec![1, 3]);
+    }
+
+    #[test]
+    fn a_group_that_is_off_takes_its_children_off() {
+        let mut scene = nested();
+        let Some(Node::Group(notes)) = scene.root.children.get_mut(1) else {
+            panic!("the second child is the group");
+        };
+        notes.shown.tv = false;
+        assert_eq!(draw_order(&scene, Audience::Dm).len(), 2);
+        assert_eq!(draw_order(&scene, Audience::Tv).len(), 1);
+    }
+
+    #[test]
+    fn an_asset_can_hide_on_its_own() {
+        let mut scene = nested();
+        let Some(Node::Asset(floor)) = scene.root.children.get_mut(0) else {
+            panic!("the first child is the asset");
+        };
+        floor.shown.tv = false;
+        assert_eq!(draw_order(&scene, Audience::Tv)[0].id, 3);
+    }
+
+    #[test]
+    fn a_scene_from_before_the_tree_opens_under_the_root() {
+        let json = r#"{"maps":[
+            {"path":"a.png","center":[0.0,0.0],"grid_px":50.0},
+            {"path":"b.png","center":[1.0,1.0],"grid_px":50.0}],
+            "tv_box":{"center":[0.0,0.0],"width":40.0}}"#;
+        let scene = Scene::from_json(json).unwrap();
+        assert_eq!(scene.root.children.len(), 2);
+        assert_eq!(assets(&scene).len(), 2);
+        assert!((scene.tv_box.width - 40.0).abs() < 1e-9);
+        // Every asset took a name of its own.
+        let ids: Vec<_> = assets(&scene).iter().map(|asset| asset.id).collect();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn a_file_with_two_nodes_of_one_name_gets_them_apart() {
+        let json = r#"{"root":{"id":0,"name":"Scene","shown":{"dm":true,"tv":true},"children":[
+            {"type":"asset","id":5,"path":"a.png","center":[0.0,0.0],"grid_px":50.0},
+            {"type":"asset","id":5,"path":"b.png","center":[0.0,0.0],"grid_px":50.0}]}}"#;
+        let scene = Scene::from_json(json).unwrap();
+        let ids: Vec<_> = assets(&scene).iter().map(|asset| asset.id).collect();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1]);
+    }
+
+    #[test]
+    fn the_root_keeps_its_name_whatever_the_file_says() {
+        let json = r#"{"root":{"id":9,"name":"Not the root","shown":{"dm":false,"tv":false},
+            "children":[]}}"#;
+        let scene = Scene::from_json(json).unwrap();
+        assert_eq!(scene.root.id, ROOT_ID);
+        assert_eq!(scene.root.name, "Scene");
+        assert!(scene.root.shown.dm && scene.root.shown.tv);
+    }
+
+    #[test]
+    fn a_new_name_is_one_no_node_holds() {
+        let scene = nested();
+        assert_eq!(scene.next_id(), 4);
+    }
+
+    #[test]
+    fn a_node_moves_among_the_nodes_it_sits_with() {
+        let mut scene = nested();
+        // The asset at the bottom of the root moves over the group.
+        assert!(reorder(&mut scene, 1, true));
+        assert_eq!(scene.root.children[0].id(), 2);
+        assert_eq!(scene.root.children[1].id(), 1);
+        // It cannot go any further.
+        assert!(!reorder(&mut scene, 1, true));
+    }
+
+    #[test]
+    fn a_node_inside_a_group_moves_inside_that_group() {
+        let mut scene = nested();
+        // The only child of the group has nowhere to go.
+        assert!(!reorder(&mut scene, 3, true));
+        assert!(!reorder(&mut scene, 3, false));
+        assert_eq!(parent_of(&scene, 3), Some((2, 0)));
+    }
+
+    #[test]
+    fn the_tree_says_which_group_holds_a_node() {
+        let scene = nested();
+        assert_eq!(parent_of(&scene, 1), Some((ROOT_ID, 0)));
+        assert_eq!(parent_of(&scene, 2), Some((ROOT_ID, 1)));
+        assert_eq!(parent_of(&scene, 3), Some((2, 0)));
+        assert_eq!(parent_of(&scene, 9), None);
+        assert!(find(&scene, 3).is_some());
+        assert!(find(&scene, 9).is_none());
     }
 }

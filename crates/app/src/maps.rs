@@ -9,7 +9,7 @@ use egui_wgpu::wgpu;
 
 use crate::camera::Camera;
 use crate::images::Decoded;
-use crate::scene::MapObject;
+use crate::scene::Asset;
 
 /// Draws a textured quad with normal alpha blending.
 const SHADER: &str = "
@@ -225,17 +225,17 @@ impl MapLayer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         pass: &mut wgpu::RenderPass<'_>,
-        maps: &[MapObject],
+        assets: &[&Asset],
         camera: &Camera,
         viewport: (u32, u32),
     ) {
-        let drawn: Vec<(&MapTexture, [MapVertex; 6])> = maps
+        let drawn: Vec<(&MapTexture, [MapVertex; 6])> = assets
             .iter()
-            .filter_map(|map| {
-                let texture = self.textures.get(&map.path)?;
+            .filter_map(|asset| {
+                let texture = self.textures.get(&asset.path)?;
                 let quad = map_quad(
-                    map.corners(texture.size),
-                    (map.flip_x, map.flip_y),
+                    asset.corners(texture.size),
+                    (asset.flip_x, asset.flip_y),
                     camera,
                     viewport,
                 );
@@ -280,7 +280,7 @@ pub type MapVertex = [f32; 4];
 
 /// The two triangles that show a map through `camera`.
 ///
-/// `corners` come from `MapObject::corners`. `flip` mirrors the image on
+/// `corners` come from `Asset::corners`. `flip` mirrors the image on
 /// the x and y axis by swapping texture coordinates.
 pub fn map_quad(
     corners: [(f64, f64); 4],
