@@ -76,7 +76,7 @@ The canvas takes its controls from Figma.
 
 The DM view is the game master's own. The TV never moves with it.
 
-Pick a view in the toolbar at the bottom of the window.
+Pick a view in the toolbar at the bottom of the window. The toolbar comes in two boxes. The left one holds the views, and one of them is always on. The right one holds Scenes, Add map and Settings, which open something at once and never stay on.
 
 **Select** works on the assets and the groups on the canvas.
 

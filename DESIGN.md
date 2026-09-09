@@ -87,7 +87,10 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 
 - The toolbar floats over the canvas, centered, 12 px from the bottom edge. Background `surface`, 1 px `ink` border, and the hard shadow of the theme.
 - Each entry is 52 px wide and 44 px high: icon 18 px, then the label 13 px, gap 3 px. An entry grows past 52 px when its label needs the room.
-- The first group holds the views: Select, Draw, Edit, Table. A 1 px `rule` follows. The second group holds Scenes, Add map and Settings, because they are not views.
+- The toolbar comes in two boxes, 8 px apart. Each box takes the `surface` background, the 1 px `ink` border and the hard shadow.
+- The first box holds the views: Select, Draw, Edit, Table. It is a segmented control, so one of them is always on and a 1 px `rule` stands between each pair. See section 6.
+- The second box holds Scenes, Add map and Settings. They are buttons, not views: none of them stays on, and no rule gathers them into one control. Each opens something at once.
+- Two boxes say this louder than one rule between two groups. A DM reads the shape before the label.
 - The active entry has background `raised`, a 3 px `accent` bar on its top edge, and `accent` icon and label.
 - The Edit view brings a second bar of the same shape. It sits 8 px over the toolbar and holds Walls, Doors, Light and Fog. The views stay on the screen under it.
 

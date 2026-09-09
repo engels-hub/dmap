@@ -40,6 +40,13 @@ const TOOL_WIDTH: f32 = 52.0;
 /// The padding beside a toolbar label that outgrows its entry, in points.
 const TOOL_PAD: f32 = 8.0;
 
+/// The gap between the views and the rest of the toolbar, in points.
+///
+/// DESIGN.md 5.2. The two groups read differently: one of the views is
+/// always on, and none of the others ever is. A rule between them said
+/// that too quietly, so they stand in boxes of their own.
+const TOOL_GROUP_GAP: f32 = 8.0;
+
 /// The size of a toolbar glyph, in points. DESIGN.md 4.
 const TOOL_ICON: f32 = 18.0;
 
@@ -722,27 +729,27 @@ fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
         (Press::View(Tool::Select), "Select", Icon::MousePointer),
         (Press::View(Tool::Table), "Table", Icon::Monitor),
     ];
-    let others = [
+    let actions = [
         (Press::Scenes, "Scenes", Icon::Layers),
         (Press::AddMap, "Add map", Icon::Plus),
         (Press::Settings, "Settings", Icon::SlidersHorizontal),
     ];
     let font = theme::font(theme::SMALL, false);
-    let widths: Vec<f32> = views
-        .iter()
-        .chain(&others)
-        .map(|(_, label, _)| {
-            let text = ui.ctx().fonts_mut(|fonts| {
-                fonts
-                    .layout_no_wrap((*label).to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
-                    .size()
-                    .x
-            });
-            (text + 2.0 * TOOL_PAD).max(TOOL_WIDTH).ceil()
-        })
-        .collect();
-    // The rule between the two groups takes one point of its own.
-    let width = widths.iter().sum::<f32>() + 1.0;
+    let width_of = |label: &str| {
+        let text = ui.ctx().fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap(label.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
+                .size()
+                .x
+        });
+        (text + 2.0 * TOOL_PAD).max(TOOL_WIDTH).ceil()
+    };
+    let view_widths: Vec<f32> = views.iter().map(|(_, label, _)| width_of(label)).collect();
+    let action_widths: Vec<f32> = actions.iter().map(|(_, label, _)| width_of(label)).collect();
+    // A segment shares its border with the segment beside it. DESIGN.md 6.
+    let views_width = view_widths.iter().sum::<f32>() - (views.len() - 1) as f32;
+    let actions_width = action_widths.iter().sum::<f32>();
+    let width = views_width + TOOL_GROUP_GAP + actions_width;
     let screen = ui.ctx().content_rect();
     let top_left = egui::pos2(
         (screen.center().x - width / 2.0).round(),
@@ -753,24 +760,48 @@ fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
         .order(egui::Order::Middle)
         .fixed_pos(top_left)
         .show(ui.ctx(), |ui| {
-            let (rect, _) =
+            let (whole, _) =
                 ui.allocate_exact_size(egui::vec2(width, TOOL_HEIGHT), egui::Sense::hover());
-            widget::shadow_box(ui, rect, tokens);
-            let mut left = rect.left();
-            for (index, (press, label, glyph)) in views.iter().chain(&others).enumerate() {
-                if index == views.len() {
-                    ui.painter().vline(left, rect.y_range(), tokens.hairline());
-                    left += 1.0;
+            let views_box = egui::Rect::from_min_size(
+                whole.left_top(),
+                egui::vec2(views_width, TOOL_HEIGHT),
+            );
+            let actions_box = egui::Rect::from_min_size(
+                egui::pos2(views_box.right() + TOOL_GROUP_GAP, whole.top()),
+                egui::vec2(actions_width, TOOL_HEIGHT),
+            );
+            widget::shadow_box(ui, views_box, tokens);
+            widget::shadow_box(ui, actions_box, tokens);
+            // The views are a segmented control: one of them is always on,
+            // and a rule stands between each pair. DESIGN.md 6.
+            let mut left = views_box.left();
+            for (index, (press, label, glyph)) in views.iter().enumerate() {
+                if index > 0 {
+                    ui.painter()
+                        .vline(left, views_box.y_range(), tokens.hairline());
                 }
                 let cell = egui::Rect::from_min_size(
-                    egui::pos2(left, rect.top()),
-                    egui::vec2(widths[index], TOOL_HEIGHT),
+                    egui::pos2(left, views_box.top()),
+                    egui::vec2(view_widths[index], TOOL_HEIGHT),
                 );
                 let active = *press == Press::View(tool);
                 if tool_entry(ui, cell, label, *glyph, active, tokens).clicked() {
                     pressed = Some(*press);
                 }
-                left += widths[index];
+                left += view_widths[index] - 1.0;
+            }
+            // The rest are buttons. None of them stays on, and no rule
+            // gathers them into one control.
+            let mut left = actions_box.left();
+            for (index, (press, label, glyph)) in actions.iter().enumerate() {
+                let cell = egui::Rect::from_min_size(
+                    egui::pos2(left, actions_box.top()),
+                    egui::vec2(action_widths[index], TOOL_HEIGHT),
+                );
+                if tool_entry(ui, cell, label, *glyph, false, tokens).clicked() {
+                    pressed = Some(*press);
+                }
+                left += action_widths[index];
             }
         });
     pressed
