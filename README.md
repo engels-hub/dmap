@@ -124,7 +124,7 @@ The list shows one group and what is in it, never the whole tree. Click a group 
 | The eye | Draw this node on the DM screen |
 | The screen | Draw this node on the TV |
 
-A group you hold shows its name in a field. Type there to rename it.
+To rename a group, go into it with a click, then double-click its name at the top of the list. `Enter` keeps the new name and `Escape` gives it up.
 
 The two switches work on their own, and a group rules the nodes under it. A group with the screen switch off keeps every asset in it off the TV, whatever the asset says. Use it for the room the players have not found.
 

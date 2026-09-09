@@ -46,10 +46,10 @@ const TOOL_ICON: f32 = 18.0;
 /// The gap between a toolbar glyph and its label, in points. DESIGN.md 5.2.
 const TOOL_GAP: f32 = 3.0;
 
-/// The width a panel opens at, in points. DESIGN.md 8.5.
+/// The width a panel opens at, in points. DESIGN.md 8.4.
 const PANEL_WIDTH: f32 = 240.0;
 
-/// The widest a panel goes when the DM drags its edge. DESIGN.md 8.5.
+/// The widest a panel goes when the DM drags its edge. DESIGN.md 8.4.
 const PANEL_MAX: f32 = 480.0;
 
 /// The height of a panel header, in points. DESIGN.md 7.1.
@@ -58,22 +58,22 @@ const PANEL_HEADER: f32 = 32.0;
 /// The padding inside the body of a panel, in points. DESIGN.md 7.1.
 const PANEL_PAD: f32 = 10.0;
 
-/// The height of one row of the objects list, in points. DESIGN.md 8.5.
+/// The height of one row of the objects list, in points. DESIGN.md 8.4.
 const ROW_HEIGHT: f32 = 26.0;
 
-/// How far a child row stands from its parent, in points. DESIGN.md 8.5.
+/// How far a child row stands from its parent, in points. DESIGN.md 8.4.
 const ROW_INDENT: f32 = 14.0;
 
 /// The size of the glyph that opens a group, in points. DESIGN.md 4.
 const TWIST: f32 = 14.0;
 
-/// The square that holds a switch on a list row, in points. DESIGN.md 8.5.
+/// The square that holds a switch on a list row, in points. DESIGN.md 8.4.
 const SWITCH: f32 = 22.0;
 
-/// The height of the path line over the objects list. DESIGN.md 8.5.
+/// The height of the path line over the objects list. DESIGN.md 8.4.
 const PATH_HEIGHT: f32 = 24.0;
 
-/// How many parts a path shows before it drops its middle. DESIGN.md 8.5.
+/// How many parts a path shows before it drops its middle. DESIGN.md 8.4.
 const PATH_PARTS: usize = 4;
 
 /// The size of the glyph between two parts of a path. DESIGN.md 4.
@@ -940,7 +940,7 @@ fn panel(
     rect
 }
 
-/// The objects list of DESIGN.md 8.5, docked on the left.
+/// The objects list of DESIGN.md 8.4, docked on the left.
 ///
 /// Returns `true` when the DM changed the scene.
 fn objects_panel(
@@ -993,7 +993,7 @@ fn objects_panel(
         },
         tokens,
         |ui| {
-        // DESIGN.md 8.5: the path names the group the list shows, and each
+        // DESIGN.md 8.4: the path names the group the list shows, and each
         // part of it takes a click and goes back up.
         let path = crate::scene::path_to(scene, tree.scope);
         if let Some(up) = path_line(ui, &path, tokens) {
@@ -1064,7 +1064,7 @@ fn objects_panel(
     edited
 }
 
-/// The group the list shows, and every row under it. DESIGN.md 8.5.
+/// The group the list shows, and every row under it. DESIGN.md 8.4.
 ///
 /// The group stands at the top, so the DM sees where the list is before
 /// they read a single child.
@@ -1092,8 +1092,19 @@ fn scoped_rows(
         accent_glyph: tree.active == scope,
         tokens,
     });
-    row_name(ui, row.name, &group.name, picked, tokens);
-    // DESIGN.md 8.5: the root is always visible and carries no switches. A
+    if tree.renaming == Some(scope) && scope != ROOT_ID {
+        let (changed, done) = rename_field(ui, row.name, &mut group.name, tokens);
+        edited |= changed;
+        if done {
+            tree.renaming = None;
+        }
+    } else {
+        row_name(ui, row.name, &group.name, picked, tokens);
+    }
+    if row.body.double_clicked() && scope != ROOT_ID {
+        tree.renaming = Some(scope);
+    }
+    // DESIGN.md 8.4: the root is always visible and carries no switches. A
     // group the DM went into carries its own.
     if scope != ROOT_ID {
         edited |= switches(ui, row.switches, &mut group.shown, tokens);
@@ -1113,7 +1124,7 @@ fn scoped_rows(
     edited
 }
 
-/// The path over the objects list. DESIGN.md 8.5.
+/// The path over the objects list. DESIGN.md 8.4.
 ///
 /// Each part names a group on the way down to the one the list shows, and
 /// a click on a part takes the list back up to it. The last part is the
@@ -1199,7 +1210,7 @@ fn path_line(ui: &mut egui::Ui, path: &[(NodeId, String)], tokens: Tokens) -> Op
 
 /// The parts a path shows. `None` stands for the middle it dropped.
 ///
-/// DESIGN.md 8.5: a path of more than four parts keeps its first part and
+/// DESIGN.md 8.4: a path of more than four parts keeps its first part and
 /// its last two, so the DM still sees where the list stands and how to
 /// reach the root.
 fn shortened(path: &[(NodeId, String)]) -> Vec<Option<(NodeId, &str)>> {
@@ -1214,7 +1225,7 @@ fn shortened(path: &[(NodeId, String)]) -> Vec<Option<(NodeId, &str)>> {
     parts
 }
 
-/// The grip on the right edge that widens the objects list. DESIGN.md 8.5.
+/// The grip on the right edge that widens the objects list. DESIGN.md 8.4.
 ///
 /// Returns `false`: the width is a view setting and never a scene change.
 fn drag_panel_edge(ctx: &egui::Context, rect: egui::Rect, width: &mut f32, tokens: Tokens) -> bool {
@@ -1244,7 +1255,7 @@ fn drag_panel_edge(ctx: &egui::Context, rect: egui::Rect, width: &mut f32, token
     false
 }
 
-/// The properties of the view or of the selection. DESIGN.md 8.1 to 8.3.
+/// The properties of the view or of the selection. DESIGN.md 8.1 and 8.2.
 ///
 /// The title names what the DM holds: the file of a map, or the name of a
 /// group. A panel headed "Map" over a group said nothing about it.
@@ -1263,9 +1274,9 @@ fn properties_panel(
             Some((id, Some(Node::Asset(asset)))) => {
                 Held::Map(id, asset.path.to_string_lossy().into_owned())
             }
-            Some((id, Some(Node::Group(group)))) if id != ROOT_ID => {
-                Held::Group(id, group.name.clone())
-            }
+            // A group has no panel. Its name and its two switches sit on
+            // its row, and it carries no size and no turn of its own, so a
+            // panel over it would hold nothing the list does not say.
             _ => return false,
         },
     };
@@ -1289,7 +1300,6 @@ fn properties_panel(
                 edited = box_properties(ui, &mut frame.scene.tv_box, frame_box, tokens);
             }
             Held::Map(id, _) => edited = map_properties(ui, *id, select, frame.scene, tokens),
-            Held::Group(id, _) => edited = group_properties(ui, *id, frame.scene, tokens),
         },
     );
     edited
@@ -1298,12 +1308,10 @@ fn properties_panel(
 /// What the properties panel is about.
 #[derive(Debug, Clone)]
 enum Held {
-    /// The box that decides what the TV shows. DESIGN.md 8.3.
+    /// The box that decides what the TV shows. DESIGN.md 8.2.
     TvBox,
     /// One map, by id, with the name of its file. DESIGN.md 8.1.
     Map(NodeId, String),
-    /// One group, by id, with its name.
-    Group(NodeId, String),
 }
 
 impl Held {
@@ -1311,46 +1319,9 @@ impl Held {
     fn title(&self) -> &str {
         match self {
             Self::TvBox => "TV box",
-            Self::Map(_, name) | Self::Group(_, name) => name,
+            Self::Map(_, name) => name,
         }
     }
-}
-
-/// The properties of a group. DESIGN.md 8.2.
-///
-/// Returns `true` when the DM changed one.
-///
-/// A group carries no size and no turn of its own. What it holds keeps
-/// its own place, so the panel names the group, says which screens it
-/// reaches, and counts what is inside it.
-fn group_properties(ui: &mut egui::Ui, id: NodeId, scene: &mut Scene, tokens: Tokens) -> bool {
-    let maps = crate::scene::assets_of(scene, id).len();
-    let holds = crate::scene::children_of(scene, id).map_or(0, <[Node]>::len);
-    let Some(group) = crate::scene::group_mut(scene, id) else {
-        return false;
-    };
-    let mut edited = false;
-    widget::row_label(ui, "Name");
-    let width = ui.available_width();
-    let field = ui.add(
-        egui::TextEdit::singleline(&mut group.name)
-            .desired_width(width)
-            .font(theme::font(theme::BODY, false))
-            .text_color(tokens.ink),
-    );
-    edited |= field.changed();
-    widget::row_label(ui, "Show on");
-    edited |= widget::checkbox(ui, &mut group.shown.dm, "The DM screen").clicked();
-    edited |= widget::checkbox(ui, &mut group.shown.tv, "The TV").clicked();
-    widget::helper(
-        ui,
-        "A group that is off for the TV takes everything in it off the TV.",
-    );
-    widget::row_label(ui, "Holds");
-    let rows = if holds == 1 { "row" } else { "rows" };
-    let each = if maps == 1 { "map" } else { "maps" };
-    widget::helper(ui, &format!("{holds} {rows}, and {maps} {each} in all."));
-    edited
 }
 
 /// A tab of the settings dialog. DESIGN.md 9.
@@ -1913,11 +1884,13 @@ struct Tree {
     open: std::collections::HashSet<NodeId>,
     /// The node the list opened its groups for.
     shown: Option<NodeId>,
-    /// How wide the panel stands, in points. DESIGN.md 8.5.
+    /// How wide the panel stands, in points. DESIGN.md 8.4.
     width: f32,
+    /// The group whose name the DM is writing, from a double click.
+    renaming: Option<NodeId>,
     /// The group the list shows. Its children are the rows under it.
     ///
-    /// DESIGN.md 8.5: the list never shows the whole tree from the root,
+    /// DESIGN.md 8.4: the list never shows the whole tree from the root,
     /// so the indent of a deep scene has no room to run away.
     scope: NodeId,
 }
@@ -1928,6 +1901,7 @@ impl Default for Tree {
             active: ROOT_ID,
             open: std::collections::HashSet::from([ROOT_ID]),
             shown: None,
+            renaming: None,
             width: PANEL_WIDTH,
             scope: ROOT_ID,
         }
@@ -1935,7 +1909,7 @@ impl Default for Tree {
 }
 /// The rows under one group. Returns `true` when the DM changed one.
 ///
-/// DESIGN.md 8.5 gives every row the same shape: a twist, the glyph that
+/// DESIGN.md 8.4 gives every row the same shape: a twist, the glyph that
 /// says what the row is, the name, then the two switches.
 fn tree_rows(
     ui: &mut egui::Ui,
@@ -1963,6 +1937,7 @@ fn tree_rows(
                     accent_glyph: tree.active == id,
                     tokens,
                 });
+                row_name(ui, row.name, &group.name, picked, tokens);
                 if row.twist.is_some_and(|twist| twist.clicked()) {
                     flip(&mut tree.open, id);
                 }
@@ -1970,18 +1945,20 @@ fn tree_rows(
                     let add = ui.input(|i| i.modifiers.ctrl);
                     select.take(id, add);
                     tree.active = id;
-                    // DESIGN.md 8.5: a click into a group puts that group
+                    // DESIGN.md 8.4: a click into a group puts that group
                     // at the top of the list. Ctrl gathers a selection
                     // instead, so it leaves the list where it stands.
                     if !add {
                         tree.scope = id;
                         tree.open.insert(id);
+                        // A name half written on another row does not
+                        // follow the list into a new group.
+                        tree.renaming = None;
                     }
                 }
                 if row.body.drag_started() {
                     egui::DragAndDrop::set_payload(ui.ctx(), id);
                 }
-                row_name(ui, row.name, &group.name, picked, tokens);
                 edited |= switches(ui, row.switches, &mut group.shown, tokens);
                 dropped_on(ui, &row.whole, id, true, moved, tokens);
                 if open {
@@ -2016,7 +1993,7 @@ fn tree_rows(
     edited
 }
 
-/// What one row of the objects list looks like. DESIGN.md 8.5.
+/// What one row of the objects list looks like. DESIGN.md 8.4.
 #[derive(Debug, Clone, Copy)]
 struct RowLook {
     /// How deep the row sits under the root.
@@ -2048,7 +2025,7 @@ struct Row {
     twist: Option<egui::Response>,
 }
 
-/// Where each part of one row of the objects list sits. DESIGN.md 8.5.
+/// Where each part of one row of the objects list sits. DESIGN.md 8.4.
 #[derive(Debug, Clone, Copy)]
 struct RowParts {
     /// The square that opens and closes a group, or `None` for an asset.
@@ -2193,7 +2170,7 @@ fn tree_row(ui: &mut egui::Ui, look: RowLook) -> Row {
 
 /// The name of a row, cut with an ellipsis when it runs too long.
 ///
-/// DESIGN.md 8.5: the whole name comes up under the pointer.
+/// DESIGN.md 8.4: the whole name comes up under the pointer.
 fn row_name(ui: &egui::Ui, rect: egui::Rect, name: &str, picked: bool, tokens: Tokens) {
     let color = if picked { tokens.accent } else { tokens.ink };
     let font = theme::font(theme::BODY, false);
@@ -2218,7 +2195,53 @@ fn row_name(ui: &egui::Ui, rect: egui::Rect, name: &str, picked: bool, tokens: T
     }
 }
 
-/// The two switches on a row: the DM screen, then the TV. DESIGN.md 8.5.
+/// A rename in place, from a double click on the name. DESIGN.md 10.
+///
+/// A group carries no panel, so its row is where its name is written. Only
+/// the row at the top of the list takes this, because a click on any other
+/// row takes the list into that group and every row moves. The second
+/// click of a double click would then land on a row that was not there
+/// when the first one went down.
+///
+/// The field takes the keyboard the frame it appears, because the click
+/// that opened it is over by then. `Enter` and `Escape` both give it up,
+/// and so does a click anywhere else.
+///
+/// Returns whether the name changed, and whether the DM is done with it.
+fn rename_field(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    name: &mut String,
+    tokens: Tokens,
+) -> (bool, bool) {
+    let mut field = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    field.set_clip_rect(rect);
+    let visuals = &mut field.style_mut().visuals;
+    visuals.extreme_bg_color = egui::Color32::TRANSPARENT;
+    visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
+    visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, tokens.accent);
+    let response = field.add(
+        egui::TextEdit::singleline(name)
+            .desired_width(rect.width())
+            .font(theme::font(theme::BODY, false))
+            .text_color(tokens.accent)
+            .margin(egui::Margin::ZERO),
+    );
+    if !response.has_focus() && !response.lost_focus() {
+        response.request_focus();
+    }
+    let key = field.input(|i| {
+        i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)
+    });
+    (response.changed(), key || response.lost_focus())
+}
+
+/// The two switches on a row: the DM screen, then the TV. DESIGN.md 8.4.
 fn switches(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -2291,7 +2314,7 @@ fn flip(open: &mut std::collections::HashSet<NodeId>, id: NodeId) {
     }
 }
 
-/// The properties of the TV box. DESIGN.md 8.3.
+/// The properties of the TV box. DESIGN.md 8.2.
 ///
 /// The DM drags a corner handle to reach a zoom by eye. This field reaches
 /// an exact one, such as 50 percent for a map twice the size of the table.
@@ -3421,7 +3444,7 @@ mod tests {
 
     #[test]
     fn a_deeper_row_indents_and_keeps_its_switches() {
-        // DESIGN.md 8.5: a child row indents from its parent, and the two
+        // DESIGN.md 8.4: a child row indents from its parent, and the two
         // switches stay on the right edge whatever the depth.
         let shallow = row_parts(row(), 1, true);
         let deep = row_parts(row(), 2, true);
