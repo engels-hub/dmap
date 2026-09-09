@@ -74,19 +74,23 @@ The DM view is the game master's own. The TV never moves with it.
 
 Pick a tool in the rail on the left.
 
-**Select** works on one map.
+**Select** works on the assets and the groups on the canvas.
 
 | Action | Control |
 |---|---|
-| Pick a map | Click it |
-| Move it | Drag it. The corner snaps to the grid |
+| Pick an asset | Click it |
+| Pick a group | Click its dashed box |
+| Add to what you hold | `Ctrl` with a click |
+| Pick everything in a patch | Drag over bare canvas. A list says what you took |
+| Group what you hold | Group, in that list |
+| Move it | Drag it. The corner snaps to the grid. A group takes its assets along |
 | Move it freely | `Ctrl` with a drag. The map keeps the spot it gets, and later steps run through that spot |
 | Scale it | Drag a corner handle |
 | Turn it | Drag the handle above the top edge. The angle snaps to 15 degrees |
 | Turn it a quarter | `R` |
 | Flip it | `F` for left to right, `Shift` with `F` for top to bottom |
 | Grow or shrink it a tenth | `+` or `-` |
-| Move it up or down the stack | `Page Up` or `Page Down` |
+| Move it up or down the stack | `Page Up` or `Page Down`. Nodes that sit in one group move together |
 | Set the pixels in one grid cell | Type the number in the panel, or press Measure a cell and click two corners of one cell |
 | Give up a measure | `Escape` |
 
@@ -101,6 +105,31 @@ Pick a tool in the rail on the left.
 | Zoom the box | `Ctrl` and `Alt` with the wheel, or the Zoom field in the panel |
 
 Add a map with the Add map button, or drop an image file on the DM window.
+
+### Groups and assets
+
+A scene is a tree. The root group holds everything else, and under it sit your assets and the groups you make. The **Scene** list in the settings panel shows that tree, with the top of the pile first.
+
+| In a row | What it does |
+|---|---|
+| `::` | Drag the row. Drop it on a group to put it in that group, or on an asset to take that asset's place |
+| Mark | The group a new asset joins. Click it to move the mark |
+| `>` or `v` | Open or close a group. A group starts closed |
+| Name | Type a name for a group. The root keeps its own |
+| Me | Draw this node on the DM screen |
+| TV | Draw this node on the TV |
+
+The two switches work on their own, and a group rules the nodes under it. A group with **TV** off keeps every asset in it off the TV, whatever the asset says. Use it for the room the players have not found.
+
+To move something you already placed, drag its row by the `::` grip onto a group. The **Group** field in the Map section does the same without a drag.
+
+A group draws over the groups under it, and its assets draw inside its place. Every group but the root shows a dashed box around what it holds. Click the box, or the group's name in the list, to take the group.
+
+A group you hold takes handles of its own. Drag the box to move it, a corner to grow it, and the handle above it to turn it. Everything in the group keeps its place and its shape.
+
+**Ungroup** takes a group apart. What was in it stays where it stood, in the group that held it.
+
+To take several things, drag over bare canvas. A list says what you took, and **Group** puts them in a new group. The new group lands in the lowest group that held them all. An uncle and a nephew meet in the group above both.
 
 **Scenes** in the rail opens the list of your scenes. Every row is a folder.
 

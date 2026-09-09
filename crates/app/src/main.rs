@@ -37,10 +37,10 @@ use crate::gpu::{Gpu, Pane};
 use crate::images::Loader;
 use crate::maps::{MapLayer, relative_path};
 use crate::pointer::PointerDisc;
-use crate::scene::MapObject;
-use crate::scene::{Scene, copy_into_scene};
+use crate::scene::copy_into_scene;
+use crate::scene::{Asset, Audience, Node, Scene, draw_order, push_into};
 use crate::tv::{display_at, dm_move_target, placement_for, resolve_tv_display};
-use crate::tvbox::{TvBox, clamp_snap_percent};
+use crate::tvbox::clamp_snap_percent;
 use crate::ui::{DmUi, Frame, SceneCommand, Settings};
 
 /// Size the DM window opens with. The design mockups use this frame.
@@ -194,12 +194,13 @@ struct Running {
     scenes_dir: PathBuf,
     /// What went wrong with the last thing the scenes dialog asked for.
     scene_error: String,
-    maps: Vec<MapObject>,
+    /// The group a new asset joins.
+    active_group: scene::NodeId,
+    /// The tree the DM works on.
+    scene: Scene,
     map_layer: MapLayer,
     loader: Loader,
     camera: Camera,
-    /// The part of the canvas the TV shows.
-    tv_box: TvBox,
 }
 
 impl Running {
@@ -240,8 +241,8 @@ impl Running {
         let loader = Loader::spawn(gpu.device.limits().max_texture_dimension_2d, move || {
             wake_window.request_redraw();
         });
-        for map in &scene.maps {
-            loader.request(scene_dir.join(&map.path));
+        for asset in scene::assets(scene) {
+            loader.request(scene_dir.join(&asset.path));
         }
         Ok(Self {
             gpu,
@@ -260,11 +261,11 @@ impl Running {
             scene_dir,
             scenes_dir: config.scenes_dir.clone(),
             scene_error: String::new(),
-            maps: scene.maps.clone(),
+            active_group: scene::ROOT_ID,
+            scene: scene.clone(),
             map_layer,
             loader,
             camera: DM_CAMERA,
-            tv_box: scene.tv_box.clamped(),
         })
     }
 
@@ -301,11 +302,12 @@ impl Running {
                 let viewport = (pane.config.width, pane.config.height);
                 let (device, queue) = (&self.gpu.device, &self.gpu.queue);
                 let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
-                let tv_camera = self.tv_box.camera(viewport);
-                let (map_layer, maps) = (&mut self.map_layer, &self.maps);
+                let tv_camera = self.scene.tv_box.camera(viewport);
+                let shown = draw_order(&self.scene, Audience::Tv);
+                let map_layer = &mut self.map_layer;
                 self.gpu
                     .clear(pane, color::linear_color(color::CANVAS), |pass| {
-                        map_layer.draw(device, queue, pass, maps, &tv_camera, viewport);
+                        map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
                         if let Some(center) = tv_pointer {
                             pointer.draw(queue, pass, center, viewport);
                         }
@@ -336,8 +338,14 @@ impl Running {
             }
         };
         self.loader.request(self.scene_dir.join(&stored));
-        self.maps.push(MapObject::new(stored, self.camera.center));
-        true
+        // A new asset joins the group the DM works in. That group may
+        // have gone since the DM marked it, and the root is always there.
+        if !scene::has_group(&self.scene, self.active_group) {
+            self.active_group = scene::ROOT_ID;
+        }
+        let id = self.scene.next_id();
+        let asset = Asset::new(id, stored, self.camera.center);
+        push_into(&mut self.scene, self.active_group, Node::Asset(asset))
     }
 
     /// Asks for an image file and adds it. Returns `true` when a file was added.
@@ -379,27 +387,28 @@ impl Running {
             Frame {
                 displays: &self.displays,
                 settings: &mut self.settings,
-                maps: &mut self.maps,
+                scene: &mut self.scene,
                 camera: &mut self.camera,
                 scene_dir: &self.scene_dir,
                 list_scenes: &|| config::scene_list(&self.scenes_dir),
                 scene_error: &self.scene_error,
                 scenes_dir: &self.scenes_dir,
-                tv_box: &mut self.tv_box,
                 tv_viewport: (self.tv.config.width, self.tv.config.height),
                 size_of: &|path| map_layer.size_of(path),
             },
         );
         let viewport = (self.dm.config.width, self.dm.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
-        let (map_layer, maps, camera) = (&mut self.map_layer, &self.maps, &self.camera);
+        let shown = draw_order(&self.scene, Audience::Dm);
+        let (map_layer, camera) = (&mut self.map_layer, &self.camera);
         self.ui
             .render(&self.gpu, &mut self.dm, output.paint, |pass| {
-                map_layer.draw(device, queue, pass, maps, camera, viewport);
+                map_layer.draw(device, queue, pass, &shown, camera, viewport);
             })?;
         if output.edited {
             self.tv.window.request_redraw();
         }
+        self.active_group = output.active_group;
         let added = output.add_map && self.pick_map_file();
         let settings_changed = self.settings != before;
         // Only a display or a swap moves a window. Every other setting, such
@@ -466,8 +475,8 @@ impl Running {
     /// new one must not draw the old one.
     fn open_scene(&mut self, dir: PathBuf, scene: &Scene) {
         self.scene_dir = dir;
-        self.maps.clone_from(&scene.maps);
-        self.tv_box = scene.tv_box.clamped();
+        self.scene = scene.clone();
+        self.scene.tv_box = scene.tv_box.clamped();
         self.map_layer.clear();
         self.reload_images();
         self.dm.window.set_title(&window_title(&self.scene_dir));
@@ -480,8 +489,8 @@ impl Running {
     /// A scene that moves takes its images with it, so what is in flight
     /// carries the old folder and never arrives.
     fn reload_images(&self) {
-        for map in &self.maps {
-            self.loader.request(self.scene_dir.join(&map.path));
+        for asset in scene::assets(&self.scene) {
+            self.loader.request(self.scene_dir.join(&asset.path));
         }
     }
 
@@ -490,8 +499,7 @@ impl Running {
         config.tv_display = placement_for(self.settings.tv_display, &display_names(&self.displays));
         config.swap_windows = self.settings.swap_windows;
         config.snap_percent = self.settings.snap_percent;
-        scene.maps.clone_from(&self.maps);
-        scene.tv_box = self.tv_box;
+        scene.clone_from(&self.scene);
     }
 }
 

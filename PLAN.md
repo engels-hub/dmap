@@ -102,12 +102,13 @@ Scene
  ├─ tv: TvConfig { width_px, height_px, ppi }
  ├─ tv_box: TvBox { pos, rot, zoom }        // zoom 1.0 = physical 1:1
  ├─ grid: GridConfig                          // see §4
- ├─ layers: Vec<Layer>          // ordered, each with visibility: DmOnly | Both
- │    ├─ MapLayer   { maps: Vec<MapObject> }
- │    ├─ DrawLayer  { strokes: Vec<Stroke>, shapes: Vec<Shape> }
- │    ├─ WallLayer  { walls: Vec<Wall> }        // segments, door flag, blocks_light/blocks_sight
- │    └─ LightLayer { lights: Vec<Light>, ambient: Color, darkness: f32 }
- └─ assets: AssetStore          // id -> path, hash; paths are relative to the project directory
+ └─ root: Group                 // one tree: the root holds every other node
+      Group { id, name, shown: { dm, tv }, children: Vec<Node> }
+      Node  = Group | Asset
+      Asset { id, path, shown, transform (pos, rot, scale.xy - negative to flip), grid_px }
+      // A group draws over the groups under it, and its children draw in its place.
+      // A node draws for one screen only when it and every group above it show for it.
+      // Walls, lights and strokes join the tree as their own kinds of node.
 
 MapObject { asset: AssetId, transform: Transform2D (pos, rot, scale.xy — negative to flip), grid_px, opacity }
 Light     { pos, bright_radius, dim_radius, color, intensity, cone_angle, rotation, animation }
