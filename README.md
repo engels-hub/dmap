@@ -17,7 +17,7 @@ dmap shows maps for a tabletop role-playing game on a TV.
 
 ## Versions
 
-dmap follows semantic versioning. It is at 0.1.0 today.
+dmap follows semantic versioning. It is at 0.1.1 today.
 
 - The third number goes up for a release that only fixes bugs, such as 0.1.1.
 - The second number goes up for a release that adds a feature, such as 0.2.0. It resets the third to zero.

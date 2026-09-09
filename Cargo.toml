@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/app"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/engels-hub/dmap"
@@ -54,6 +54,14 @@ multiple_crate_versions = "allow"
 cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
+
+
+# The symbol table is 3.8 MB of the binary, and a DM who downloads a
+# release never reads it. A backtrace from a stripped build names no
+# function, so a bug report that needs one comes from a build made at the
+# same tag from source.
+[profile.release]
+strip = true
 
 # Image decoding and the GPU stack are far too slow unoptimized.
 [profile.dev.package."*"]
