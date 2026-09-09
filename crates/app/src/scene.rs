@@ -295,7 +295,11 @@ pub fn assets(scene: &Scene) -> Vec<&Asset> {
 /// half strength. DESIGN.md 5.6.
 pub fn dm_draw_order(scene: &Scene) -> Vec<(&Asset, bool)> {
     let mut drawn = Vec::new();
-    collect_for_dm(&scene.root.children, scene.root.shows(Audience::Tv), &mut drawn);
+    collect_for_dm(
+        &scene.root.children,
+        scene.root.shows(Audience::Tv),
+        &mut drawn,
+    );
     drawn
 }
 
@@ -1048,10 +1052,11 @@ mod tests {
     /// A scene with one map loose under the root and one inside a group.
     fn scene_with_a_group() -> Scene {
         let mut scene = Scene::default();
-        scene
-            .root
-            .children
-            .push(Node::Asset(Asset::new(1, PathBuf::from("loose.png"), (0.0, 0.0))));
+        scene.root.children.push(Node::Asset(Asset::new(
+            1,
+            PathBuf::from("loose.png"),
+            (0.0, 0.0),
+        )));
         let mut notes = Group::new(2, "Notes".to_owned());
         notes.children.push(Node::Asset(Asset::new(
             3,
@@ -1101,7 +1106,10 @@ mod tests {
         let scene = scene_with_a_group();
         assert_eq!(
             dm_names(&scene),
-            vec![("loose.png".to_owned(), true), ("secret.png".to_owned(), true)]
+            vec![
+                ("loose.png".to_owned(), true),
+                ("secret.png".to_owned(), true)
+            ]
         );
     }
 
@@ -1115,7 +1123,10 @@ mod tests {
         loose.shown.tv = false;
         assert_eq!(
             dm_names(&scene),
-            vec![("loose.png".to_owned(), false), ("secret.png".to_owned(), true)]
+            vec![
+                ("loose.png".to_owned(), false),
+                ("secret.png".to_owned(), true)
+            ]
         );
     }
 
@@ -1129,7 +1140,10 @@ mod tests {
         // The asset inside says yes, and the group over it still wins.
         assert_eq!(
             dm_names(&scene),
-            vec![("loose.png".to_owned(), true), ("secret.png".to_owned(), false)]
+            vec![
+                ("loose.png".to_owned(), true),
+                ("secret.png".to_owned(), false)
+            ]
         );
     }
 

@@ -2,7 +2,9 @@
 
 // Rust guideline compliant 2026-02-21
 
-use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle};
+use egui::{
+    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
+};
 
 /// Atkinson Hyperlegible in weight 400, with tabular figures.
 ///
@@ -225,10 +227,19 @@ pub fn of(ctx: &egui::Context) -> Tokens {
 fn text_styles() -> std::collections::BTreeMap<TextStyle, FontId> {
     let bold = FontFamily::Name(BOLD_FAMILY.into());
     [
-        (TextStyle::Small, FontId::new(SMALL, FontFamily::Proportional)),
+        (
+            TextStyle::Small,
+            FontId::new(SMALL, FontFamily::Proportional),
+        ),
         (TextStyle::Body, FontId::new(BODY, FontFamily::Proportional)),
-        (TextStyle::Button, FontId::new(BODY, FontFamily::Proportional)),
-        (TextStyle::Monospace, FontId::new(SMALL, FontFamily::Proportional)),
+        (
+            TextStyle::Button,
+            FontId::new(BODY, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Monospace,
+            FontId::new(SMALL, FontFamily::Proportional),
+        ),
         (TextStyle::Heading, FontId::new(TITLE, bold)),
     ]
     .into_iter()
@@ -250,18 +261,25 @@ pub fn font(size: f32, bold: bool) -> FontId {
 /// Puts Atkinson Hyperlegible in front of every family.
 fn fonts(ctx: &egui::Context) {
     let mut definitions = FontDefinitions::default();
-    definitions
-        .font_data
-        .insert("atkinson".to_owned(), std::sync::Arc::new(FontData::from_static(REGULAR)));
-    definitions
-        .font_data
-        .insert("atkinson-bold".to_owned(), std::sync::Arc::new(FontData::from_static(BOLD)));
+    definitions.font_data.insert(
+        "atkinson".to_owned(),
+        std::sync::Arc::new(FontData::from_static(REGULAR)),
+    );
+    definitions.font_data.insert(
+        "atkinson-bold".to_owned(),
+        std::sync::Arc::new(FontData::from_static(BOLD)),
+    );
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
-        definitions.families.entry(family).or_default().insert(0, "atkinson".to_owned());
+        definitions
+            .families
+            .entry(family)
+            .or_default()
+            .insert(0, "atkinson".to_owned());
     }
-    definitions
-        .families
-        .insert(FontFamily::Name(BOLD_FAMILY.into()), vec!["atkinson-bold".to_owned()]);
+    definitions.families.insert(
+        FontFamily::Name(BOLD_FAMILY.into()),
+        vec!["atkinson-bold".to_owned()],
+    );
     ctx.set_fonts(definitions);
 }
 
@@ -353,5 +371,4 @@ mod tests {
         assert!(DARK.shadow.is_none());
         assert!(DARK.shadow_offset().is_none());
     }
-
 }

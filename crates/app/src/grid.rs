@@ -183,7 +183,10 @@ impl GridLayer {
             color[2],
             color[3],
         ];
-        let bytes: Vec<u8> = values.iter().flat_map(|value| value.to_ne_bytes()).collect();
+        let bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|value| value.to_ne_bytes())
+            .collect();
         queue.write_buffer(&self.uniform, 0, &bytes);
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);

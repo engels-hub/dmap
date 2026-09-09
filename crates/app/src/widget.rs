@@ -114,9 +114,8 @@ pub fn row_label(ui: &mut Ui, text: &str) {
 pub fn button(ui: &mut Ui, text: &str, glyph: Option<Icon>, height: Height) -> Response {
     let tokens = theme::of(ui.ctx());
     let font = theme::font(theme::BODY, false);
-    let width = text_width(ui, text, &font)
-        + 2.0 * PAD
-        + glyph.map_or(0.0, |_| SMALL_ICON + ICON_GAP);
+    let width =
+        text_width(ui, text, &font) + 2.0 * PAD + glyph.map_or(0.0, |_| SMALL_ICON + ICON_GAP);
     let (rect, response) = ui.allocate_exact_size(vec2(width, height.points()), Sense::click());
     let fill = if response.is_pointer_button_down_on() || response.hovered() {
         tokens.raised
@@ -159,9 +158,9 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, text: &str) -> Response {
     let tokens = theme::of(ui.ctx());
     let font = theme::font(theme::BODY, false);
     let room = (ui.available_width() - BOX_SIDE - CHECK_GAP).max(BOX_SIDE);
-    let galley = ui.ctx().fonts_mut(|fonts| {
-        fonts.layout(text.to_owned(), font, tokens.ink, room)
-    });
+    let galley = ui
+        .ctx()
+        .fonts_mut(|fonts| fonts.layout(text.to_owned(), font, tokens.ink, room));
     let height = galley.size().y.max(CONTROL);
     let (rect, response) = ui.allocate_exact_size(
         vec2(BOX_SIDE + CHECK_GAP + galley.size().x, height),
@@ -281,8 +280,7 @@ pub fn input(
     } else {
         ICON_GAP + text_width(ui, unit, &font)
     };
-    let (whole, _) =
-        ui.allocate_exact_size(vec2(width + unit_width, CONTROL), Sense::hover());
+    let (whole, _) = ui.allocate_exact_size(vec2(width + unit_width, CONTROL), Sense::hover());
     let rect = Rect::from_min_size(whole.left_top(), vec2(width, CONTROL));
     // The frame goes down first. A frame painted after the value would
     // cover the number with its own fill.

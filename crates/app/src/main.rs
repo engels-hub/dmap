@@ -16,8 +16,8 @@ mod images;
 mod maps;
 mod pointer;
 mod scene;
-mod transform;
 mod theme;
+mod transform;
 mod tv;
 mod tvbox;
 mod ui;
@@ -324,16 +324,15 @@ impl Running {
                 let grid_layer = &self.grid_layer;
                 let line = self.settings.theme.tokens().grid_line();
                 let width = pane.window.scale_factor() as f32;
-                self.gpu
-                    .clear(pane, color::linear_token(canvas), |pass| {
-                        map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
-                        // DESIGN.md 5.1: one grid covers the canvas and it
-                        // lies over every map, on both screens.
-                        grid_layer.draw(queue, pass, &tv_camera, viewport, line, width);
-                        if let Some(center) = tv_pointer {
-                            pointer.draw(queue, pass, center, viewport);
-                        }
-                    })?;
+                self.gpu.clear(pane, color::linear_token(canvas), |pass| {
+                    map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
+                    // DESIGN.md 5.1: one grid covers the canvas and it
+                    // lies over every map, on both screens.
+                    grid_layer.draw(queue, pass, &tv_camera, viewport, line, width);
+                    if let Some(center) = tv_pointer {
+                        pointer.draw(queue, pass, center, viewport);
+                    }
+                })?;
             }
             WindowEvent::CursorMoved { position, .. } if !is_dm => {
                 self.tv_pointer = Some((position.x as f32, position.y as f32));
@@ -439,11 +438,16 @@ impl Running {
         let tokens = self.settings.theme.tokens();
         let line = tokens.grid_line();
         let width = self.dm.window.scale_factor() as f32;
-        self.ui
-            .render(&self.gpu, &mut self.dm, output.paint, tokens.canvas, |pass| {
+        self.ui.render(
+            &self.gpu,
+            &mut self.dm,
+            output.paint,
+            tokens.canvas,
+            |pass| {
                 map_layer.draw(device, queue, pass, &shown, camera, viewport);
                 grid_layer.draw(queue, pass, camera, viewport, line, width);
-            })?;
+            },
+        )?;
         if output.edited {
             self.tv.window.request_redraw();
         }

@@ -12,10 +12,13 @@ the Lucide set, so the drawing code only scales and offsets them.
 import math
 import os
 import re
+import subprocess
 import sys
 
 ASSETS = "crates/app/assets/icons"
 OUT = "crates/app/src/icons.rs"
+# The edition of the crate the file joins, so rustfmt parses it the same way.
+EDITION = "2024"
 # Flatness of a curve, in the 24 unit grid. One tenth of a unit is under a
 # tenth of a pixel at the 22 px the toolbar draws.
 TOLERANCE = 0.1
@@ -311,6 +314,19 @@ def main():
         lines.append("];")
         lines.append("")
     open(OUT, "w", encoding="utf-8").write("\n".join(lines))
+    # `cargo fmt --all --check` runs in CI, and it does not care that a
+    # file is generated. So rustfmt gets the last word on this one too,
+    # and the generator never has to guess how it wraps a long list.
+    try:
+        subprocess.run(
+            ["rustfmt", "--edition", EDITION, OUT],
+            check=True,
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        sys.exit("rustfmt is not on the path: install it with `rustup component add rustfmt`")
+    except subprocess.CalledProcessError as error:
+        sys.exit(f"rustfmt refused {OUT}: {error.stderr.decode()}")
     print(f"{OUT}: {len(variants)} glyphs")
 
 

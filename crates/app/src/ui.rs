@@ -660,8 +660,7 @@ impl DmUi {
                 self.renderer
                     .update_buffers(&gpu.device, &gpu.queue, &mut encoder, &jobs, &screen);
             {
-                let mut pass =
-                    begin_clear_pass(&mut encoder, &view, color::linear_token(canvas));
+                let mut pass = begin_clear_pass(&mut encoder, &view, color::linear_token(canvas));
                 draw_canvas(&mut pass);
                 self.renderer.render(&mut pass, &jobs, &screen);
             };
@@ -751,7 +750,10 @@ fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
         (text + 2.0 * TOOL_PAD).max(TOOL_WIDTH).ceil()
     };
     let view_widths: Vec<f32> = views.iter().map(|(_, label, _)| width_of(label)).collect();
-    let action_widths: Vec<f32> = actions.iter().map(|(_, label, _)| width_of(label)).collect();
+    let action_widths: Vec<f32> = actions
+        .iter()
+        .map(|(_, label, _)| width_of(label))
+        .collect();
     // A segment shares its border with the segment beside it. DESIGN.md 6.
     let views_width = view_widths.iter().sum::<f32>() - (views.len() - 1) as f32;
     let actions_width = action_widths.iter().sum::<f32>();
@@ -768,10 +770,8 @@ fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
         .show(ui.ctx(), |ui| {
             let (whole, _) =
                 ui.allocate_exact_size(egui::vec2(width, TOOL_HEIGHT), egui::Sense::hover());
-            let views_box = egui::Rect::from_min_size(
-                whole.left_top(),
-                egui::vec2(views_width, TOOL_HEIGHT),
-            );
+            let views_box =
+                egui::Rect::from_min_size(whole.left_top(), egui::vec2(views_width, TOOL_HEIGHT));
             let actions_box = egui::Rect::from_min_size(
                 egui::pos2(views_box.right() + TOOL_GROUP_GAP, whole.top()),
                 egui::vec2(actions_width, TOOL_HEIGHT),
@@ -974,8 +974,8 @@ fn panel(
             }
             body_ui.spacing_mut().item_spacing.y = PANEL_PAD;
             body(&mut body_ui);
-            let tall = height
-                .unwrap_or_else(|| body_ui.min_rect().bottom() + PANEL_PAD - left_top.y);
+            let tall =
+                height.unwrap_or_else(|| body_ui.min_rect().bottom() + PANEL_PAD - left_top.y);
             rect = egui::Rect::from_min_size(left_top, egui::vec2(width, tall));
             if let (Some(color), Some(offset)) = (tokens.shadow, tokens.shadow_offset()) {
                 ui.painter().set(
@@ -1044,10 +1044,7 @@ fn objects_panel(
     }
     let screen = ctx.content_rect();
     let tall = screen.height() - 2.0 * MARGIN - TOOL_HEIGHT - MARGIN;
-    let rect = egui::Rect::from_min_size(
-        egui::pos2(MARGIN, MARGIN),
-        egui::vec2(tree.width, tall),
-    );
+    let rect = egui::Rect::from_min_size(egui::pos2(MARGIN, MARGIN), egui::vec2(tree.width, tall));
     let mut edited = false;
     let mut moved = None;
     panel(
@@ -1061,64 +1058,64 @@ fn objects_panel(
         },
         tokens,
         |ui| {
-        // DESIGN.md 8.4: the path names the group the list shows, and each
-        // part of it takes a click and goes back up.
-        let path = crate::scene::path_to(scene, tree.scope);
-        if let Some(up) = path_line(ui, &path, tokens) {
-            tree.scope = up;
-            tree.open.insert(up);
-        }
-        let footer = 2.0 * Height::Panel.points() + 3.0 * PANEL_PAD;
-        let list = ui.available_height() - footer;
-        egui::ScrollArea::vertical()
-            .max_height(list.max(ROW_HEIGHT))
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                edited |= scoped_rows(ui, scene, select, tree, &mut moved, tokens);
-            });
-        // DESIGN.md 7.1: a rule runs the whole width above the footer, so
-        // it reaches past the padding of the body.
-        widget::rule_bottom(
-            ui,
-            egui::Rect::from_min_size(
-                egui::pos2(rect.left(), ui.cursor().top() - PANEL_PAD / 2.0),
-                egui::vec2(rect.width(), 0.0),
-            ),
-            tokens,
-        );
-        ui.horizontal(|ui| {
-            // The DM can only take apart the one group they hold.
-            let group = select.only().filter(|id| *id != ROOT_ID).filter(|id| {
-                crate::scene::find(scene, *id)
-                    .and_then(Node::group)
-                    .is_some()
-            });
-            if widget::button(ui, "New group", Some(Icon::Plus), Height::Panel).clicked() {
-                let id = scene.next_id();
-                let new = Group::new(id, format!("Group {id}"));
-                crate::scene::push_into(scene, tree.active, Node::Group(new));
-                tree.open.insert(id);
-                tree.active = id;
-                edited = true;
+            // DESIGN.md 8.4: the path names the group the list shows, and each
+            // part of it takes a click and goes back up.
+            let path = crate::scene::path_to(scene, tree.scope);
+            if let Some(up) = path_line(ui, &path, tokens) {
+                tree.scope = up;
+                tree.open.insert(up);
             }
-            let ungroup = widget::button(ui, "Ungroup", None, Height::Panel);
-            if group.is_some() && ungroup.clicked() {
-                // What was in it stands where it stood.
-                let id = group.unwrap_or(ROOT_ID);
-                let freed = crate::scene::assets_of(scene, id);
-                edited |= crate::scene::ungroup(scene, id);
-                select.chosen = freed;
-            }
-        });
-        if select.note.is_empty() {
-            widget::helper(ui, "A new asset joins the marked group.");
-        } else {
-            ui.label(
-                egui::RichText::new(&select.note)
-                    .font(theme::font(theme::SMALL, false))
-                    .color(tokens.accent),
+            let footer = 2.0 * Height::Panel.points() + 3.0 * PANEL_PAD;
+            let list = ui.available_height() - footer;
+            egui::ScrollArea::vertical()
+                .max_height(list.max(ROW_HEIGHT))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    edited |= scoped_rows(ui, scene, select, tree, &mut moved, tokens);
+                });
+            // DESIGN.md 7.1: a rule runs the whole width above the footer, so
+            // it reaches past the padding of the body.
+            widget::rule_bottom(
+                ui,
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.left(), ui.cursor().top() - PANEL_PAD / 2.0),
+                    egui::vec2(rect.width(), 0.0),
+                ),
+                tokens,
             );
-        }
+            ui.horizontal(|ui| {
+                // The DM can only take apart the one group they hold.
+                let group = select.only().filter(|id| *id != ROOT_ID).filter(|id| {
+                    crate::scene::find(scene, *id)
+                        .and_then(Node::group)
+                        .is_some()
+                });
+                if widget::button(ui, "New group", Some(Icon::Plus), Height::Panel).clicked() {
+                    let id = scene.next_id();
+                    let new = Group::new(id, format!("Group {id}"));
+                    crate::scene::push_into(scene, tree.active, Node::Group(new));
+                    tree.open.insert(id);
+                    tree.active = id;
+                    edited = true;
+                }
+                let ungroup = widget::button(ui, "Ungroup", None, Height::Panel);
+                if group.is_some() && ungroup.clicked() {
+                    // What was in it stands where it stood.
+                    let id = group.unwrap_or(ROOT_ID);
+                    let freed = crate::scene::assets_of(scene, id);
+                    edited |= crate::scene::ungroup(scene, id);
+                    select.chosen = freed;
+                }
+            });
+            if select.note.is_empty() {
+                widget::helper(ui, "A new asset joins the marked group.");
+            } else {
+                ui.label(
+                    egui::RichText::new(&select.note)
+                        .font(theme::font(theme::SMALL, false))
+                        .color(tokens.accent),
+                );
+            }
         },
     );
     if let Some((node, target, into)) = moved {
@@ -1152,14 +1149,17 @@ fn scoped_rows(
         return false;
     };
     let mut edited = false;
-    let row = tree_row(ui, RowLook {
-        depth: 0,
-        picked,
-        twist: Some(open),
-        glyph: Icon::Folder,
-        accent_glyph: tree.active == scope,
-        tokens,
-    });
+    let row = tree_row(
+        ui,
+        RowLook {
+            depth: 0,
+            picked,
+            twist: Some(open),
+            glyph: Icon::Folder,
+            accent_glyph: tree.active == scope,
+            tokens,
+        },
+    );
     if tree.renaming == Some(scope) && scope != ROOT_ID {
         let (changed, done) = rename_field(ui, row.name, &mut group.name, tokens);
         edited |= changed;
@@ -1338,7 +1338,10 @@ fn properties_panel(
     let screen = ctx.content_rect();
     let held = match tool {
         Tool::Table => Held::TvBox,
-        Tool::Select => match select.only().map(|id| (id, crate::scene::find(frame.scene, id))) {
+        Tool::Select => match select
+            .only()
+            .map(|id| (id, crate::scene::find(frame.scene, id)))
+        {
             Some((id, Some(Node::Asset(asset)))) => {
                 Held::Map(id, asset.path.to_string_lossy().into_owned())
             }
@@ -1495,10 +1498,10 @@ fn dialog_frame(
             icon::paint(ui.painter(), Icon::X, close_rect.center(), 18.0, tokens.ink);
             close |= button.clicked();
             widget::rule_bottom(ui, header, tokens);
-            body(ui, egui::Rect::from_min_max(
-                egui::pos2(rect.left(), header.bottom()),
-                rect.max,
-            ));
+            body(
+                ui,
+                egui::Rect::from_min_max(egui::pos2(rect.left(), header.bottom()), rect.max),
+            );
         });
     close || ctx.input(|i| i.key_pressed(egui::Key::Escape))
 }
@@ -1531,19 +1534,27 @@ fn settings_dialog(
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(&mut body_ui, |body_ui| {
-        body_ui.spacing_mut().item_spacing.y = ROW_GAP;
-        match dialog.tab {
-            Tab::Table => {
-                edited = table_tab(body_ui, frame, &mut dialog.scale_drag, tokens);
-            }
-            Tab::Grid => not_built(body_ui, "The grid settings arrive with the hex grid (#15)."),
-            Tab::Light => {
-                not_built(body_ui, "The light settings arrive with the darkness slider (#20).");
-            }
-            Tab::Shortcuts => {
-                not_built(body_ui, "The key list arrives with the shortcuts story (#36).");
-            }
-        }
+                body_ui.spacing_mut().item_spacing.y = ROW_GAP;
+                match dialog.tab {
+                    Tab::Table => {
+                        edited = table_tab(body_ui, frame, &mut dialog.scale_drag, tokens);
+                    }
+                    Tab::Grid => {
+                        not_built(body_ui, "The grid settings arrive with the hex grid (#15).");
+                    }
+                    Tab::Light => {
+                        not_built(
+                            body_ui,
+                            "The light settings arrive with the darkness slider (#20).",
+                        );
+                    }
+                    Tab::Shortcuts => {
+                        not_built(
+                            body_ui,
+                            "The key list arrives with the shortcuts story (#36).",
+                        );
+                    }
+                }
             });
     });
     if close {
@@ -1792,13 +1803,7 @@ fn scenes_dialog(
                     tokens.hairline(),
                     egui::StrokeKind::Inside,
                 );
-                row_name(
-                    ui,
-                    rect.shrink2(egui::vec2(8.0, 0.0)),
-                    &path,
-                    false,
-                    tokens,
-                );
+                row_name(ui, rect.shrink2(egui::vec2(8.0, 0.0)), &path, false, tokens);
                 let _ = response;
                 if widget::button(ui, "Change", None, Height::Full).clicked() {
                     command = Some(SceneCommand::ScenesFolder);
@@ -1866,8 +1871,10 @@ fn scene_row(
     tokens: Tokens,
     height: f32,
 ) {
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
     widget::rule_bottom(ui, rect, tokens);
     let mut row = ui.new_child(
         egui::UiBuilder::new()
@@ -1997,14 +2004,17 @@ fn tree_rows(
                 let id = group.id;
                 let open = tree.open.contains(&id);
                 let picked = select.holds(id);
-                let row = tree_row(ui, RowLook {
-                    depth,
-                    picked,
-                    twist: Some(open),
-                    glyph: Icon::Folder,
-                    accent_glyph: tree.active == id,
-                    tokens,
-                });
+                let row = tree_row(
+                    ui,
+                    RowLook {
+                        depth,
+                        picked,
+                        twist: Some(open),
+                        glyph: Icon::Folder,
+                        accent_glyph: tree.active == id,
+                        tokens,
+                    },
+                );
                 row_name(ui, row.name, &group.name, picked, tokens);
                 if row.twist.is_some_and(|twist| twist.clicked()) {
                     flip(&mut tree.open, id);
@@ -2030,21 +2040,31 @@ fn tree_rows(
                 edited |= switches(ui, row.switches, &mut group.shown, tokens);
                 dropped_on(ui, &row.whole, id, true, moved, tokens);
                 if open {
-                    edited |=
-                        tree_rows(ui, &mut group.children, select, tree, depth + 1, moved, tokens);
+                    edited |= tree_rows(
+                        ui,
+                        &mut group.children,
+                        select,
+                        tree,
+                        depth + 1,
+                        moved,
+                        tokens,
+                    );
                 }
             }
             Node::Asset(asset) => {
                 let id = asset.id;
                 let picked = select.holds(id);
-                let row = tree_row(ui, RowLook {
-                    depth,
-                    picked,
-                    twist: None,
-                    glyph: Icon::Image,
-                    accent_glyph: false,
-                    tokens,
-                });
+                let row = tree_row(
+                    ui,
+                    RowLook {
+                        depth,
+                        picked,
+                        twist: None,
+                        glyph: Icon::Image,
+                        accent_glyph: false,
+                        tokens,
+                    },
+                );
                 if row.body.clicked() {
                     select.take(id, ui.input(|i| i.modifiers.ctrl));
                 }
@@ -2258,8 +2278,12 @@ fn row_name(ui: &egui::Ui, rect: egui::Rect, name: &str, picked: bool, tokens: T
         color,
     );
     if cut {
-        ui.interact(rect, ui.id().with(("name", rect.top() as i32)), egui::Sense::hover())
-            .on_hover_text(name);
+        ui.interact(
+            rect,
+            ui.id().with(("name", rect.top() as i32)),
+            egui::Sense::hover(),
+        )
+        .on_hover_text(name);
     }
 }
 
@@ -2303,9 +2327,7 @@ fn rename_field(
     if !response.has_focus() && !response.lost_focus() {
         response.request_focus();
     }
-    let key = field.input(|i| {
-        i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)
-    });
+    let key = field.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
     (response.changed(), key || response.lost_focus())
 }
 
@@ -2367,8 +2389,11 @@ fn dropped_on(
 ) {
     if row.dnd_hover_payload::<NodeId>().is_some() {
         let rect = row.rect;
-        ui.painter()
-            .hline(rect.x_range(), rect.top(), egui::Stroke::new(2.0, tokens.accent));
+        ui.painter().hline(
+            rect.x_range(),
+            rect.top(),
+            egui::Stroke::new(2.0, tokens.accent),
+        );
     }
     if let Some(dragged) = row.dnd_release_payload::<NodeId>() {
         *moved = Some((*dragged, id, is_group));
@@ -2460,7 +2485,16 @@ fn map_properties(
     };
     widget::row_label(ui, "Pixels per cell");
     let mut grid_px = map.grid_px;
-    if widget::input(ui, &mut grid_px, "px", 100.0, MIN_GRID_PX..=MAX_GRID_PX, 1.0).changed() {
+    if widget::input(
+        ui,
+        &mut grid_px,
+        "px",
+        100.0,
+        MIN_GRID_PX..=MAX_GRID_PX,
+        1.0,
+    )
+    .changed()
+    {
         map.grid_px = grid_px;
         edited = true;
     }
@@ -2528,8 +2562,10 @@ fn canvas(
         // A line from the first corner to the cursor, so the DM sees the
         // cell that is being measured.
         if let (Some(Measure::From(first)), Some(pos)) = (select.measure, pointer.pos) {
-            ui.painter_at(rect)
-                .line_segment([view.to_screen(first), pos], egui::Stroke::new(2.0, tokens.accent));
+            ui.painter_at(rect).line_segment(
+                [view.to_screen(first), pos],
+                egui::Stroke::new(2.0, tokens.accent),
+            );
         }
         return edited;
     }
@@ -2911,7 +2947,9 @@ fn draw_tv_box(
     painter.add(egui::Shape::closed_line(handles.to_vec(), stroke));
     // DESIGN.md 5.4: a handle stands 4 points outside the box, so the
     // outline stays whole under it.
-    let middle = handles.iter().fold(egui::Vec2::ZERO, |sum, at| sum + at.to_vec2())
+    let middle = handles
+        .iter()
+        .fold(egui::Vec2::ZERO, |sum, at| sum + at.to_vec2())
         / handles.len() as f32;
     for handle in handles {
         let away = (handle.to_vec2() - middle).normalized() * HANDLE_STANDOFF;
@@ -2930,7 +2968,11 @@ fn draw_tv_box(
         egui::Align2::RIGHT_BOTTOM,
         format!("{} %", (zoom * 100.0).round()),
         theme::font(ZOOM_LABEL_SIZE, true),
-        if at_true_size(zoom) { tokens.accent } else { tokens.ink },
+        if at_true_size(zoom) {
+            tokens.accent
+        } else {
+            tokens.ink
+        },
     );
 }
 
