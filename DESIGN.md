@@ -66,9 +66,11 @@ Caution: a scale under 100 % takes a button under the 24 px floor of section 6. 
 - Stroke 2 px on a 24 px grid. Round caps and joins. No fills. A star that is set is the one glyph with a fill.
 - Sizes: 18 px in the toolbar, in dialog navigation, in a close button and for the select chevron, 16 px in a panel, a menu and a list row, 14 px for a list twist and for the checkbox check, 13 px in a path line.
 - Glyphs in the toolbar: `mouse-pointer` (Select), `pencil` (Draw), `ruler` (Edit), `monitor` (Table), `layers` (Scenes), `plus` (Add map), `sliders-horizontal` (Settings).
-- Glyphs on the second bar of the Edit view: `wall` (Walls), `door` (Doors), `sun` (Light), `fog` (Fog).
-- Glyphs in a dialog: `grid-3x3` (Grid tab), `sun` (Light tab), `keyboard` (Shortcuts tab), `x` (close), `chevron-down` (select), `check` (checkbox), `import` (Import).
-- Glyphs in a panel or a menu: `folder`, `image`, `film`, `eye`, `eye-off`, `monitor-off`, `star`, `search`, `chevron-right`, `arrow-up`, `arrow-down`, `rotate-cw`, `flip-horizontal`, `flip-vertical`, `ruler`, `trash-2`, `line`, `square`, `circle`, `eraser`, `play`, `pause`, `undo`, `alert`.
+- Glyphs on the second bar of the Edit view: `brick-wall` (Walls), `door-open` (Doors), `sun` (Light), `cloud-fog` (Fog).
+- Glyphs in a dialog: `monitor` (Table tab), `grid-3x3` (Grid tab), `sun` (Light tab), `keyboard` (Shortcuts tab), `x` (close), `chevron-down` (select), `check` (checkbox), `import` (Import).
+- Glyphs in a panel or a menu: `folder`, `image`, `film`, `eye`, `eye-off`, `monitor-off`, `star`, `search`, `chevron-right`, `arrow-up`, `arrow-down`, `rotate-cw`, `flip-horizontal-2`, `flip-vertical-2`, `ruler`, `trash`, `minus` (line), `square`, `circle`, `eraser`, `play`, `pause`, `undo`, `triangle-alert`.
+
+Every name above is a name the Lucide set holds. Check a new one against the set before this document takes it: the set renames a glyph from time to time, and a name that reads well is not always a name that exists.
 
 ## 5. Layout of the DM window
 
