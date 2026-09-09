@@ -2,7 +2,7 @@
 
 [![aislop](https://badges.scanaislop.com/score/engels-hub/dmap.svg)](https://scanaislop.com/engels-hub/dmap)
 
-## WARNING: The list below is where dmap is going, not where it is. Version 1.0.0 is the MVP. Keep track of feature completion in the "Issues" section
+## WARNING: The list below is where dmap is going, not where it is. Keep track of feature completion in the "Issues" section
 
 
 dmap shows maps for a tabletop role-playing game on a TV.
@@ -17,12 +17,12 @@ dmap shows maps for a tabletop role-playing game on a TV.
 
 ## Versions
 
-dmap follows semantic versioning.
+dmap follows semantic versioning. It is at 0.1.0 today.
 
-- 1.0.0 is the MVP: a canvas, the TV box, scenes that save themselves, a tree of groups, and the window of DESIGN.md.
-- The third number goes up for a release that only fixes bugs, such as 1.0.1.
-- The second number goes up for a release that adds a feature, such as 1.1.0. It resets the third to zero.
+- The third number goes up for a release that only fixes bugs, such as 0.1.1.
+- The second number goes up for a release that adds a feature, such as 0.2.0. It resets the third to zero.
 - The first number goes up when a release asks a DM to change something they already have, such as a scene file the older program cannot read.
+- 1.0.0 waits until this page describes only what the program does.
 
 ## Contributing
 
