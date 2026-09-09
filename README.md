@@ -124,7 +124,9 @@ A scene is a tree. The root group holds everything else, and under it sit your a
 
 A group you hold shows its name in a field. Type there to rename it.
 
-The two switches work on their own, and a group rules the nodes under it. A group with **TV** off keeps every asset in it off the TV, whatever the asset says. Use it for the room the players have not found.
+The two switches work on their own, and a group rules the nodes under it. A group with the screen switch off keeps every asset in it off the TV, whatever the asset says. Use it for the room the players have not found.
+
+A map the TV does not show draws faint on your own screen. So you see at a glance what the players cannot, without a look at the list.
 
 To move something you already placed, drag its row onto a group. The **Group** field in the Map panel does the same without a drag.
 

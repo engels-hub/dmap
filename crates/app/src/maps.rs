@@ -12,6 +12,9 @@ use crate::images::Decoded;
 use crate::scene::Asset;
 
 /// Draws a textured quad with normal alpha blending.
+///
+/// `strength` scales the alpha of the whole quad. The DM screen draws a map
+/// the TV does not show at half strength. DESIGN.md 5.6.
 const SHADER: &str = "
 @group(0) @binding(0) var map_texture: texture_2d<f32>;
 @group(0) @binding(1) var map_sampler: sampler;
@@ -19,21 +22,38 @@ const SHADER: &str = "
 struct VsOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) strength: f32,
 };
 
 @vertex
-fn vs(@location(0) clip: vec2<f32>, @location(1) uv: vec2<f32>) -> VsOut {
+fn vs(
+    @location(0) clip: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) strength: f32,
+) -> VsOut {
     var out: VsOut;
     out.position = vec4<f32>(clip, 0.0, 1.0);
     out.uv = uv;
+    out.strength = strength;
     return out;
 }
 
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
-    return textureSample(map_texture, map_sampler, in.uv);
+    var color = textureSample(map_texture, map_sampler, in.uv);
+    color.a = color.a * in.strength;
+    return color;
 }
 ";
+
+/// How strongly the DM screen draws a map the TV does not show.
+///
+/// DESIGN.md 5.6. The pipeline blends on alpha and the texture is not
+/// premultiplied, so scaling the alpha alone gives an even wash.
+pub const HIDDEN_STRENGTH: f32 = 0.5;
+
+/// How strongly a screen draws a map it shows.
+pub const FULL_STRENGTH: f32 = 1.0;
 
 /// The GPU side of the maps: one texture per image file and one pipeline.
 pub struct MapLayer {
@@ -105,7 +125,7 @@ impl MapLayer {
                 buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<MapVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32],
                 })],
             },
             primitive: wgpu::PrimitiveState::default(),
@@ -225,19 +245,20 @@ impl MapLayer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         pass: &mut wgpu::RenderPass<'_>,
-        assets: &[&Asset],
+        assets: &[(&Asset, f32)],
         camera: &Camera,
         viewport: (u32, u32),
     ) {
         let drawn: Vec<(&MapTexture, [MapVertex; 6])> = assets
             .iter()
-            .filter_map(|asset| {
+            .filter_map(|&(asset, strength)| {
                 let texture = self.textures.get(&asset.path)?;
                 let quad = map_quad(
                     asset.corners(texture.size),
                     (asset.flip_x, asset.flip_y),
                     camera,
                     viewport,
+                    strength,
                 );
                 Some((texture, quad))
             })
@@ -275,18 +296,20 @@ fn vertex_buffer(device: &wgpu::Device, maps: usize) -> wgpu::Buffer {
     })
 }
 
-/// One vertex: clip x, clip y, texture u, texture v.
-pub type MapVertex = [f32; 4];
+/// One vertex: clip x, clip y, texture u, texture v, strength.
+pub type MapVertex = [f32; 5];
 
 /// The two triangles that show a map through `camera`.
 ///
 /// `corners` come from `Asset::corners`. `flip` mirrors the image on
-/// the x and y axis by swapping texture coordinates.
+/// the x and y axis by swapping texture coordinates. `strength` scales the
+/// alpha of every vertex.
 pub fn map_quad(
     corners: [(f64, f64); 4],
     flip: (bool, bool),
     camera: &Camera,
     viewport: (u32, u32),
+    strength: f32,
 ) -> [MapVertex; 6] {
     let vertex = |i: usize| -> MapVertex {
         let (sx, sy) = camera.world_to_screen(corners[i], viewport);
@@ -304,7 +327,7 @@ pub fn map_quad(
         if flip.1 {
             v = 1.0 - v;
         }
-        [clip_x as f32, clip_y as f32, u, v]
+        [clip_x as f32, clip_y as f32, u, v, strength]
     };
     [
         vertex(0),
@@ -326,7 +349,7 @@ pub fn relative_path(project_dir: &Path, file: &Path) -> PathBuf {
 mod tests {
     use std::path::Path;
 
-    use super::{map_quad, relative_path};
+    use super::{FULL_STRENGTH, HIDDEN_STRENGTH, map_quad, relative_path};
     use crate::camera::Camera;
 
     fn close(a: f32, b: f32) -> bool {
@@ -341,7 +364,7 @@ mod tests {
         };
         // A 2 by 1 inch map centered on the origin in a 400 by 200 view.
         let corners = [(-1.0, -0.5), (1.0, -0.5), (1.0, 0.5), (-1.0, 0.5)];
-        let quad = map_quad(corners, (false, false), &camera, (400, 200));
+        let quad = map_quad(corners, (false, false), &camera, (400, 200), FULL_STRENGTH);
         assert_eq!(quad.len(), 6);
         let top_left = quad
             .iter()
@@ -362,7 +385,7 @@ mod tests {
             pixels_per_inch: 100.0,
         };
         let corners = [(-1.0, -0.5), (1.0, -0.5), (1.0, 0.5), (-1.0, 0.5)];
-        let quad = map_quad(corners, (true, false), &camera, (400, 200));
+        let quad = map_quad(corners, (true, false), &camera, (400, 200), HIDDEN_STRENGTH);
         // The top-left corner now shows the image's top-right texel.
         let top_left = quad
             .iter()

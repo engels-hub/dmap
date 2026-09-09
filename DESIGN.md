@@ -117,6 +117,7 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - A picked map has a 2 px `accent` outline and four 8 px `accent` corner handles.
 - A turn handle sits 24 px above the top edge, on a 1 px `accent` line.
 - A picked group has a 2 px dashed `accent` box. A 1 px dash is too thin to read at a zoom that shows the whole canvas. The root group has no box.
+- A map the TV does not show draws at half strength on the DM screen. A group that is off for the TV takes every map under it to half strength. The TV draws every map it shows at full strength.
 
 ## 6. Controls
 

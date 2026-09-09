@@ -310,7 +310,11 @@ impl Running {
                 let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
                 let canvas = self.settings.theme.tokens().canvas;
                 let tv_camera = self.scene.tv_box.camera(viewport);
-                let shown = draw_order(&self.scene, Audience::Tv);
+                // The TV draws what it shows, and every map at full strength.
+                let shown: Vec<(&Asset, f32)> = draw_order(&self.scene, Audience::Tv)
+                    .into_iter()
+                    .map(|asset| (asset, maps::FULL_STRENGTH))
+                    .collect();
                 let map_layer = &mut self.map_layer;
                 self.gpu
                     .clear(pane, color::linear_token(canvas), |pass| {
@@ -406,7 +410,19 @@ impl Running {
         );
         let viewport = (self.dm.config.width, self.dm.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
-        let shown = draw_order(&self.scene, Audience::Dm);
+        // DESIGN.md 5.6: a map the TV does not show draws faint here, so
+        // the DM sees at a glance what the players cannot.
+        let shown: Vec<(&Asset, f32)> = crate::scene::dm_draw_order(&self.scene)
+            .into_iter()
+            .map(|(asset, on_tv)| {
+                let strength = if on_tv {
+                    maps::FULL_STRENGTH
+                } else {
+                    maps::HIDDEN_STRENGTH
+                };
+                (asset, strength)
+            })
+            .collect();
         let (map_layer, camera) = (&mut self.map_layer, &self.camera);
         let canvas = self.settings.theme.tokens().canvas;
         self.ui
