@@ -9,6 +9,7 @@ mod camera;
 mod color;
 mod config;
 mod gpu;
+mod grid;
 mod icon;
 mod icons;
 mod images;
@@ -38,6 +39,7 @@ use egui_winit::winit::{
 use crate::camera::{Camera, DEFAULT_PIXELS_PER_INCH};
 use crate::config::Config;
 use crate::gpu::{Gpu, Pane};
+use crate::grid::GridLayer;
 use crate::images::Loader;
 use crate::maps::{MapLayer, relative_path};
 use crate::pointer::PointerDisc;
@@ -203,6 +205,7 @@ struct Running {
     /// The tree the DM works on.
     scene: Scene,
     map_layer: MapLayer,
+    grid_layer: GridLayer,
     loader: Loader,
     camera: Camera,
 }
@@ -241,6 +244,7 @@ impl Running {
         let ui = DmUi::new(&gpu, &dm);
         let pointer = PointerDisc::new(&gpu.device, tv.config.format);
         let map_layer = MapLayer::new(&gpu.device, dm.config.format);
+        let grid_layer = GridLayer::new(&gpu.device, dm.config.format);
         let wake_window = Arc::clone(&dm.window);
         let loader = Loader::spawn(gpu.device.limits().max_texture_dimension_2d, move || {
             wake_window.request_redraw();
@@ -270,6 +274,7 @@ impl Running {
             active_group: scene::ROOT_ID,
             scene: scene.clone(),
             map_layer,
+            grid_layer,
             loader,
             camera: DM_CAMERA,
         })
@@ -316,9 +321,15 @@ impl Running {
                     .map(|asset| (asset, maps::FULL_STRENGTH))
                     .collect();
                 let map_layer = &mut self.map_layer;
+                let grid_layer = &self.grid_layer;
+                let line = self.settings.theme.tokens().grid_line();
+                let width = pane.window.scale_factor() as f32;
                 self.gpu
                     .clear(pane, color::linear_token(canvas), |pass| {
                         map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
+                        // DESIGN.md 5.1: one grid covers the canvas and it
+                        // lies over every map, on both screens.
+                        grid_layer.draw(queue, pass, &tv_camera, viewport, line, width);
                         if let Some(center) = tv_pointer {
                             pointer.draw(queue, pass, center, viewport);
                         }
@@ -424,10 +435,14 @@ impl Running {
             })
             .collect();
         let (map_layer, camera) = (&mut self.map_layer, &self.camera);
-        let canvas = self.settings.theme.tokens().canvas;
+        let grid_layer = &self.grid_layer;
+        let tokens = self.settings.theme.tokens();
+        let line = tokens.grid_line();
+        let width = self.dm.window.scale_factor() as f32;
         self.ui
-            .render(&self.gpu, &mut self.dm, output.paint, canvas, |pass| {
+            .render(&self.gpu, &mut self.dm, output.paint, tokens.canvas, |pass| {
                 map_layer.draw(device, queue, pass, &shown, camera, viewport);
+                grid_layer.draw(queue, pass, camera, viewport, line, width);
             })?;
         if output.edited {
             self.tv.window.request_redraw();

@@ -2432,43 +2432,6 @@ fn map_properties(
     edited
 }
 
-/// The canvas grid of DESIGN.md 5.1, over the maps and under the chrome.
-///
-/// One cell is one inch on the canvas, so the lines follow the camera. The
-/// step of the theme is the step at true size; a zoomed-out camera drops
-/// lines by whole doublings, so the grid never turns into a solid wash.
-fn canvas_grid(painter: &egui::Painter, rect: egui::Rect, view: &View, tokens: Tokens) {
-    /// The narrowest a cell may draw, in points. Under this the grid
-    /// doubles its step, so the lines stay apart at any zoom.
-    const MIN_CELL: f32 = 12.0;
-    let origin = view.to_screen((0.0, 0.0));
-    let one_cell = view.to_screen((1.0, 0.0)).x - origin.x;
-    if !one_cell.is_finite() || one_cell <= 0.0 {
-        return;
-    }
-    let mut cells = 1.0_f32;
-    while one_cell * cells < MIN_CELL {
-        cells *= 2.0;
-    }
-    let step = one_cell * cells;
-    let stroke = egui::Stroke::new(1.0, tokens.grid);
-    let first = |start: f32, at: f32| start + ((at - start) / step).ceil() * step;
-    let mut x = first(origin.x, rect.left() - step);
-    while x <= rect.right() {
-        if x >= rect.left() {
-            painter.vline(x.round(), rect.y_range(), stroke);
-        }
-        x += step;
-    }
-    let mut y = first(origin.y, rect.top() - step);
-    while y <= rect.bottom() {
-        if y >= rect.top() {
-            painter.hline(rect.x_range(), y.round(), stroke);
-        }
-        y += step;
-    }
-}
-
 /// The Select tool on the canvas: pick, move, scale, turn and flip maps.
 ///
 /// Returns `true` when a map changed.
@@ -2481,7 +2444,6 @@ fn canvas(
     tokens: Tokens,
 ) -> bool {
     let (rect, view, pointer) = canvas_area(ui, frame.camera, viewport, false, zoom_goes_to);
-    canvas_grid(&ui.painter_at(rect), rect, &view, tokens);
     let snap = !ui.input(|i| i.modifiers.ctrl);
 
     // The measure tool takes the canvas for two clicks. Escape gives up.
@@ -2546,7 +2508,7 @@ fn canvas(
     set_cursor(ui, select.drag.is_some(), icon, pointer, &handles);
 
     edited |= keys(ui, select, frame.scene);
-    edited |= selection_popup(ui, select, frame, rect, tokens);
+    edited |= selection_popup(ui.ctx(), select, frame, tokens);
 
     if let (Some(Drag::Band { start_cursor }), Some(pos)) = (select.drag.as_ref(), pointer.pos) {
         let band = egui::Rect::from_two_pos(view.to_screen(*start_cursor), pos);
@@ -2602,47 +2564,58 @@ fn draw_group_boxes(
     }
 }
 
-/// The list that says what the DM holds, and offers to group it.
+/// The list of what a band drag picked, and the button that groups it.
 ///
-/// A drag over the canvas opens it. It stands in the corner of the canvas,
-/// out of the way of the maps.
+/// It floats at the top of the canvas, centered. The canvas fills the
+/// window now, so its top-left corner sits under the objects list, and a
+/// popup there would hide behind the panel.
 fn selection_popup(
-    ui: &egui::Ui,
+    ctx: &egui::Context,
     select: &mut Select,
     frame: &mut Frame<'_>,
-    canvas: egui::Rect,
     tokens: Tokens,
 ) -> bool {
     if !select.popup || select.chosen.is_empty() {
         return false;
     }
+    let held = crate::scene::normalize(frame.scene, &select.chosen);
     let mut edited = false;
     let mut group_them = false;
-    egui::Area::new(egui::Id::new("selection"))
-        .fixed_pos(canvas.left_top() + egui::vec2(12.0, 12.0))
-        .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_max_width(220.0);
-                let held = crate::scene::normalize(frame.scene, &select.chosen);
-                ui.label(format!("{} picked", held.len()));
-                for id in &held {
-                    let name = match crate::scene::find(frame.scene, *id) {
-                        Some(Node::Group(group)) => group.name.clone(),
-                        Some(Node::Asset(asset)) => asset.path.to_string_lossy().into_owned(),
-                        None => continue,
-                    };
-                    ui.label(egui::RichText::new(name).color(tokens.mute));
+    let screen = ctx.content_rect();
+    let left_top = egui::pos2((screen.center().x - PANEL_WIDTH / 2.0).round(), MARGIN);
+    panel(
+        ctx,
+        "selection",
+        &format!("{} picked", held.len()),
+        Place {
+            left_top,
+            width: PANEL_WIDTH,
+            height: None,
+        },
+        tokens,
+        |ui| {
+            for id in &held {
+                let name = match crate::scene::find(frame.scene, *id) {
+                    Some(Node::Group(group)) => group.name.clone(),
+                    Some(Node::Asset(asset)) => asset.path.to_string_lossy().into_owned(),
+                    None => continue,
+                };
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), ROW_HEIGHT),
+                    egui::Sense::hover(),
+                );
+                row_name(ui, rect, &name, false, tokens);
+            }
+            ui.horizontal(|ui| {
+                if widget::button(ui, "Group", Some(Icon::Plus), Height::Panel).clicked() {
+                    group_them = true;
                 }
-                ui.horizontal(|ui| {
-                    if ui.button("Group").clicked() {
-                        group_them = true;
-                    }
-                    if ui.button("Close").clicked() {
-                        select.popup = false;
-                    }
-                });
+                if widget::button(ui, "Close", None, Height::Panel).clicked() {
+                    select.popup = false;
+                }
             });
-        });
+        },
+    );
     if group_them {
         let name = format!("Group {}", frame.scene.next_id());
         if let Some(id) = crate::scene::group_selection(frame.scene, &select.chosen, name) {
@@ -2654,10 +2627,6 @@ fn selection_popup(
     edited
 }
 
-/// The assets a band from `start` to `end` covers.
-///
-/// An asset counts when its middle lies inside the band, so a DM who drags
-/// over a room takes the maps of that room and not the floor under it.
 fn band_covers(frame: &Frame<'_>, start: (f64, f64), end: (f64, f64)) -> Vec<NodeId> {
     let (low, high) = (
         (start.0.min(end.0), start.1.min(end.1)),
@@ -2707,7 +2676,6 @@ fn table_tool(
     tokens: Tokens,
 ) -> bool {
     let (rect, view, pointer) = canvas_area(ui, frame.camera, viewport, true, zoom_goes_to);
-    canvas_grid(&ui.painter_at(rect), rect, &view, tokens);
     let corners = frame.scene.tv_box.corners(frame.tv_viewport);
     let handles: Vec<egui::Pos2> = corners.iter().map(|&c| view.to_screen(c)).collect();
     let handle_points: Vec<(f64, f64)> = handles

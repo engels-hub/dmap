@@ -130,6 +130,8 @@ The two switches work on their own, and a group rules the nodes under it. A grou
 
 A map the TV does not show draws faint on your own screen. So you see at a glance what the players cannot, without a look at the list.
 
+One grid covers the canvas on both screens, over every map. One cell is one inch on the table.
+
 To move something you already placed, drag its row onto a group. The **Group** field in the Map panel does the same without a drag.
 
 A group draws over the groups under it, and its assets draw inside its place. Every group but the root shows a dashed box around what it holds. Click the box, or the group's name in the list, to take the group.

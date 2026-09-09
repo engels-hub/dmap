@@ -78,7 +78,8 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 
 - Fills the window. Background is the user's canvas color. Default `canvas`.
 - One grid covers the whole canvas. It lies over every map, so the DM lines a map up with it. A map carries no grid of its own.
-- The grid is 1 px lines in `grid`, 48 px apart in the light theme and 64 px apart in the dark theme. One cell is one inch on the TV.
+- Both screens draw the grid. The players see the same cells the DM does.
+- The grid is 1 px lines in `grid`. One cell is one inch, on the DM screen and on the TV. A camera far enough out would draw those lines closer together than the eye can read, so the step doubles until a cell is at least 24 px wide. Every line that remains was a line before.
 - Map previews have a hard shadow `2px 3px 0 shadow` when the theme has a shadow value.
 - The DM camera pans with space+drag or the middle button and zooms with the wheel. There is no on-screen control for the DM camera.
 

@@ -102,8 +102,11 @@ pub struct Tokens {
     pub mute: Color32,
     /// The color of a 1 px border or divider.
     pub rule: Color32,
-    /// The canvas grid lines.
-    pub grid: Color32,
+    /// The canvas grid lines: an sRGB value and how solid a line is.
+    ///
+    /// The GPU draws the grid, not `egui`, so this pair stays straight
+    /// and never comes premultiplied.
+    pub grid: (u32, f32),
     /// The one accent of DESIGN.md 1.
     pub accent: Color32,
     /// The wash over the canvas outside the TV box.
@@ -125,9 +128,7 @@ pub const LIGHT: Tokens = Tokens {
     ink: Color32::from_rgb(0x2b, 0x24, 0x19),
     mute: Color32::from_rgb(0x7d, 0x74, 0x62),
     rule: Color32::from_rgb(0xb9, 0xad, 0x92),
-    // `#9fb1c4` at 33 %. egui wants the color already multiplied by the
-    // alpha, so each channel is its value times 84/255.
-    grid: Color32::from_rgba_premultiplied(0x34, 0x3a, 0x40, 84),
+    grid: (0x9f_b1_c4, 0.33),
     accent: Color32::from_rgb(0xb4, 0x45, 0x2c),
     // `rgba(43, 36, 25, 0.12)`, multiplied by 31/255.
     dim: Color32::from_rgba_premultiplied(5, 4, 3, 31),
@@ -146,7 +147,7 @@ pub const DARK: Tokens = Tokens {
     ink: Color32::from_rgb(0xdc, 0xd8, 0xcf),
     mute: Color32::from_rgb(0x8a, 0x87, 0x7f),
     rule: Color32::from_rgb(0x2c, 0x2e, 0x31),
-    grid: Color32::from_rgb(0x2c, 0x2e, 0x31),
+    grid: (0x2c_2e_31, 1.0),
     accent: Color32::from_rgb(0xf0, 0xa8, 0x30),
     // `rgba(16, 17, 18, 0.45)`, multiplied by 115/255.
     dim: Color32::from_rgba_premultiplied(7, 8, 8, 115),
@@ -157,6 +158,20 @@ pub const DARK: Tokens = Tokens {
 };
 
 impl Tokens {
+    /// The grid line in linear light, with straight alpha, for the GPU.
+    ///
+    /// The surface is sRGB, so the shader must be given linear values for
+    /// the line to draw the color the table names.
+    pub fn grid_line(self) -> [f32; 4] {
+        let (rgb, alpha) = self.grid;
+        [
+            crate::color::linear_from_srgb((rgb >> 16) as u8) as f32,
+            crate::color::linear_from_srgb((rgb >> 8) as u8) as f32,
+            crate::color::linear_from_srgb(rgb as u8) as f32,
+            alpha,
+        ]
+    }
+
     /// A 1 px `rule` border.
     pub fn hairline(self) -> Stroke {
         Stroke::new(1.0, self.rule)
