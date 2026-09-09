@@ -3,6 +3,13 @@
 //! One process opens two windows. The DM window holds the editor UI.
 //! The TV window fills one display and shows the players' view.
 
+// A release build opens no console beside its windows. Windows gives a
+// console to every program that does not say otherwise, and that one sat
+// behind the map window all session: a DM who closed it killed the run.
+// A debug build keeps the console, so a developer still reads what the
+// program writes. The attribute means nothing on Linux.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 // Rust guideline compliant 2026-02-21
 
 mod camera;
