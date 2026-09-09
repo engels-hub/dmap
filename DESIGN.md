@@ -278,7 +278,13 @@ The footer holds Group and New group, and a helper line that names the picked no
 
 1. The name of the program and the version it runs, then one helper line that says what it is.
 2. One row for each thing dmap carries: the name, the license it comes under, and a link that opens the source in the browser.
-3. Licenses: a segmented control (dmap, Font, Glyphs), then the whole text of the one it marks, in a pane that scrolls.
+3. Built by: the people who built dmap, in one line.
+4. One line that asks for help, with a link to the issues.
+5. Licenses: a segmented control (dmap, Font, Glyphs), then the whole text of the one it marks, in a pane that scrolls.
+
+This tab is a page to read, not a row of controls to fill in, so its lines sit closer together than the 16 px of section 9. The text pane takes the room that is left, so the tab needs no second scroll around the one the text already has. Two scrolls in a column leave a DM guessing which one a wheel turns.
+
+The names come from the `CONTRIBUTORS` file at the top of the repository, one to a line. A person adds their own in the pull request that brings their first change.
 
 The whole text is built into the program. A link on its own does not do: the GPL asks that a copy of it reach every person who gets the program, and the font and the glyph set ask that their notice travel with them. The font is compiled in, so its license has nowhere else to go.
 

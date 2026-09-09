@@ -1781,6 +1781,14 @@ const OFL: &str = include_str!("../assets/fonts/LICENSE-OFL.txt");
 /// The text of the ISC license, which the glyphs come under.
 const ISC: &str = include_str!("../assets/icons/LICENSE-ISC.txt");
 
+/// The people who built dmap, one to a line.
+///
+/// A line that starts with a hash is a note in the file, not a name.
+const CONTRIBUTORS: &str = include_str!("../../../CONTRIBUTORS");
+
+/// Where a DM takes a bug, a story or a patch.
+const ISSUES: &str = "https://github.com/engels-hub/dmap/issues";
+
 impl License {
     /// The name of the thing, what it comes under, and where it lives.
     fn about(self) -> (&'static str, &'static str, &'static str) {
@@ -1816,6 +1824,10 @@ impl License {
 /// program, and the font and the glyphs ask that their notice travel with
 /// them. The font is compiled in, so its license has nowhere else to go.
 fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
+    // This tab is a page to read, not a row of controls to fill in, so its
+    // lines sit closer together than the `ROW_GAP` of DESIGN.md 9. The
+    // whole of it has to fit over the license text.
+    ui.spacing_mut().item_spacing.y = 6.0;
     widget::row_label(ui, &format!("dmap {}", env!("CARGO_PKG_VERSION")));
     widget::helper(ui, "Map display for a tabletop RPG table with a TV.");
     for one in [License::Program, License::Font, License::Icons] {
@@ -1830,13 +1842,37 @@ fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
             );
         });
     }
+    ui.add_space(4.0);
+    widget::row_label(ui, "Built by");
+    let names: Vec<&str> = CONTRIBUTORS
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    widget::helper(ui, &names.join(", "));
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        widget::helper(ui, "dmap is free software, and it is not finished.");
+        ui.hyperlink_to(
+            egui::RichText::new("Bring a bug, a story or a patch")
+                .font(theme::font(theme::SMALL, false))
+                .color(tokens.accent),
+            ISSUES,
+        );
+    });
+    ui.add_space(4.0);
     let choices = [
         (License::Program, "dmap"),
         (License::Font, "Font"),
         (License::Icons, "Glyphs"),
     ];
     widget::segmented(ui, picked, &choices);
+    // The text takes the room that is left, so the tab needs no scroll of
+    // its own around the one the text already has. Two scrolls in a
+    // column leave a DM guessing which one a wheel turns.
+    let room = (ui.available_height() - PANEL_PAD).max(ROW_HEIGHT * 3.0);
     egui::ScrollArea::vertical()
+        .max_height(room)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.label(
