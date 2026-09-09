@@ -3,3 +3,6 @@ Cargo.lock.bak
 *.log
 .DS_Store
 /project.json
+
+# Python leaves this beside tools/icons.py.
+__pycache__/

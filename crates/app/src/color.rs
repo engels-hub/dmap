@@ -4,15 +4,12 @@
 
 use egui_wgpu::wgpu;
 
-/// Default canvas color, `canvas` in the light theme of DESIGN.md.
-pub const CANVAS: u32 = 0xe3_d9_c3;
-
-/// Builds an opaque GPU clear color from a `0xRRGGBB` sRGB value.
-pub fn linear_color(rgb: u32) -> wgpu::Color {
+/// Builds an opaque GPU clear color from a token of DESIGN.md 2.
+pub fn linear_token(color: egui::Color32) -> wgpu::Color {
     wgpu::Color {
-        r: linear_from_srgb((rgb >> 16) as u8),
-        g: linear_from_srgb((rgb >> 8) as u8),
-        b: linear_from_srgb(rgb as u8),
+        r: linear_from_srgb(color.r()),
+        g: linear_from_srgb(color.g()),
+        b: linear_from_srgb(color.b()),
         a: 1.0,
     }
 }
@@ -33,11 +30,11 @@ pub fn linear_from_srgb(channel: u8) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{linear_color, linear_from_srgb};
+    use super::{linear_from_srgb, linear_token};
 
     #[test]
-    fn splits_hex_into_linear_channels() {
-        let color = linear_color(0x00_80_ff);
+    fn splits_a_token_into_linear_channels() {
+        let color = linear_token(egui::Color32::from_rgb(0x00, 0x80, 0xff));
         assert!(color.r.abs() < 1e-9);
         assert!((color.g - linear_from_srgb(0x80)).abs() < 1e-9);
         assert!((color.b - 1.0).abs() < 1e-9);
