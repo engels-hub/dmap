@@ -67,7 +67,7 @@ Caution: a scale under 100 % takes a button under the 24 px floor of section 6. 
 - Sizes: 18 px in the toolbar, in dialog navigation, in a close button and for the select chevron, 16 px in a panel, a menu and a list row, 14 px for a list twist and for the checkbox check, 13 px in a path line.
 - Glyphs in the toolbar: `mouse-pointer` (Select), `pencil` (Draw), `ruler` (Edit), `monitor` (Table), `layers` (Scenes), `plus` (Add map), `sliders-horizontal` (Settings).
 - Glyphs on the second bar of the Edit view: `brick-wall` (Walls), `door-open` (Doors), `sun` (Light), `cloud-fog` (Fog).
-- Glyphs in a dialog: `monitor` (Table tab), `grid-3x3` (Grid tab), `sun` (Light tab), `keyboard` (Shortcuts tab), `x` (close), `chevron-down` (select), `check` (checkbox), `import` (Import).
+- Glyphs in a dialog: `monitor` (Table tab), `grid-3x3` (Grid tab), `sun` (Light tab), `keyboard` (Shortcuts tab), `info` (About tab), `x` (close), `chevron-down` (select), `check` (checkbox), `import` (Import).
 - Glyphs in a panel or a menu: `folder`, `image`, `film`, `eye`, `eye-off`, `monitor-off`, `star`, `search`, `chevron-right`, `arrow-up`, `arrow-down`, `rotate-cw`, `flip-horizontal-2`, `flip-vertical-2`, `ruler`, `trash`, `minus` (line), `square`, `circle`, `eraser`, `play`, `pause`, `undo`, `triangle-alert`.
 
 Every name above is a name the Lucide set holds. Check a new one against the set before this document takes it: the set renames a glyph from time to time, and a name that reads well is not always a name that exists.
@@ -274,7 +274,23 @@ The footer holds Group and New group, and a helper line that names the picked no
 - Caution: the program refuses a key that another control holds. A 14 px `accent` line under the row names that control.
 - The footer holds "Bring back the default keys" on the left and Close on the right.
 
-### 9.5 Scenes
+### 9.5 Settings, About tab
+
+1. The name of the program and the version it runs, then one helper line that says what it is.
+2. One row for each thing dmap carries: the name, the license it comes under, and a link that opens the source in the browser.
+3. Built by: the people who built dmap, in one line.
+4. One line that asks for help, with a link to the issues.
+5. Licenses: a segmented control (dmap, Font, Glyphs), then the whole text of the one it marks, in a pane that scrolls.
+
+This tab is a page to read, not a row of controls to fill in, so its lines sit closer together than the 16 px of section 9. The text pane takes the room that is left, so the tab needs no second scroll around the one the text already has. Two scrolls in a column leave a DM guessing which one a wheel turns.
+
+The names come from the `CONTRIBUTORS` file at the top of the repository, one to a line. A person adds their own in the pull request that brings their first change.
+
+The whole text is built into the program. A link on its own does not do: the GPL asks that a copy of it reach every person who gets the program, and the font and the glyph set ask that their notice travel with them. The font is compiled in, so its license has nowhere else to go.
+
+The release archive keeps the same three files beside the program. This tab is the second way to them, for a DM who holds the binary alone.
+
+### 9.6 Scenes
 
 - Row at the top: Scenes folder, the path in an input 360 px wide, and the Change button.
 - Each scene is a row 40 px high with a 1 px `rule` bottom border: the `folder` icon and the name on the left, the buttons on the right.
@@ -283,7 +299,7 @@ The footer holds Group and New group, and a helper line that names the picked no
 - Caution: Delete takes the scene folder and every map in it. The row asks once, on the row itself. The question comes before the Delete and Keep buttons.
 - The footer holds New scene on the left and Close on the right.
 
-### 9.6 Import
+### 9.7 Import
 
 - Row: File, with the file name in an input and the Choose button.
 - Helper: "dmap reads PNG, JPEG, MP4, WebM, a Foundry VTT scene and a Universal VTT file".

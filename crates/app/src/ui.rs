@@ -107,10 +107,10 @@ const ROW_GAP: f32 = 16.0;
 /// The height of the footer of a dialog, in points. DESIGN.md 9.
 const FOOTER: f32 = 48.0;
 
-/// The height of one scene row, in points. DESIGN.md 9.5.
+/// The height of one scene row, in points. DESIGN.md 9.6.
 const SCENE_ROW: f32 = 40.0;
 
-/// The width of the scenes folder input, in points. DESIGN.md 9.5.
+/// The width of the scenes folder input, in points. DESIGN.md 9.6.
 const PATH_WIDTH: f32 = 360.0;
 
 /// Size of a corner handle in points.
@@ -1407,6 +1407,8 @@ enum Tab {
     Light,
     /// Every control and its key. DESIGN.md 9.4.
     Shortcuts,
+    /// What dmap is built from, and under what terms. DESIGN.md 9.5.
+    About,
 }
 
 impl Tab {
@@ -1417,6 +1419,7 @@ impl Tab {
             Self::Grid => ("Grid", Icon::Grid3x3),
             Self::Light => ("Light", Icon::Sun),
             Self::Shortcuts => ("Shortcuts", Icon::Keyboard),
+            Self::About => ("About", Icon::Info),
         }
     }
 }
@@ -1430,6 +1433,8 @@ struct Dialog {
     tab: Tab,
     /// The scale the DM is dragging toward, until the button goes up.
     scale_drag: Option<f64>,
+    /// The license the About tab shows.
+    license: License,
 }
 
 /// The box of a dialog: the scrim, the frame, the header. DESIGN.md 9.
@@ -1548,6 +1553,7 @@ fn settings_dialog(
                             "The light settings arrive with the darkness slider (#20).",
                         );
                     }
+                    Tab::About => about_tab(body_ui, &mut dialog.license, tokens),
                     Tab::Shortcuts => {
                         not_built(
                             body_ui,
@@ -1573,7 +1579,13 @@ fn dialog_nav(ui: &egui::Ui, rect: egui::Rect, tab: &mut Tab, tokens: Tokens) {
     ui.painter()
         .vline(rect.right(), rect.y_range(), tokens.hairline());
     let mut top = rect.top() + NAV_PAD;
-    for choice in [Tab::Table, Tab::Grid, Tab::Light, Tab::Shortcuts] {
+    for choice in [
+        Tab::Table,
+        Tab::Grid,
+        Tab::Light,
+        Tab::Shortcuts,
+        Tab::About,
+    ] {
         let (label, glyph) = choice.entry();
         let entry = egui::Rect::from_min_size(
             egui::pos2(rect.left(), top),
@@ -1748,12 +1760,135 @@ fn table_tab(
     edited
 }
 
+/// What dmap carries, and the terms it comes under. DESIGN.md 9.5.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum License {
+    /// The program itself.
+    #[default]
+    Program,
+    /// Atkinson Hyperlegible, which DESIGN.md 3 gives the window.
+    Font,
+    /// The Lucide glyphs of DESIGN.md 4.
+    Icons,
+}
+
+/// The text of the GPL, which the program comes under.
+const GPL: &str = include_str!("../../../LICENSE");
+
+/// The text of the SIL Open Font License, which the font comes under.
+const OFL: &str = include_str!("../assets/fonts/LICENSE-OFL.txt");
+
+/// The text of the ISC license, which the glyphs come under.
+const ISC: &str = include_str!("../assets/icons/LICENSE-ISC.txt");
+
+/// The people who built dmap, one to a line.
+///
+/// A line that starts with a hash is a note in the file, not a name.
+const CONTRIBUTORS: &str = include_str!("../../../CONTRIBUTORS");
+
+/// Where a DM takes a bug, a story or a patch.
+const ISSUES: &str = "https://github.com/engels-hub/dmap/issues";
+
+impl License {
+    /// The name of the thing, what it comes under, and where it lives.
+    fn about(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Program => ("dmap", "GPL-3.0-only", "https://github.com/engels-hub/dmap"),
+            Self::Font => (
+                "Atkinson Hyperlegible",
+                "SIL Open Font License 1.1",
+                "https://github.com/googlefonts/atkinson-hyperlegible",
+            ),
+            Self::Icons => (
+                "Lucide",
+                "ISC License",
+                "https://github.com/lucide-icons/lucide",
+            ),
+        }
+    }
+
+    /// The whole text of the license.
+    fn text(self) -> &'static str {
+        match self {
+            Self::Program => GPL,
+            Self::Font => OFL,
+            Self::Icons => ISC,
+        }
+    }
+}
+
+/// The About tab of DESIGN.md 9.5.
+///
+/// The text of every license is built into the program. A link alone
+/// would not do: the GPL asks that a copy reach every person who gets the
+/// program, and the font and the glyphs ask that their notice travel with
+/// them. The font is compiled in, so its license has nowhere else to go.
+fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
+    // This tab is a page to read, not a row of controls to fill in, so its
+    // lines sit closer together than the `ROW_GAP` of DESIGN.md 9. The
+    // whole of it has to fit over the license text.
+    ui.spacing_mut().item_spacing.y = 6.0;
+    widget::row_label(ui, &format!("dmap {}", env!("CARGO_PKG_VERSION")));
+    widget::helper(ui, "Map display for a tabletop RPG table with a TV.");
+    for one in [License::Program, License::Font, License::Icons] {
+        let (name, terms, url) = one.about();
+        ui.horizontal(|ui| {
+            widget::row_label(ui, &format!("{name}, under the {terms}."));
+            ui.hyperlink_to(
+                egui::RichText::new("Source")
+                    .font(theme::font(theme::SMALL, false))
+                    .color(tokens.accent),
+                url,
+            );
+        });
+    }
+    ui.add_space(4.0);
+    widget::row_label(ui, "Built by");
+    let names: Vec<&str> = CONTRIBUTORS
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    widget::helper(ui, &names.join(", "));
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        widget::helper(ui, "dmap is free software, and it is not finished.");
+        ui.hyperlink_to(
+            egui::RichText::new("Bring a bug, a story or a patch")
+                .font(theme::font(theme::SMALL, false))
+                .color(tokens.accent),
+            ISSUES,
+        );
+    });
+    ui.add_space(4.0);
+    let choices = [
+        (License::Program, "dmap"),
+        (License::Font, "Font"),
+        (License::Icons, "Glyphs"),
+    ];
+    widget::segmented(ui, picked, &choices);
+    // The text takes the room that is left, so the tab needs no scroll of
+    // its own around the one the text already has. Two scrolls in a
+    // column leave a DM guessing which one a wheel turns.
+    let room = (ui.available_height() - PANEL_PAD).max(ROW_HEIGHT * 3.0);
+    egui::ScrollArea::vertical()
+        .max_height(room)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(picked.text())
+                    .font(theme::font(theme::SMALL, false))
+                    .color(tokens.mute),
+            );
+        });
+}
+
 /// One line that says a tab waits for its story. DESIGN.md 9.
 fn not_built(ui: &mut egui::Ui, text: &str) {
     widget::helper(ui, text);
 }
 
-/// The scenes dialog of DESIGN.md 9.5.
+/// The scenes dialog of DESIGN.md 9.6.
 ///
 /// Returns what the DM asked for. The program does the work, so an error
 /// on the disk has one place to go.
@@ -1860,7 +1995,7 @@ fn scenes_dialog(
 
 /// One scene in the dialog: its name, and what the DM can do to it.
 ///
-/// DESIGN.md 9.5. Caution: Delete takes the scene folder and every map in
+/// DESIGN.md 9.6. Caution: Delete takes the scene folder and every map in
 /// it, so the row asks the question on itself before it goes.
 fn scene_row(
     ui: &mut egui::Ui,

@@ -24,6 +24,15 @@ dmap follows semantic versioning.
 - The second number goes up for a release that adds a feature, such as 1.1.0. It resets the third to zero.
 - The first number goes up when a release asks a DM to change something they already have, such as a scene file the older program cannot read.
 
+## Contributing
+
+dmap is free software, and it is not finished. Take a bug or a story from the [Issues](https://github.com/engels-hub/dmap/issues) page, or open one of your own.
+
+- Read `DESIGN.md` before you touch the window. It holds the tokens, the sizes and the shape of every screen.
+- `CLAUDE.md` holds the rules the Markdown in this repository follows.
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace` all run in CI. Run them before you push.
+- Add your name to the `CONTRIBUTORS` file in the same pull request. The About tab of the program reads that file.
+
 ## Setup
 
 You need Rust 1.95 or later and a GPU with a Vulkan driver on Linux or a DirectX 12 driver on Windows.
