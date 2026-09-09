@@ -136,6 +136,12 @@ const GROUP_REACH: f32 = 5.0;
 /// The dash and the gap of a group box, in points.
 const DASH: f32 = 6.0;
 
+/// The dash and the gap between two segments of the toolbar, in points.
+///
+/// Shorter than the dash of a group box: the line is 44 points tall, and a
+/// 6 point dash would leave it four marks that read as a broken border.
+const SEGMENT_DASH: f32 = 3.0;
+
 /// The smallest size the properties accept, in percent.
 ///
 /// The same floor the `-` key keeps, so a map can never vanish.
@@ -777,8 +783,9 @@ fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
             // the box would lose its outline there.
             let views_inside = views_box.shrink(1.0);
             let actions_inside = actions_box.shrink(1.0);
-            // The views are a segmented control: one of them is always on,
-            // and a line stands between each pair. DESIGN.md 6.
+            // The views are a segmented control, and a dashed line stands
+            // between each pair. A solid line would give this box the same
+            // divided look as the box of buttons beside it. DESIGN.md 5.2.
             let mut left = views_box.left();
             for (index, (press, label, glyph)) in views.iter().enumerate() {
                 let cell = egui::Rect::from_min_size(
@@ -790,15 +797,14 @@ fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
                     pressed = Some(*press);
                 }
                 left += view_widths[index] - 1.0;
-                // The line between two segments takes the color of the box
-                // that holds them. A lighter one beside an `ink` border is
-                // the seam a DM reads as a mistake.
                 if index + 1 < views.len() {
-                    ui.painter().vline(
-                        left,
-                        views_inside.y_range(),
-                        egui::Stroke::new(1.0, tokens.ink),
-                    );
+                    let line = [
+                        egui::pos2(left, views_inside.top()),
+                        egui::pos2(left, views_inside.bottom()),
+                    ];
+                    // The line takes the `ink` of the box that holds it. A
+                    // lighter one beside an `ink` border reads as a seam.
+                    painter_dashes(ui, &line, tokens.ink);
                 }
             }
             // The rest are buttons. None of them stays on, and no line
@@ -816,6 +822,19 @@ fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
             }
         });
     pressed
+}
+
+/// Draws a dashed line down the two points it is given.
+///
+/// DESIGN.md 5.2 puts one between two segments of the toolbar, so the
+/// group of views reads apart from the group of buttons beside it.
+fn painter_dashes(ui: &egui::Ui, line: &[egui::Pos2; 2], color: egui::Color32) {
+    ui.painter().add(egui::Shape::dashed_line(
+        line,
+        egui::Stroke::new(1.0, color),
+        SEGMENT_DASH,
+        SEGMENT_DASH,
+    ));
 }
 
 /// One entry of the toolbar: the glyph over its label. DESIGN.md 5.2.
