@@ -49,6 +49,17 @@ The light theme is warm: cream surfaces, dark brown ink, vermilion accent. The d
 
 Helper text takes the `mute` token.
 
+### 3.1 The interface scale
+
+Every size in this document is a size at scale 1. The DM picks a scale between 75 % and 175 % in Settings, and the program multiplies each size by it.
+
+- The scale reaches the toolbar, the panels, the dialogs and the text. It does not reach the canvas. A map keeps its size on the screen, and one grid cell stays one inch.
+- The scale is one number for the whole window. No screen takes a scale of its own.
+- The program keeps the choice between runs.
+- A step is 5 %, so the value stays a round number.
+
+Caution: a scale under 100 % takes a button under the 24 px floor of section 6. That is the DM's choice, and the floor holds for the design itself.
+
 ## 4. Icons
 
 - Set: Lucide (ISC license). Keep the license text in the repository.
@@ -223,6 +234,8 @@ The footer holds Group and New group, and a helper line that names the picked no
 3. Snap to true size: input in percent, helper text "either side of 100 %".
 4. Windows: checkbox "Swap the two windows instead of moving the DM window".
 5. Check: checkbox "Show a 1 inch grid and a 6 inch ruler on the TV".
+6. Theme: segmented control (Light, Dark). See section 2.
+7. Interface scale: slider with the percent to its right. Helper: "How big the toolbar, the panels and the dialogs draw. The maps keep their size". See section 3.1.
 
 ### 9.2 Settings, Grid tab
 

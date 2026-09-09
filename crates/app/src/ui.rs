@@ -177,6 +177,8 @@ pub struct DmUi {
     dialog: Dialog,
     /// The theme the context carries, so a change installs once.
     theme: theme::Mode,
+    /// The interface scale the context carries, for the same reason.
+    ui_scale: f64,
     /// The DM asked to see the whole TV box. The next frame acts on it.
     frame_box: bool,
     /// Who takes the zoom gesture that is running: the TV box, or the
@@ -214,6 +216,8 @@ pub struct Settings {
     pub snap_percent: f64,
     /// The theme the window draws. DESIGN.md 2.
     pub theme: theme::Mode,
+    /// What every size of DESIGN.md is multiplied by. DESIGN.md 3.1.
+    pub ui_scale: f64,
 }
 
 impl Settings {
@@ -478,6 +482,7 @@ impl DmUi {
             tree: Tree::default(),
             dialog: Dialog::default(),
             theme: theme::Mode::default(),
+            ui_scale: theme::DEFAULT_SCALE,
             frame_box: false,
             zoom_goes_to: None,
             dirty: false,
@@ -501,6 +506,13 @@ impl DmUi {
         if self.theme != frame.settings.theme {
             theme::install(&ctx, frame.settings.theme);
             self.theme = frame.settings.theme;
+        }
+        // egui multiplies the scale into `pixels_per_point`, so the chrome
+        // grows and the canvas math, which reads that value, stays true.
+        let scale = theme::clamp_scale(frame.settings.ui_scale);
+        if (self.ui_scale - scale).abs() > f64::EPSILON {
+            ctx.set_zoom_factor(scale as f32);
+            self.ui_scale = scale;
         }
         let mut add_map = false;
         let mut edited = false;
@@ -1145,6 +1157,8 @@ struct Dialog {
     open: bool,
     /// The tab the navigation column marks.
     tab: Tab,
+    /// The scale the DM is dragging toward, until the button goes up.
+    scale_drag: Option<f64>,
 }
 
 /// The box of a dialog: the scrim, the frame, the header. DESIGN.md 9.
@@ -1160,6 +1174,10 @@ fn dialog_frame(
     body: impl FnOnce(&mut egui::Ui, egui::Rect),
 ) -> bool {
     let screen = ctx.content_rect();
+    // A dialog never outgrows the window. At a large interface scale the
+    // size of DESIGN.md 9 does not fit, and a dialog whose close button
+    // sits off the screen is a dialog no one can leave.
+    let size = size.min(screen.size() - egui::Vec2::splat(2.0 * MARGIN));
     let rect = egui::Rect::from_center_size(screen.center(), size);
     let mut close = false;
     egui::Area::new(egui::Id::new(id))
@@ -1242,12 +1260,23 @@ fn settings_dialog(
         );
         body_ui.set_clip_rect(body);
         body_ui.spacing_mut().item_spacing.y = ROW_GAP;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(&mut body_ui, |body_ui| {
+        body_ui.spacing_mut().item_spacing.y = ROW_GAP;
         match dialog.tab {
-            Tab::Table => edited = table_tab(&mut body_ui, frame, tokens),
-            Tab::Grid => not_built(&mut body_ui, "The grid settings arrive with the hex grid (#15)."),
-            Tab::Light => not_built(&mut body_ui, "The light settings arrive with the darkness slider (#20)."),
-            Tab::Shortcuts => not_built(&mut body_ui, "The key list arrives with the shortcuts story (#36)."),
+            Tab::Table => {
+                edited = table_tab(body_ui, frame, &mut dialog.scale_drag, tokens);
+            }
+            Tab::Grid => not_built(body_ui, "The grid settings arrive with the hex grid (#15)."),
+            Tab::Light => {
+                not_built(body_ui, "The light settings arrive with the darkness slider (#20).");
+            }
+            Tab::Shortcuts => {
+                not_built(body_ui, "The key list arrives with the shortcuts story (#36).");
+            }
         }
+            });
     });
     if close {
         dialog.open = false;
@@ -1332,7 +1361,12 @@ fn dialog_row(ui: &mut egui::Ui, label: &str, controls: impl FnOnce(&mut egui::U
 }
 
 /// The Table tab of DESIGN.md 9.1. Returns `true` when a value changed.
-fn table_tab(ui: &mut egui::Ui, frame: &mut Frame<'_>, tokens: Tokens) -> bool {
+fn table_tab(
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+    scale_drag: &mut Option<f64>,
+    tokens: Tokens,
+) -> bool {
     let mut edited = false;
     let displays = frame.displays;
     let label = |i: usize| {
@@ -1404,6 +1438,33 @@ fn table_tab(ui: &mut egui::Ui, frame: &mut Frame<'_>, tokens: Tokens) -> bool {
             edited = true;
         }
         let _ = tokens;
+    });
+    dialog_row(ui, "Interface scale", |ui| {
+        let mut scale = scale_drag.unwrap_or(frame.settings.ui_scale);
+        let percent = format!("{} %", (scale * 100.0).round());
+        let response = widget::slider(
+            ui,
+            &mut scale,
+            theme::MIN_SCALE..=theme::MAX_SCALE,
+            180.0,
+            &percent,
+        );
+        // The window keeps its size while the button is down. A window that
+        // rescaled under the hand would move the slider away from the
+        // pointer, and the value would run to one end on its own. The
+        // number beside the track follows the drag, so the DM still sees
+        // where the knob stands.
+        if response.is_pointer_button_down_on() {
+            // A step of five percent, so the value stays a round number.
+            *scale_drag = Some((scale * 20.0).round() / 20.0);
+        } else if let Some(picked) = scale_drag.take() {
+            frame.settings.ui_scale = picked;
+            edited = true;
+        }
+        widget::helper(
+            ui,
+            "How big the toolbar, the panels and the dialogs draw. The maps keep their size.",
+        );
     });
     edited
 }
@@ -3044,6 +3105,7 @@ mod tests {
     fn settings() -> Settings {
         Settings {
             theme: theme::Mode::default(),
+            ui_scale: theme::DEFAULT_SCALE,
             tv_display: Some(1),
             swap_windows: false,
             snap_percent: 8.0,

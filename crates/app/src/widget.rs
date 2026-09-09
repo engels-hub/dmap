@@ -407,6 +407,61 @@ pub fn select_row(ui: &mut Ui, text: &str, picked: bool) -> Response {
     response
 }
 
+/// A slider of DESIGN.md 6, with its value in `mute` on the right.
+///
+/// The knob keeps the full range reachable: the track starts and ends half
+/// a knob inside the control, so the end values sit under the pointer.
+pub fn slider(
+    ui: &mut Ui,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    width: f32,
+    text: &str,
+) -> Response {
+    /// The side of the knob, in points. DESIGN.md 6.
+    const KNOB: f32 = 14.0;
+    let tokens = theme::of(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, CONTROL), Sense::click_and_drag());
+    let track = Rect::from_min_max(
+        pos2(rect.left() + KNOB / 2.0, rect.center().y - 1.0),
+        pos2(rect.right() - KNOB / 2.0, rect.center().y + 1.0),
+    );
+    let span = range.end() - range.start();
+    if response.is_pointer_button_down_on()
+        && let Some(pointer) = response.interact_pointer_pos()
+    {
+        let share = ((pointer.x - track.left()) / track.width()).clamp(0.0, 1.0);
+        *value = range.start() + f64::from(share) * span;
+    }
+    let share = if span.abs() < f64::EPSILON {
+        0.0
+    } else {
+        ((*value - *range.start()) / span).clamp(0.0, 1.0) as f32
+    };
+    let knob_x = track.left() + share * track.width();
+    ui.painter().rect_filled(track, 0, tokens.rule);
+    ui.painter().rect_filled(
+        Rect::from_min_max(track.left_top(), pos2(knob_x, track.bottom())),
+        0,
+        tokens.ink,
+    );
+    ui.painter().rect(
+        Rect::from_center_size(pos2(knob_x, rect.center().y), Vec2::splat(KNOB)),
+        0,
+        tokens.field,
+        Stroke::new(1.0, tokens.ink),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        pos2(rect.right() + ICON_GAP, rect.center().y),
+        Align2::LEFT_CENTER,
+        text,
+        theme::font(theme::BODY, false),
+        tokens.mute,
+    );
+    response
+}
+
 /// How wide `text` runs in `font`.
 fn text_width(ui: &Ui, text: &str, font: &egui::FontId) -> f32 {
     ui.ctx().fonts_mut(|fonts| {

@@ -50,6 +50,8 @@ pub struct Config {
     pub snap_percent: f64,
     /// The theme the DM window draws. DESIGN.md 2.
     pub theme: crate::theme::Mode,
+    /// What every size of DESIGN.md is multiplied by. DESIGN.md 3.1.
+    pub ui_scale: f64,
 }
 
 impl Default for Config {
@@ -61,6 +63,7 @@ impl Default for Config {
             swap_windows: false,
             snap_percent: DEFAULT_SNAP_PERCENT,
             theme: crate::theme::Mode::default(),
+            ui_scale: crate::theme::DEFAULT_SCALE,
         }
     }
 }
@@ -275,6 +278,7 @@ mod tests {
             swap_windows: true,
             snap_percent: 12.0,
             theme: crate::theme::Mode::Dark,
+            ui_scale: 1.25,
         };
         assert_eq!(Config::from_json(&config.to_json()).unwrap(), config);
     }

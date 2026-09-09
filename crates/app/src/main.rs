@@ -260,6 +260,7 @@ impl Running {
                 swap_windows: config.swap_windows,
                 snap_percent: clamp_snap_percent(config.snap_percent),
                 theme: config.theme,
+                ui_scale: crate::theme::clamp_scale(config.ui_scale),
             },
             placed: false,
             tv_pointer: None,
@@ -507,6 +508,7 @@ impl Running {
         config.swap_windows = self.settings.swap_windows;
         config.snap_percent = self.settings.snap_percent;
         config.theme = self.settings.theme;
+        config.ui_scale = self.settings.ui_scale;
         scene.clone_from(&self.scene);
     }
 }

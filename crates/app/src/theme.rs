@@ -32,6 +32,27 @@ pub const TITLE: f32 = 16.0;
 /// The size of a panel title, in points. DESIGN.md 7.1.
 pub const PANEL_TITLE: f32 = 14.0;
 
+/// The smallest interface scale the DM can pick. DESIGN.md 3.1.
+pub const MIN_SCALE: f64 = 0.75;
+
+/// The largest interface scale the DM can pick. DESIGN.md 3.1.
+pub const MAX_SCALE: f64 = 1.75;
+
+/// The scale a new install opens at: the sizes DESIGN.md writes down.
+pub const DEFAULT_SCALE: f64 = 1.0;
+
+/// Holds an interface scale inside the range DESIGN.md 3.1 allows.
+///
+/// A scale that is not a number falls back to the default, so a
+/// hand-edited config file cannot leave the window unreadable.
+pub fn clamp_scale(scale: f64) -> f64 {
+    if scale.is_finite() {
+        scale.clamp(MIN_SCALE, MAX_SCALE)
+    } else {
+        DEFAULT_SCALE
+    }
+}
+
 /// Which theme the window draws. DESIGN.md 2.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -282,6 +303,20 @@ fn visuals(tokens: Tokens) -> egui::Visuals {
 #[cfg(test)]
 mod tests {
     use super::{DARK, LIGHT, Mode};
+
+    #[test]
+    fn a_scale_stays_inside_the_range() {
+        assert!((super::clamp_scale(1.0) - 1.0).abs() < 1e-9);
+        assert!((super::clamp_scale(0.1) - super::MIN_SCALE).abs() < 1e-9);
+        assert!((super::clamp_scale(9.0) - super::MAX_SCALE).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_scale_that_is_not_a_number_takes_the_default() {
+        // A hand-edited config file must never leave the window unreadable.
+        assert!((super::clamp_scale(f64::NAN) - super::DEFAULT_SCALE).abs() < 1e-9);
+        assert!((super::clamp_scale(f64::INFINITY) - super::DEFAULT_SCALE).abs() < 1e-9);
+    }
 
     #[test]
     fn the_light_theme_is_the_default() {

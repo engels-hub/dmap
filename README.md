@@ -60,6 +60,8 @@ Pick the TV display in the Settings dialog. The program keeps the choice in the 
 
 The window has a light theme and a dark theme. The light one is the default. Pick the other one under **Theme** in the Settings dialog, and the program keeps that choice too.
 
+**Interface scale** in the same dialog sets how big the toolbar, the panels and the dialogs draw. The range is 75 % to 175 %, in steps of 5 %. The maps keep their size, and one grid cell stays one inch, so a change here never moves what the players see.
+
 ## Controls
 
 The canvas takes its controls from Figma.
