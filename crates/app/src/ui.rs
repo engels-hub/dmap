@@ -772,25 +772,36 @@ fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
             );
             widget::shadow_box(ui, views_box, tokens);
             widget::shadow_box(ui, actions_box, tokens);
+            // Every fill stays inside the border of its box. A fill over
+            // the border would rub it out under the entry that is on, and
+            // the box would lose its outline there.
+            let views_inside = views_box.shrink(1.0);
+            let actions_inside = actions_box.shrink(1.0);
             // The views are a segmented control: one of them is always on,
-            // and a rule stands between each pair. DESIGN.md 6.
+            // and a line stands between each pair. DESIGN.md 6.
             let mut left = views_box.left();
             for (index, (press, label, glyph)) in views.iter().enumerate() {
-                if index > 0 {
-                    ui.painter()
-                        .vline(left, views_box.y_range(), tokens.hairline());
-                }
                 let cell = egui::Rect::from_min_size(
                     egui::pos2(left, views_box.top()),
                     egui::vec2(view_widths[index], TOOL_HEIGHT),
                 );
                 let active = *press == Press::View(tool);
-                if tool_entry(ui, cell, label, *glyph, active, tokens).clicked() {
+                if tool_entry(ui, cell, views_inside, label, *glyph, active, tokens).clicked() {
                     pressed = Some(*press);
                 }
                 left += view_widths[index] - 1.0;
+                // The line between two segments takes the color of the box
+                // that holds them. A lighter one beside an `ink` border is
+                // the seam a DM reads as a mistake.
+                if index + 1 < views.len() {
+                    ui.painter().vline(
+                        left,
+                        views_inside.y_range(),
+                        egui::Stroke::new(1.0, tokens.ink),
+                    );
+                }
             }
-            // The rest are buttons. None of them stays on, and no rule
+            // The rest are buttons. None of them stays on, and no line
             // gathers them into one control.
             let mut left = actions_box.left();
             for (index, (press, label, glyph)) in actions.iter().enumerate() {
@@ -798,7 +809,7 @@ fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
                     egui::pos2(left, actions_box.top()),
                     egui::vec2(action_widths[index], TOOL_HEIGHT),
                 );
-                if tool_entry(ui, cell, label, *glyph, false, tokens).clicked() {
+                if tool_entry(ui, cell, actions_inside, label, *glyph, false, tokens).clicked() {
                     pressed = Some(*press);
                 }
                 left += action_widths[index];
@@ -808,25 +819,32 @@ fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
 }
 
 /// One entry of the toolbar: the glyph over its label. DESIGN.md 5.2.
+///
+/// `rect` is what the entry takes for a click, and `inside` is the box it
+/// sits in, less its border. Every fill stays within the two, so the
+/// border of the box runs unbroken behind the whole toolbar.
 fn tool_entry(
     ui: &egui::Ui,
     rect: egui::Rect,
+    inside: egui::Rect,
     label: &str,
     glyph: Icon,
     active: bool,
     tokens: Tokens,
 ) -> egui::Response {
     let response = ui.interact(rect, ui.id().with(label), egui::Sense::click());
+    let paint = rect.intersect(inside);
     if active {
-        ui.painter().rect_filled(rect, 0, tokens.raised);
-        // DESIGN.md 5.2: the bar sits on the top edge of the entry.
+        ui.painter().rect_filled(paint, 0, tokens.raised);
+        // DESIGN.md 5.2: the bar sits on the top edge of the entry, inside
+        // the border of the box.
         ui.painter().rect_filled(
-            egui::Rect::from_min_size(rect.left_top(), egui::vec2(rect.width(), widget::BAR)),
+            egui::Rect::from_min_size(paint.left_top(), egui::vec2(paint.width(), widget::BAR)),
             0,
             tokens.accent,
         );
     } else if response.hovered() {
-        ui.painter().rect_filled(rect, 0, tokens.field);
+        ui.painter().rect_filled(paint, 0, tokens.field);
     }
     let color = if active { tokens.accent } else { tokens.ink };
     // The glyph and the label stand together in the middle of the entry.
