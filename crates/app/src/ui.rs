@@ -895,7 +895,13 @@ fn panel(
                     ),
                 ]),
             );
-            ui.allocate_rect(rect, egui::Sense::click_and_drag());
+            // The rect goes down last, because the panel only knows its
+            // height once the body has drawn. It senses hover and nothing
+            // more: a rect that took the click would win over every button
+            // and every row inside it, since the later widget wins where
+            // two overlap. The `Area` still stands over the canvas, so no
+            // click on the panel reaches a map behind it.
+            ui.allocate_rect(rect, egui::Sense::hover());
         });
     rect
 }
@@ -1809,12 +1815,97 @@ struct Row {
     twist: Option<egui::Response>,
 }
 
+/// Where each part of one row of the objects list sits. DESIGN.md 8.4.
+#[derive(Debug, Clone, Copy)]
+struct RowParts {
+    /// The square that opens and closes a group, or `None` for an asset.
+    twist: Option<egui::Rect>,
+    /// Where the glyph that says what the row is starts.
+    glyph_left: f32,
+    /// The part of the row that takes a click and starts a drag.
+    body: egui::Rect,
+    /// Where the name goes.
+    name: egui::Rect,
+    /// Where the two switches go.
+    switches: egui::Rect,
+}
+
+/// Cuts one row into its parts.
+///
+/// The twist and the body never cover the same point. `egui` gives a point
+/// that two widgets cover to the one that came later, and the body comes
+/// later, so an overlap would take every press away from the twist. That
+/// is the bug where the arrow opened the root and no group under it.
+fn row_parts(rect: egui::Rect, depth: usize, has_twist: bool) -> RowParts {
+    let indent = rect.left() + widget::BAR + 3.0 + depth as f32 * ROW_INDENT;
+    let twist = has_twist.then(|| {
+        egui::Rect::from_center_size(
+            egui::pos2(indent + TWIST / 2.0, rect.center().y),
+            egui::Vec2::splat(TWIST + 6.0),
+        )
+    });
+    // An asset carries no twist, and its glyph still lines up with the
+    // glyph of a group beside it.
+    let glyph_left = indent + TWIST + 5.0;
+    let switches = egui::Rect::from_min_max(
+        egui::pos2(rect.right() - 2.0 * SWITCH, rect.top()),
+        rect.right_bottom(),
+    );
+    let name = egui::Rect::from_min_max(
+        egui::pos2(glyph_left + widget::SMALL_ICON + 6.0, rect.top()),
+        egui::pos2(switches.left() - 5.0, rect.bottom()),
+    );
+    // The body starts a point past the twist. Two rects that share an edge
+    // both sit at distance zero from a pointer on it, and the body would
+    // win that tie.
+    let body = egui::Rect::from_min_max(
+        egui::pos2(
+            twist.map_or(rect.left(), |square| square.right() + 1.0),
+            rect.top(),
+        ),
+        egui::pos2(name.right(), rect.bottom()),
+    );
+    RowParts {
+        twist,
+        glyph_left,
+        body,
+        name,
+        switches,
+    }
+}
+
 /// Paints the frame of one row and hands back the space that is left.
+///
+/// The twist and the body of the row never cover the same point. Two
+/// widgets over one point leave it to `egui` which of them takes the
+/// press, and the twist would lose: it is the small one inside the large
+/// one. So the body of a group starts where its twist ends.
 fn tree_row(ui: &mut egui::Ui, look: RowLook) -> Row {
     let tokens = look.tokens;
     let (rect, whole) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), ROW_HEIGHT),
         egui::Sense::hover(),
+    );
+    let parts = row_parts(rect, look.depth, look.twist.is_some());
+    let RowParts {
+        twist: square,
+        glyph_left,
+        body: body_rect,
+        name,
+        switches,
+    } = parts;
+    let twist = look.twist.zip(square).map(|(open, square)| {
+        let response = ui.interact(
+            square,
+            ui.id().with(("twist", rect.top() as i32, look.depth)),
+            egui::Sense::click(),
+        );
+        (response, square, open)
+    });
+    let body = ui.interact(
+        body_rect,
+        ui.id().with(("row", rect.top() as i32, look.depth)),
+        egui::Sense::click_and_drag(),
     );
     if look.picked {
         ui.painter().rect_filled(rect, 0, tokens.raised);
@@ -1823,28 +1914,26 @@ fn tree_row(ui: &mut egui::Ui, look: RowLook) -> Row {
             0,
             tokens.accent,
         );
+    } else if body.hovered() {
+        ui.painter().rect_filled(rect, 0, tokens.field);
     }
-    let mut left = rect.left() + widget::BAR + 3.0 + look.depth as f32 * ROW_INDENT;
-    let twist = look.twist.map(|open| {
-        let square = egui::Rect::from_center_size(
-            egui::pos2(left + TWIST / 2.0, rect.center().y),
-            egui::Vec2::splat(TWIST + 4.0),
-        );
-        let response = ui.interact(square, ui.id().with(("twist", left as i32, rect.top() as i32)), egui::Sense::click());
+    if let Some((response, square, open)) = &twist {
+        let color = if response.hovered() {
+            tokens.ink
+        } else {
+            tokens.mute
+        };
         icon::paint(
             ui.painter(),
-            if open { Icon::ChevronDown } else { Icon::ChevronRight },
+            if *open {
+                Icon::ChevronDown
+            } else {
+                Icon::ChevronRight
+            },
             square.center(),
             TWIST,
-            tokens.mute,
+            color,
         );
-        response
-    });
-    if look.twist.is_some() {
-        left += TWIST + 5.0;
-    } else {
-        // An asset has no twist, so its glyph lines up with the group's.
-        left += TWIST + 5.0;
     }
     // The accent says two things on one glyph: the DM holds this row, or a
     // new asset joins this group.
@@ -1856,30 +1945,16 @@ fn tree_row(ui: &mut egui::Ui, look: RowLook) -> Row {
     icon::paint(
         ui.painter(),
         look.glyph,
-        egui::pos2(left + widget::SMALL_ICON / 2.0, rect.center().y),
+        egui::pos2(glyph_left + widget::SMALL_ICON / 2.0, rect.center().y),
         widget::SMALL_ICON,
         glyph_color,
-    );
-    left += widget::SMALL_ICON + 6.0;
-    let switches = egui::Rect::from_min_max(
-        egui::pos2(rect.right() - 2.0 * SWITCH, rect.top()),
-        rect.right_bottom(),
-    );
-    let name = egui::Rect::from_min_max(
-        egui::pos2(left, rect.top()),
-        egui::pos2(switches.left() - 5.0, rect.bottom()),
-    );
-    let body = ui.interact(
-        egui::Rect::from_min_max(rect.left_top(), egui::pos2(name.right(), rect.bottom())),
-        ui.id().with(("row", rect.top() as i32, look.depth)),
-        egui::Sense::click_and_drag(),
     );
     Row {
         whole,
         body,
         name,
         switches,
-        twist,
+        twist: twist.map(|(response, ..)| response),
     }
 }
 
@@ -3100,7 +3175,56 @@ fn draw_selection(painter: &egui::Painter, handles: &[egui::Pos2], tokens: Token
 
 #[cfg(test)]
 mod tests {
-    use super::{Settings, theme};
+    use super::{ROW_HEIGHT, Settings, row_parts, theme};
+
+    /// One row of the objects list, the size the panel gives it.
+    fn row() -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(22.0, 80.0), egui::vec2(218.0, ROW_HEIGHT))
+    }
+
+    #[test]
+    fn the_twist_and_the_body_of_a_row_never_meet() {
+        // `egui` gives a point that two widgets cover to the one that came
+        // later. The body comes later, so an overlap would take every
+        // press away from the twist, and no group would open.
+        for depth in 1..6 {
+            let parts = row_parts(row(), depth, true);
+            let twist = parts.twist.expect("a group carries a twist");
+            assert!(
+                twist.right() < parts.body.left(),
+                "depth {depth}: the twist reaches into the body"
+            );
+            assert!(!twist.intersects(parts.body), "depth {depth}: the two meet");
+        }
+    }
+
+    #[test]
+    fn a_row_without_a_twist_gives_its_whole_width_to_the_body() {
+        let parts = row_parts(row(), 1, false);
+        assert!(parts.twist.is_none());
+        assert!((parts.body.left() - row().left()).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn the_parts_of_a_row_stay_in_order() {
+        let parts = row_parts(row(), 1, true);
+        let twist = parts.twist.expect("a group carries a twist");
+        assert!(twist.right() <= parts.glyph_left);
+        assert!(parts.glyph_left < parts.name.left());
+        assert!(parts.name.right() <= parts.switches.left());
+        assert!((parts.switches.right() - row().right()).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_deeper_row_indents_and_keeps_its_switches() {
+        // DESIGN.md 8.4: a child row indents from its parent, and the two
+        // switches stay on the right edge whatever the depth.
+        let shallow = row_parts(row(), 1, true);
+        let deep = row_parts(row(), 2, true);
+        let step = deep.glyph_left - shallow.glyph_left;
+        assert!((step - super::ROW_INDENT).abs() < f32::EPSILON);
+        assert_eq!(shallow.switches, deep.switches);
+    }
 
     fn settings() -> Settings {
         Settings {
