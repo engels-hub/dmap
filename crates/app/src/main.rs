@@ -9,14 +9,18 @@ mod camera;
 mod color;
 mod config;
 mod gpu;
+mod icon;
+mod icons;
 mod images;
 mod maps;
 mod pointer;
 mod scene;
 mod transform;
+mod theme;
 mod tv;
 mod tvbox;
 mod ui;
+mod widget;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -255,6 +259,7 @@ impl Running {
                 tv_display,
                 swap_windows: config.swap_windows,
                 snap_percent: clamp_snap_percent(config.snap_percent),
+                theme: config.theme,
             },
             placed: false,
             tv_pointer: None,
@@ -302,11 +307,12 @@ impl Running {
                 let viewport = (pane.config.width, pane.config.height);
                 let (device, queue) = (&self.gpu.device, &self.gpu.queue);
                 let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
+                let canvas = self.settings.theme.tokens().canvas;
                 let tv_camera = self.scene.tv_box.camera(viewport);
                 let shown = draw_order(&self.scene, Audience::Tv);
                 let map_layer = &mut self.map_layer;
                 self.gpu
-                    .clear(pane, color::linear_color(color::CANVAS), |pass| {
+                    .clear(pane, color::linear_token(canvas), |pass| {
                         map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
                         if let Some(center) = tv_pointer {
                             pointer.draw(queue, pass, center, viewport);
@@ -401,8 +407,9 @@ impl Running {
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
         let shown = draw_order(&self.scene, Audience::Dm);
         let (map_layer, camera) = (&mut self.map_layer, &self.camera);
+        let canvas = self.settings.theme.tokens().canvas;
         self.ui
-            .render(&self.gpu, &mut self.dm, output.paint, |pass| {
+            .render(&self.gpu, &mut self.dm, output.paint, canvas, |pass| {
                 map_layer.draw(device, queue, pass, &shown, camera, viewport);
             })?;
         if output.edited {
@@ -499,6 +506,7 @@ impl Running {
         config.tv_display = placement_for(self.settings.tv_display, &display_names(&self.displays));
         config.swap_windows = self.settings.swap_windows;
         config.snap_percent = self.settings.snap_percent;
+        config.theme = self.settings.theme;
         scene.clone_from(&self.scene);
     }
 }

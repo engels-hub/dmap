@@ -11,7 +11,10 @@ use egui_winit::winit::{event::WindowEvent, monitor::MonitorHandle};
 use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::color;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
+use crate::icon;
+use crate::icons::Icon;
 use crate::scene::{Group, Node, NodeId, Placed, ROOT_ID, Scene};
+use crate::theme::{self, Tokens};
 use crate::transform::{
     MAX_GRID_PX, MIN_GRID_PX, corner_offset, edge_midpoint, grid_px_from_measure, hit_test,
     pick_handle, rotation_from_drag, rotation_handle, scale_from_drag, snap_corner, step_scale,
@@ -20,15 +23,87 @@ use crate::tv::display_label;
 use crate::tvbox::{
     MAX_SNAP_PERCENT, TV_WIDTH_INCHES, TvBox, at_true_size, clamp_width, snap_to_true_size,
 };
+use crate::widget::{self, Height};
 
-/// Width of the tool rail on the left, from DESIGN.md.
-const RAIL_WIDTH: f32 = 72.0;
+/// The gap between the chrome and the window edge, in points. DESIGN.md 5.3.
+const MARGIN: f32 = 16.0;
 
-/// The accent color of the light theme, from DESIGN.md.
-const ACCENT: egui::Color32 = egui::Color32::from_rgb(0xb4, 0x45, 0x2c);
+/// The height of a toolbar entry, in points. DESIGN.md 5.2.
+const TOOL_HEIGHT: f32 = 56.0;
+
+/// The width of a toolbar entry, in points. DESIGN.md 5.2.
+///
+/// An entry grows past this when its label needs the room. DESIGN.md 1
+/// puts legibility first, so the label never runs into its neighbour.
+const TOOL_WIDTH: f32 = 64.0;
+
+/// The padding beside a toolbar label that outgrows its entry, in points.
+const TOOL_PAD: f32 = 10.0;
+
+/// The size of a toolbar glyph, in points. DESIGN.md 4.
+const TOOL_ICON: f32 = 22.0;
+
+/// The gap between a toolbar glyph and its label, in points. DESIGN.md 5.2.
+const TOOL_GAP: f32 = 4.0;
+
+/// The width a panel opens at, in points. DESIGN.md 8.4.
+const PANEL_WIDTH: f32 = 280.0;
+
+/// The widest a panel goes when the DM drags its edge. DESIGN.md 8.4.
+const PANEL_MAX: f32 = 560.0;
+
+/// The height of a panel header, in points. DESIGN.md 7.1.
+const PANEL_HEADER: f32 = 40.0;
+
+/// The padding inside the body of a panel, in points. DESIGN.md 7.1.
+const PANEL_PAD: f32 = 14.0;
+
+/// The height of one row of the objects list, in points. DESIGN.md 8.4.
+const ROW_HEIGHT: f32 = 32.0;
+
+/// How far a child row stands from its parent, in points. DESIGN.md 8.4.
+const ROW_INDENT: f32 = 18.0;
+
+/// The size of the glyph that opens a group, in points. DESIGN.md 4.
+const TWIST: f32 = 16.0;
+
+/// The square that holds a switch on a list row, in points. DESIGN.md 8.4.
+const SWITCH: f32 = 26.0;
+
+/// The size of a dialog, in points. DESIGN.md 9.
+///
+/// The widest the range allows, because the Table tab holds a checkbox
+/// whose label is a whole sentence.
+const DIALOG: egui::Vec2 = egui::vec2(880.0, 560.0);
+
+/// The height of a dialog header, in points. DESIGN.md 9.
+const DIALOG_HEADER: f32 = 52.0;
+
+/// The width of the navigation column of a dialog, in points. DESIGN.md 9.
+const DIALOG_NAV: f32 = 200.0;
+
+/// The width of the label column in a dialog body, in points. DESIGN.md 9.
+const LABEL_COLUMN: f32 = 170.0;
+
+/// The gap between two rows of a dialog body, in points. DESIGN.md 9.
+const ROW_GAP: f32 = 22.0;
+
+/// The height of the footer of a dialog, in points. DESIGN.md 9.
+const FOOTER: f32 = 60.0;
+
+/// The height of one scene row, in points. DESIGN.md 9.5.
+const SCENE_ROW: f32 = 52.0;
+
+/// The width of the scenes folder input, in points. DESIGN.md 9.5.
+const PATH_WIDTH: f32 = 420.0;
 
 /// Size of a corner handle in points.
 const HANDLE_SIZE: f32 = 8.0;
+
+/// How far a corner handle stands outside the TV box, in points.
+///
+/// DESIGN.md 5.4.
+const HANDLE_STANDOFF: f32 = 4.0;
 
 /// How far a click may miss a handle and still grab it, in points.
 const HANDLE_REACH: f64 = 10.0;
@@ -53,26 +128,7 @@ const MIN_PERCENT: f64 = 1.0;
 /// The largest size the properties accept, in percent.
 const MAX_PERCENT: f64 = 10_000.0;
 
-/// The wash over the canvas outside the TV box, from DESIGN.md.
-///
-/// DESIGN.md gives this as `rgba(43, 36, 25, 0.12)`. egui wants the color
-/// already multiplied by the alpha, and only that form is a `const`, so the
-/// channels below are 43, 36 and 25 times 31/255.
-const DIM: egui::Color32 = egui::Color32::from_rgba_premultiplied(5, 4, 3, 31);
-
-/// Text on the accent, from the `field` token in DESIGN.md.
-const ON_ACCENT: egui::Color32 = egui::Color32::from_rgb(0xf5, 0xef, 0xe2);
-
-/// The `ink` token of the light theme, from DESIGN.md.
-const INK: egui::Color32 = egui::Color32::from_rgb(0x2b, 0x24, 0x19);
-
-/// What the DM takes hold of to drag a row through the tree.
-const GRIP: &str = "::";
-
-/// The `mute` token of the light theme, from DESIGN.md. Helper text.
-const MUTE: egui::Color32 = egui::Color32::from_rgb(0x7d, 0x74, 0x62);
-
-/// Size of the zoom label on the TV box, in points. DESIGN.md 5.3.
+/// Size of the zoom label on the TV box, in points. DESIGN.md 5.4.
 const ZOOM_LABEL_SIZE: f32 = 14.0;
 
 /// Gap between the top edge of the box and its zoom label, in points.
@@ -117,6 +173,12 @@ pub struct DmUi {
     table: Table,
     scenes: Scenes,
     tree: Tree,
+    /// The settings dialog and the tab it shows.
+    dialog: Dialog,
+    /// The theme the context carries, so a change installs once.
+    theme: theme::Mode,
+    /// The DM asked to see the whole TV box. The next frame acts on it.
+    frame_box: bool,
     /// Who takes the zoom gesture that is running: the TV box, or the
     /// camera. `None` while no gesture runs.
     zoom_goes_to: Option<bool>,
@@ -150,6 +212,8 @@ pub struct Settings {
     /// How close to true size the TV box must come before it snaps, in
     /// percent.
     pub snap_percent: f64,
+    /// The theme the window draws. DESIGN.md 2.
+    pub theme: theme::Mode,
 }
 
 impl Settings {
@@ -403,6 +467,7 @@ impl DmUi {
         state
             .egui_ctx()
             .options_mut(|options| options.zoom_with_keyboard = false);
+        theme::install(state.egui_ctx(), theme::Mode::default());
         Self {
             state,
             renderer,
@@ -411,6 +476,9 @@ impl DmUi {
             table: Table::default(),
             scenes: Scenes::default(),
             tree: Tree::default(),
+            dialog: Dialog::default(),
+            theme: theme::Mode::default(),
+            frame_box: false,
             zoom_goes_to: None,
             dirty: false,
         }
@@ -430,6 +498,10 @@ impl DmUi {
         let raw_input = self.state.take_egui_input(&pane.window);
         let ctx = self.state.egui_ctx().clone();
         let viewport = (pane.config.width, pane.config.height);
+        if self.theme != frame.settings.theme {
+            theme::install(&ctx, frame.settings.theme);
+            self.theme = frame.settings.theme;
+        }
         let mut add_map = false;
         let mut edited = false;
         let mut scene = None;
@@ -438,26 +510,45 @@ impl DmUi {
         let tool = &mut self.tool;
         let scenes = &mut self.scenes;
         let tree = &mut self.tree;
+        let dialog = &mut self.dialog;
+        let frame_box = &mut self.frame_box;
         let zoom_goes_to = &mut self.zoom_goes_to;
         let selected_before = select.chosen.clone();
         let output = ctx.run_ui(raw_input, |ui| {
             // A click that closes a popup must not reach the canvas.
             let popup_open = egui::Popup::is_any_open(ui.ctx());
-            let rail = rail_and_settings(ui, &mut frame, select, tool, scenes, tree);
-            add_map = rail.add_map;
-            edited = rail.edited;
-            scene = scenes_dialog(ui, scenes, &frame);
+            let tokens = theme::of(ui.ctx());
+            // DESIGN.md 5: the canvas fills the window, and the chrome
+            // floats over it. So the canvas takes the whole rect, and the
+            // panels come after it and draw on top.
+            let rect = ui.ctx().content_rect();
+            let over = popup_open || scenes.open || dialog.open;
+            if !over {
+                frame_tv_box(ui, &mut frame, rect, viewport, *frame_box);
+                // The ask lives one frame, because the panel that raised it
+                // draws after the camera reads it.
+                *frame_box = false;
+                edited |= match *tool {
+                    Tool::Select => canvas(ui, select, &mut frame, viewport, zoom_goes_to, tokens),
+                    Tool::Table => {
+                        table_tool(ui, table, &mut frame, viewport, zoom_goes_to, tokens)
+                    }
+                };
+            }
+            edited |= objects_panel(ui.ctx(), frame.scene, select, tree, tokens);
+            edited |= properties_panel(ui.ctx(), &mut frame, select, *tool, frame_box, tokens);
+            match toolbar(ui, *tool, tokens) {
+                Some(Press::View(view)) => *tool = view,
+                Some(Press::Scenes) => scenes.open = !scenes.open,
+                Some(Press::AddMap) => add_map = true,
+                Some(Press::Settings) => dialog.open = !dialog.open,
+                None => {}
+            }
             // A dialog over the canvas takes the keyboard too. egui holds
             // the pointer back on its own, but `R` and the arrow keys would
             // still reach the map behind it.
-            if !popup_open && !scenes.open {
-                let rect = ui.available_rect_before_wrap();
-                frame_tv_box(ui, &mut frame, rect, viewport);
-                edited |= match *tool {
-                    Tool::Select => canvas(ui, select, &mut frame, viewport, zoom_goes_to),
-                    Tool::Table => table_tool(ui, table, &mut frame, viewport, zoom_goes_to),
-                };
-            }
+            edited |= settings_dialog(ui.ctx(), &mut frame, dialog, tokens);
+            scene = scenes_dialog(ui, scenes, &frame, tokens);
         });
         let egui::FullOutput {
             platform_output,
@@ -504,6 +595,7 @@ impl DmUi {
         gpu: &Gpu,
         pane: &mut Pane,
         paint: Paint,
+        canvas: egui::Color32,
         draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
     ) -> Result<()> {
         let Paint {
@@ -535,7 +627,7 @@ impl DmUi {
                     .update_buffers(&gpu.device, &gpu.queue, &mut encoder, &jobs, &screen);
             {
                 let mut pass =
-                    begin_clear_pass(&mut encoder, &view, color::linear_color(color::CANVAS));
+                    begin_clear_pass(&mut encoder, &view, color::linear_token(canvas));
                 draw_canvas(&mut pass);
                 self.renderer.render(&mut pass, &jobs, &screen);
             };
@@ -586,251 +678,226 @@ impl std::fmt::Debug for Paint {
     }
 }
 
-/// The rail and the settings panel.
+/// What the toolbar asked for this frame. DESIGN.md 5.2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Press {
+    /// Show the canvas through another view.
+    View(Tool),
+    /// Open the scenes dialog.
+    Scenes,
+    /// Put a map on the canvas.
+    AddMap,
+    /// Open the settings dialog.
+    Settings,
+}
+
+/// The toolbar of DESIGN.md 5.2: the views, a rule, then the rest.
 ///
-/// Returns whether Add map was pressed, and whether a map property changed.
-fn rail_and_settings(
-    ui: &mut egui::Ui,
-    frame: &mut Frame<'_>,
-    select: &mut Select,
-    tool: &mut Tool,
-    scenes: &mut Scenes,
-    tree: &mut Tree,
-) -> Rail {
-    let displays = frame.displays;
-    let mut add_map = false;
-    let mut edited = false;
-    egui::Panel::left("rail")
-        .exact_size(RAIL_WIDTH)
-        .resizable(false)
-        .show(ui, |ui| {
-            ui.label("dmap");
-            // DESIGN.md: the accent marks the active tool, and nothing else
-            // in the rail takes a color.
-            for (choice, label) in [(Tool::Select, "Select"), (Tool::Table, "Table")] {
-                let active = *tool == choice;
-                let color = if active {
-                    ON_ACCENT
-                } else {
-                    ui.visuals().text_color()
-                };
-                let fill = if active {
-                    ACCENT
-                } else {
-                    egui::Color32::TRANSPARENT
-                };
-                let button = egui::Button::new(egui::RichText::new(label).color(color)).fill(fill);
-                if ui.add(button).clicked() {
-                    *tool = choice;
-                }
-            }
-            ui.separator();
-            add_map = ui.button("Add map").clicked();
-            if ui.button("Scenes").clicked() {
-                scenes.open = !scenes.open;
-            }
-        });
-    egui::Panel::right("settings").show(ui, |ui| {
-        ui.heading("Settings");
-        ui.label("TV display");
-        let label = |i: usize| {
-            let display = &displays[i];
-            let size = display.size();
-            display_label(display.name().as_deref(), size.width, size.height)
-        };
-        let selected = frame
-            .settings
-            .tv_display
-            .map_or_else(|| "Window".to_owned(), label);
-        egui::ComboBox::from_id_salt("tv_display")
-            .selected_text(selected)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut frame.settings.tv_display, None, "Window");
-                for i in 0..displays.len() {
-                    ui.selectable_value(&mut frame.settings.tv_display, Some(i), label(i));
-                }
+/// It floats over the canvas, centered, `MARGIN` from the bottom edge. A
+/// view that is not built yet has no entry, so the toolbar never offers
+/// what the program cannot do.
+fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
+    let views = [
+        (Press::View(Tool::Select), "Select", Icon::MousePointer),
+        (Press::View(Tool::Table), "Table", Icon::Monitor),
+    ];
+    let others = [
+        (Press::Scenes, "Scenes", Icon::Layers),
+        (Press::AddMap, "Add map", Icon::Plus),
+        (Press::Settings, "Settings", Icon::SlidersHorizontal),
+    ];
+    let font = theme::font(theme::SMALL, false);
+    let widths: Vec<f32> = views
+        .iter()
+        .chain(&others)
+        .map(|(_, label, _)| {
+            let text = ui.ctx().fonts_mut(|fonts| {
+                fonts
+                    .layout_no_wrap((*label).to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
+                    .size()
+                    .x
             });
-        ui.checkbox(
-            &mut frame.settings.swap_windows,
-            "Swap mode (Wayland compat)",
-        );
-        ui.label("Snap to true size");
-        ui.horizontal(|ui| {
-            let field = egui::DragValue::new(&mut frame.settings.snap_percent)
-                .suffix(" %")
-                .range(0.0..=MAX_SNAP_PERCENT);
-            ui.add(field);
-            ui.label(egui::RichText::new("either side of 100 %").color(MUTE));
+            (text + 2.0 * TOOL_PAD).max(TOOL_WIDTH).ceil()
+        })
+        .collect();
+    // The rule between the two groups takes one point of its own.
+    let width = widths.iter().sum::<f32>() + 1.0;
+    let screen = ui.ctx().content_rect();
+    let top_left = egui::pos2(
+        (screen.center().x - width / 2.0).round(),
+        screen.bottom() - MARGIN - TOOL_HEIGHT,
+    );
+    let mut pressed = None;
+    egui::Area::new(egui::Id::new("toolbar"))
+        .order(egui::Order::Middle)
+        .fixed_pos(top_left)
+        .show(ui.ctx(), |ui| {
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(width, TOOL_HEIGHT), egui::Sense::hover());
+            widget::shadow_box(ui, rect, tokens);
+            let mut left = rect.left();
+            for (index, (press, label, glyph)) in views.iter().chain(&others).enumerate() {
+                if index == views.len() {
+                    ui.painter().vline(left, rect.y_range(), tokens.hairline());
+                    left += 1.0;
+                }
+                let cell = egui::Rect::from_min_size(
+                    egui::pos2(left, rect.top()),
+                    egui::vec2(widths[index], TOOL_HEIGHT),
+                );
+                let active = *press == Press::View(tool);
+                if tool_entry(ui, cell, label, *glyph, active, tokens).clicked() {
+                    pressed = Some(*press);
+                }
+                left += widths[index];
+            }
         });
-        edited |= tree_panel(ui, frame.scene, select, tree);
-        if *tool == Tool::Select {
-            edited |= map_properties(ui, select, frame.scene);
-        } else {
-            // Another tool does not run the measure, so the panel must not
-            // leave a measure armed behind it.
-            select.measure = None;
-            edited |= box_properties(ui, &mut frame.scene.tv_box);
-        }
-    });
-    Rail { add_map, edited }
+    pressed
 }
 
-/// What the rail and the settings panel decided this frame.
-struct Rail {
-    /// The DM pressed Add map.
-    add_map: bool,
-    /// A value in the panel changed.
-    edited: bool,
+/// One entry of the toolbar: the glyph over its label. DESIGN.md 5.2.
+fn tool_entry(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    label: &str,
+    glyph: Icon,
+    active: bool,
+    tokens: Tokens,
+) -> egui::Response {
+    let response = ui.interact(rect, ui.id().with(label), egui::Sense::click());
+    if active {
+        ui.painter().rect_filled(rect, 0, tokens.raised);
+        // DESIGN.md 5.2: the bar sits on the top edge of the entry.
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(rect.left_top(), egui::vec2(rect.width(), widget::BAR)),
+            0,
+            tokens.accent,
+        );
+    } else if response.hovered() {
+        ui.painter().rect_filled(rect, 0, tokens.field);
+    }
+    let color = if active { tokens.accent } else { tokens.ink };
+    // The glyph and the label stand together in the middle of the entry.
+    let block = TOOL_ICON + TOOL_GAP + theme::SMALL;
+    let top = rect.center().y - block / 2.0;
+    icon::paint(
+        ui.painter(),
+        glyph,
+        egui::pos2(rect.center().x, top + TOOL_ICON / 2.0),
+        TOOL_ICON,
+        color,
+    );
+    ui.painter().text(
+        egui::pos2(rect.center().x, top + TOOL_ICON + TOOL_GAP),
+        egui::Align2::CENTER_TOP,
+        label,
+        theme::font(theme::SMALL, false),
+        color,
+    );
+    response
 }
 
-/// The scenes dialog: open, make, rename, delete, and show the folder.
+/// Where a floating panel stands, and how big it is. DESIGN.md 7.1.
+#[derive(Debug, Clone, Copy)]
+struct Place {
+    /// The top-left corner of the panel, in points.
+    left_top: egui::Pos2,
+    /// The width of the panel, in points.
+    width: f32,
+    /// The height, or `None` to take the height the body asks for.
+    height: Option<f32>,
+}
+
+/// The frame of a floating panel: the box, the header and the body.
 ///
-/// Returns what the DM asked for. The program does the work, so an error
-/// on the disk has one place to go.
-fn scenes_dialog(ui: &egui::Ui, scenes: &mut Scenes, frame: &Frame<'_>) -> Option<SceneCommand> {
-    if !scenes.open {
-        return None;
-    }
-    let mut command = None;
-    let modal = egui::Modal::new(egui::Id::new("scenes")).show(ui.ctx(), |ui| {
-        ui.set_width(420.0);
-        ui.heading("Scenes");
-        ui.label(
-            egui::RichText::new("Every scene is a folder of its own, with its maps beside it.")
-                .color(MUTE),
-        );
-        ui.separator();
-        for name in (frame.list_scenes)() {
-            // Two scenes of one name can live in two folders, so the row
-            // that stands out is the one whose folder is open.
-            let open = frame.scenes_dir.join(&name) == *frame.scene_dir;
-            scene_row(ui, scenes, open, &name, &mut command);
-        }
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Scenes folder").color(MUTE));
-            if ui.button("Change").clicked() {
-                command = Some(SceneCommand::ScenesFolder);
+/// `body` draws inside the padded body. DESIGN.md 7.1. A panel with a
+/// `height` of `None` takes the height its body asks for, so no row of a
+/// property panel falls off its bottom edge.
+fn panel(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    place: Place,
+    tokens: Tokens,
+    body: impl FnOnce(&mut egui::Ui),
+) -> egui::Rect {
+    let Place {
+        left_top,
+        width,
+        height,
+    } = place;
+    let mut rect = egui::Rect::from_min_size(left_top, egui::vec2(width, height.unwrap_or(0.0)));
+    egui::Area::new(egui::Id::new(id))
+        .order(egui::Order::Middle)
+        .fixed_pos(left_top)
+        .show(ctx, |ui| {
+            // The frame cannot go down before the body, because a panel
+            // that sizes itself only knows its height afterwards. So two
+            // shapes wait here and take their place at the end.
+            let shadow = ui.painter().add(egui::Shape::Noop);
+            let box_shape = ui.painter().add(egui::Shape::Noop);
+            let header = egui::Rect::from_min_size(left_top, egui::vec2(width, PANEL_HEADER));
+            ui.painter().text(
+                egui::pos2(header.left() + PANEL_PAD, header.center().y),
+                egui::Align2::LEFT_CENTER,
+                title,
+                theme::font(theme::PANEL_TITLE, true),
+                tokens.ink,
+            );
+            widget::rule_bottom(ui, header, tokens);
+            let bottom = height.map_or(f32::INFINITY, |tall| left_top.y + tall - PANEL_PAD);
+            let inner = egui::Rect::from_min_max(
+                egui::pos2(left_top.x + PANEL_PAD, header.bottom() + PANEL_PAD),
+                egui::pos2(left_top.x + width - PANEL_PAD, bottom),
+            );
+            let mut body_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(inner)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            if height.is_some() {
+                body_ui.set_clip_rect(inner);
             }
+            body_ui.spacing_mut().item_spacing.y = PANEL_PAD;
+            body(&mut body_ui);
+            let tall = height
+                .unwrap_or_else(|| body_ui.min_rect().bottom() + PANEL_PAD - left_top.y);
+            rect = egui::Rect::from_min_size(left_top, egui::vec2(width, tall));
+            if let (Some(color), Some(offset)) = (tokens.shadow, tokens.shadow_offset()) {
+                ui.painter().set(
+                    shadow,
+                    egui::Shape::rect_filled(rect.translate(offset), 0, color),
+                );
+            }
+            // The surface and the border go under everything the body
+            // drew, because both wait at an index the body never reached.
+            ui.painter().set(
+                box_shape,
+                egui::Shape::Vec(vec![
+                    egui::Shape::rect_filled(rect, 0, tokens.surface),
+                    egui::Shape::rect_stroke(
+                        rect,
+                        0,
+                        egui::Stroke::new(1.0, tokens.ink),
+                        egui::StrokeKind::Inside,
+                    ),
+                ]),
+            );
+            ui.allocate_rect(rect, egui::Sense::click_and_drag());
         });
-        let path = frame.scenes_dir.display().to_string();
-        ui.add(egui::Label::new(egui::RichText::new(&path).color(MUTE)).truncate())
-            .on_hover_text(&path);
-        if !frame.scene_error.is_empty() {
-            ui.label(egui::RichText::new(frame.scene_error).color(ACCENT));
-        }
-        ui.horizontal(|ui| {
-            if ui.button("New scene").clicked() {
-                command = Some(SceneCommand::New);
-            }
-            if ui.button("Close").clicked() {
-                scenes.open = false;
-            }
-        });
-    });
-    if modal.should_close() {
-        scenes.open = false;
-    }
-    // A half-typed name, or a question no one answered, does not wait for
-    // the next time the dialog opens.
-    if command.is_some() || !scenes.open {
-        scenes.renaming = None;
-        scenes.deleting = None;
-    }
-    command
+    rect
 }
 
-/// One scene in the dialog: its name, and what the DM can do to it.
-fn scene_row(
-    ui: &mut egui::Ui,
-    scenes: &mut Scenes,
-    open: bool,
-    name: &str,
-    command: &mut Option<SceneCommand>,
-) {
-    // A question stands in for the row until the DM answers it. Deleting a
-    // scene takes its maps with it, so it never happens on one click.
-    if scenes.deleting.as_deref() == Some(name) {
-        ui.horizontal(|ui| {
-            ui.label(format!("Delete {name} and its maps?"));
-            if ui.button("Delete").clicked() {
-                *command = Some(SceneCommand::Delete(name.to_owned()));
-            }
-            if ui.button("Keep").clicked() {
-                scenes.deleting = None;
-            }
-        });
-        return;
-    }
-    ui.horizontal(|ui| {
-        if let Some((from, typed)) = scenes.renaming.as_mut().filter(|(from, _)| from == name) {
-            let field = ui.add(egui::TextEdit::singleline(typed).desired_width(180.0));
-            let done = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            field.request_focus();
-            if done || ui.button("Save").clicked() {
-                *command = Some(SceneCommand::Rename {
-                    from: from.clone(),
-                    to: typed.clone(),
-                });
-            }
-            if ui.button("Cancel").clicked() {
-                scenes.renaming = None;
-            }
-            return;
-        }
-        let label = if open {
-            egui::RichText::new(name).color(ACCENT)
-        } else {
-            egui::RichText::new(name)
-        };
-        ui.allocate_ui_with_layout(
-            egui::vec2(200.0, 20.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| ui.add(egui::Label::new(label).truncate()),
-        );
-        if ui.add_enabled(!open, egui::Button::new("Open")).clicked() {
-            *command = Some(SceneCommand::Open(name.to_owned()));
-        }
-        if ui.button("Rename").clicked() {
-            scenes.renaming = Some((name.to_owned(), name.to_owned()));
-        }
-        if ui.button("Folder").clicked() {
-            *command = Some(SceneCommand::Reveal(name.to_owned()));
-        }
-        if ui.button("Delete").clicked() {
-            scenes.deleting = Some(name.to_owned());
-        }
-    });
-}
-
-/// What the tree list holds between frames.
-#[derive(Debug)]
-struct Tree {
-    /// The group a new asset joins.
-    active: NodeId,
-    /// The groups whose children the list shows.
-    open: std::collections::HashSet<NodeId>,
-    /// The node the list opened its groups for.
-    shown: Option<NodeId>,
-}
-
-impl Default for Tree {
-    fn default() -> Self {
-        Self {
-            active: ROOT_ID,
-            open: std::collections::HashSet::from([ROOT_ID]),
-            shown: None,
-        }
-    }
-}
-
-/// The tree of the scene. Returns `true` when the DM changed it.
+/// The objects list of DESIGN.md 8.4, docked on the left.
 ///
-/// The root stands at the top and cannot be renamed or hidden. Every group
-/// under it starts closed, so a scene of a hundred thousand assets opens as
-/// a handful of rows.
-fn tree_panel(ui: &mut egui::Ui, scene: &mut Scene, select: &mut Select, tree: &mut Tree) -> bool {
-    let mut edited = false;
+/// Returns `true` when the DM changed the scene.
+fn objects_panel(
+    ctx: &egui::Context,
+    scene: &mut Scene,
+    select: &mut Select,
+    tree: &mut Tree,
+    tokens: Tokens,
+) -> bool {
     // A group the DM marked can go, by Ungroup or by a hand-edited file.
     // The root is always there to take a new asset.
     if !crate::scene::has_group(scene, tree.active) {
@@ -844,22 +911,82 @@ fn tree_panel(ui: &mut egui::Ui, scene: &mut Scene, select: &mut Select, tree: &
             tree.open.extend(crate::scene::ancestors(scene, id));
         }
     }
-    ui.separator();
-    ui.heading("Scene");
-    ui.horizontal(|ui| {
-        let marked = tree.active == ROOT_ID;
-        if ui.add(mark(marked)).clicked() {
-            tree.active = ROOT_ID;
-        }
-        if ui.add(arrow(tree.open.contains(&ROOT_ID))).clicked() {
-            flip(&mut tree.open, ROOT_ID);
-        }
-        ui.label(egui::RichText::new(&scene.root.name).color(MUTE));
-    });
+    let screen = ctx.content_rect();
+    let tall = screen.height() - 2.0 * MARGIN - TOOL_HEIGHT - MARGIN;
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(MARGIN, MARGIN),
+        egui::vec2(tree.width, tall),
+    );
+    let mut edited = false;
     let mut moved = None;
-    if tree.open.contains(&ROOT_ID) {
-        edited |= tree_rows(ui, &mut scene.root.children, select, tree, 1, &mut moved);
-    }
+    panel(
+        ctx,
+        "objects",
+        "Objects",
+        Place {
+            left_top: rect.min,
+            width: tree.width,
+            height: Some(tall),
+        },
+        tokens,
+        |ui| {
+        let footer = 2.0 * Height::Panel.points() + 3.0 * PANEL_PAD;
+        let list = ui.available_height() - footer;
+        egui::ScrollArea::vertical()
+            .max_height(list.max(ROW_HEIGHT))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                edited |= root_row(ui, scene, tree, tokens);
+                if tree.open.contains(&ROOT_ID) {
+                    edited |= tree_rows(ui, &mut scene.root.children, select, tree, 1, &mut moved, tokens);
+                }
+            });
+        // DESIGN.md 7.1: a rule runs the whole width above the footer, so
+        // it reaches past the padding of the body.
+        widget::rule_bottom(
+            ui,
+            egui::Rect::from_min_size(
+                egui::pos2(rect.left(), ui.cursor().top() - PANEL_PAD / 2.0),
+                egui::vec2(rect.width(), 0.0),
+            ),
+            tokens,
+        );
+        ui.horizontal(|ui| {
+            // The DM can only take apart the one group they hold.
+            let group = select.only().filter(|id| *id != ROOT_ID).filter(|id| {
+                crate::scene::find(scene, *id)
+                    .and_then(Node::group)
+                    .is_some()
+            });
+            if widget::button(ui, "New group", Some(Icon::Plus), Height::Panel).clicked() {
+                let id = scene.next_id();
+                let new = Group::new(id, format!("Group {id}"));
+                crate::scene::push_into(scene, tree.active, Node::Group(new));
+                tree.open.insert(id);
+                tree.active = id;
+                edited = true;
+            }
+            let ungroup = widget::button(ui, "Ungroup", None, Height::Panel);
+            if group.is_some() && ungroup.clicked() {
+                // What was in it stands where it stood.
+                let id = group.unwrap_or(ROOT_ID);
+                let freed = crate::scene::assets_of(scene, id);
+                edited |= crate::scene::ungroup(scene, id);
+                select.chosen = freed;
+            }
+        });
+        if select.note.is_empty() {
+            widget::helper(ui, "A new asset joins the marked group.");
+        } else {
+            ui.label(
+                egui::RichText::new(&select.note)
+                    .font(theme::font(theme::HELPER, false))
+                    .color(tokens.accent),
+            );
+        }
+        },
+    );
     if let Some((node, target, into)) = moved {
         edited |= if into {
             crate::scene::move_into(scene, node, target)
@@ -867,41 +994,653 @@ fn tree_panel(ui: &mut egui::Ui, scene: &mut Scene, select: &mut Select, tree: &
             crate::scene::move_above(scene, node, target)
         };
     }
-    ui.horizontal(|ui| {
-        // The DM can only take apart the one group they hold.
-        let group = select.only().filter(|id| *id != ROOT_ID).filter(|id| {
-            crate::scene::find(scene, *id)
-                .and_then(Node::group)
-                .is_some()
+    edited |= drag_panel_edge(ctx, rect, &mut tree.width, tokens);
+    edited
+}
+
+/// The grip on the right edge that widens the objects list. DESIGN.md 8.4.
+///
+/// Returns `false`: the width is a view setting and never a scene change.
+fn drag_panel_edge(ctx: &egui::Context, rect: egui::Rect, width: &mut f32, tokens: Tokens) -> bool {
+    /// How wide the grip is for the pointer, in points.
+    const GRIP: f32 = 5.0;
+    let edge = egui::Rect::from_min_max(
+        egui::pos2(rect.right() - GRIP, rect.top()),
+        egui::pos2(rect.right(), rect.bottom()),
+    );
+    egui::Area::new(egui::Id::new("objects-edge"))
+        .order(egui::Order::Middle)
+        .fixed_pos(edge.min)
+        .show(ctx, |ui| {
+            let response = ui.allocate_rect(edge, egui::Sense::drag());
+            if response.hovered() || response.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                ui.painter().vline(
+                    edge.center().x,
+                    edge.y_range().shrink(PANEL_PAD),
+                    egui::Stroke::new(1.0, tokens.mute),
+                );
+            }
+            if response.dragged() {
+                *width = (*width + response.drag_delta().x).clamp(PANEL_WIDTH, PANEL_MAX);
+            }
         });
-        if ui
-            .add_enabled(group.is_some(), egui::Button::new("Ungroup"))
-            .clicked()
-            && let Some(id) = group
-        {
-            // What was in it stands where it stood.
-            let freed = crate::scene::assets_of(scene, id);
-            edited |= crate::scene::ungroup(scene, id);
-            select.chosen = freed;
+    false
+}
+
+/// The row of the root group, which carries no switch. DESIGN.md 8.4.
+fn root_row(ui: &mut egui::Ui, scene: &mut Scene, tree: &mut Tree, tokens: Tokens) -> bool {
+    let open = tree.open.contains(&ROOT_ID);
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), egui::Sense::click());
+    if tree.active == ROOT_ID {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(rect.left_top(), egui::vec2(widget::BAR, ROW_HEIGHT)),
+            0,
+            tokens.accent,
+        );
+    }
+    if response.clicked() {
+        flip(&mut tree.open, ROOT_ID);
+    }
+    let mut left = rect.left() + widget::BAR + 4.0;
+    icon::paint(
+        ui.painter(),
+        if open { Icon::ChevronDown } else { Icon::ChevronRight },
+        egui::pos2(left + TWIST / 2.0, rect.center().y),
+        TWIST,
+        tokens.mute,
+    );
+    left += TWIST + 6.0;
+    icon::paint(
+        ui.painter(),
+        Icon::Folder,
+        egui::pos2(left + widget::SMALL_ICON / 2.0, rect.center().y),
+        widget::SMALL_ICON,
+        tokens.ink,
+    );
+    left += widget::SMALL_ICON + 8.0;
+    ui.painter().text(
+        egui::pos2(left, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        &scene.root.name,
+        theme::font(theme::BODY, false),
+        tokens.ink,
+    );
+    false
+}
+
+/// The properties of the view or of the selection. DESIGN.md 8.1 and 8.2.
+fn properties_panel(
+    ctx: &egui::Context,
+    frame: &mut Frame<'_>,
+    select: &mut Select,
+    tool: Tool,
+    frame_box: &mut bool,
+    tokens: Tokens,
+) -> bool {
+    let screen = ctx.content_rect();
+    let title = match tool {
+        Tool::Select => "Map",
+        Tool::Table => "TV box",
+    };
+    if tool == Tool::Select && select.only().is_none() {
+        return false;
+    }
+    let left_top = egui::pos2(screen.right() - MARGIN - PANEL_WIDTH, MARGIN);
+    let mut edited = false;
+    panel(
+        ctx,
+        "properties",
+        title,
+        Place {
+            left_top,
+            width: PANEL_WIDTH,
+            height: None,
+        },
+        tokens,
+        |ui| match tool {
+        Tool::Select => edited = map_properties(ui, select, frame.scene, tokens),
+        Tool::Table => {
+            // Another tool does not run the measure, so the panel must not
+            // leave a measure armed behind it.
+            select.measure = None;
+            edited = box_properties(ui, &mut frame.scene.tv_box, frame_box, tokens);
+        }
+        },
+    );
+    edited
+}
+
+/// A tab of the settings dialog. DESIGN.md 9.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Tab {
+    /// The TV, its size and the snap. DESIGN.md 9.1.
+    #[default]
+    Table,
+    /// The canvas grid. DESIGN.md 9.2.
+    Grid,
+    /// The light of the scene. DESIGN.md 9.3.
+    Light,
+    /// Every control and its key. DESIGN.md 9.4.
+    Shortcuts,
+}
+
+impl Tab {
+    /// The name and the glyph of the navigation entry.
+    fn entry(self) -> (&'static str, Icon) {
+        match self {
+            Self::Table => ("Table", Icon::Monitor),
+            Self::Grid => ("Grid", Icon::Grid3x3),
+            Self::Light => ("Light", Icon::Sun),
+            Self::Shortcuts => ("Shortcuts", Icon::Keyboard),
+        }
+    }
+}
+
+/// What the settings dialog holds between frames.
+#[derive(Debug, Default)]
+struct Dialog {
+    /// Whether the dialog stands over the canvas.
+    open: bool,
+    /// The tab the navigation column marks.
+    tab: Tab,
+}
+
+/// The box of a dialog: the scrim, the frame, the header. DESIGN.md 9.
+///
+/// `body` draws inside the rest of the frame. Returns `true` when the DM
+/// asked to close the dialog.
+fn dialog_frame(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    size: egui::Vec2,
+    tokens: Tokens,
+    body: impl FnOnce(&mut egui::Ui, egui::Rect),
+) -> bool {
+    let screen = ctx.content_rect();
+    let rect = egui::Rect::from_center_size(screen.center(), size);
+    let mut close = false;
+    egui::Area::new(egui::Id::new(id))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
+            // The scrim takes every click that misses the dialog, so
+            // nothing behind it moves while it stands.
+            let behind = ui.allocate_rect(screen, egui::Sense::click_and_drag());
+            ui.painter().rect_filled(screen, 0, tokens.scrim);
+            if behind.clicked() {
+                close = true;
+            }
+            ui.allocate_rect(rect, egui::Sense::click_and_drag());
+            if let Some(color) = tokens.shadow {
+                // DESIGN.md 9: a 6 by 8 offset at a quarter of the value.
+                ui.painter().rect_filled(
+                    rect.translate(egui::vec2(6.0, 8.0)),
+                    0,
+                    color.gamma_multiply(0.25),
+                );
+            }
+            ui.painter().rect(
+                rect,
+                0,
+                tokens.surface,
+                egui::Stroke::new(1.0, tokens.ink),
+                egui::StrokeKind::Inside,
+            );
+            let header =
+                egui::Rect::from_min_size(rect.left_top(), egui::vec2(rect.width(), DIALOG_HEADER));
+            ui.painter().text(
+                egui::pos2(header.left() + 24.0, header.center().y),
+                egui::Align2::LEFT_CENTER,
+                title,
+                theme::font(theme::TITLE, true),
+                tokens.ink,
+            );
+            let close_rect = egui::Rect::from_center_size(
+                egui::pos2(header.right() - 16.0 - 18.0, header.center().y),
+                egui::Vec2::splat(36.0),
+            );
+            let button = ui.interact(close_rect, ui.id().with("close"), egui::Sense::click());
+            if button.hovered() {
+                ui.painter().rect_filled(close_rect, 0, tokens.raised);
+            }
+            icon::paint(ui.painter(), Icon::X, close_rect.center(), 20.0, tokens.ink);
+            close |= button.clicked();
+            widget::rule_bottom(ui, header, tokens);
+            body(ui, egui::Rect::from_min_max(
+                egui::pos2(rect.left(), header.bottom()),
+                rect.max,
+            ));
+        });
+    close || ctx.input(|i| i.key_pressed(egui::Key::Escape))
+}
+
+/// The settings dialog of DESIGN.md 9. Returns `true` when a value changed.
+fn settings_dialog(
+    ctx: &egui::Context,
+    frame: &mut Frame<'_>,
+    dialog: &mut Dialog,
+    tokens: Tokens,
+) -> bool {
+    if !dialog.open {
+        return false;
+    }
+    let mut edited = false;
+    let close = dialog_frame(ctx, "settings", "Settings", DIALOG, tokens, |ui, rest| {
+        let nav = egui::Rect::from_min_size(rest.left_top(), egui::vec2(DIALOG_NAV, rest.height()));
+        dialog_nav(ui, nav, &mut dialog.tab, tokens);
+        let body = egui::Rect::from_min_max(
+            egui::pos2(nav.right() + 28.0, rest.top() + 24.0),
+            egui::pos2(rest.right() - 28.0, rest.bottom() - 24.0),
+        );
+        let mut body_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(body)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        body_ui.set_clip_rect(body);
+        body_ui.spacing_mut().item_spacing.y = ROW_GAP;
+        match dialog.tab {
+            Tab::Table => edited = table_tab(&mut body_ui, frame, tokens),
+            Tab::Grid => not_built(&mut body_ui, "The grid settings arrive with the hex grid (#15)."),
+            Tab::Light => not_built(&mut body_ui, "The light settings arrive with the darkness slider (#20)."),
+            Tab::Shortcuts => not_built(&mut body_ui, "The key list arrives with the shortcuts story (#36)."),
         }
     });
-    if ui.button("New group").clicked() {
-        let id = scene.next_id();
-        let group = Group::new(id, format!("Group {id}"));
-        crate::scene::push_into(scene, tree.active, Node::Group(group));
-        tree.open.insert(id);
-        tree.active = id;
-        edited = true;
-    }
-    if select.note.is_empty() {
-        ui.label(egui::RichText::new("A new asset joins the marked group.").color(MUTE));
-    } else {
-        ui.label(egui::RichText::new(&select.note).color(ACCENT));
+    if close {
+        dialog.open = false;
     }
     edited
 }
 
+/// The navigation column of a dialog. DESIGN.md 9.
+fn dialog_nav(ui: &egui::Ui, rect: egui::Rect, tab: &mut Tab, tokens: Tokens) {
+    /// The vertical padding of the column, in points. DESIGN.md 9.
+    const NAV_PAD: f32 = 12.0;
+    /// The height of one entry, in points: 15 px text and 10 px above and
+    /// below it, rounded up to a whole point. DESIGN.md 9.
+    const ENTRY: f32 = 40.0;
+    ui.painter()
+        .vline(rect.right(), rect.y_range(), tokens.hairline());
+    let mut top = rect.top() + NAV_PAD;
+    for choice in [Tab::Table, Tab::Grid, Tab::Light, Tab::Shortcuts] {
+        let (label, glyph) = choice.entry();
+        let entry = egui::Rect::from_min_size(
+            egui::pos2(rect.left(), top),
+            egui::vec2(rect.width(), ENTRY),
+        );
+        let response = ui.interact(entry, ui.id().with(label), egui::Sense::click());
+        if response.clicked() {
+            *tab = choice;
+        }
+        let active = *tab == choice;
+        if active {
+            ui.painter().rect_filled(entry, 0, tokens.raised);
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(entry.left_top(), egui::vec2(widget::BAR, ENTRY)),
+                0,
+                tokens.accent,
+            );
+        } else if response.hovered() {
+            ui.painter().rect_filled(entry, 0, tokens.field);
+        }
+        let color = if active { tokens.accent } else { tokens.ink };
+        icon::paint(
+            ui.painter(),
+            glyph,
+            egui::pos2(entry.left() + 16.0 + 10.0, entry.center().y),
+            20.0,
+            color,
+        );
+        ui.painter().text(
+            egui::pos2(entry.left() + 16.0 + 20.0 + 10.0, entry.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            theme::font(theme::BODY, false),
+            color,
+        );
+        top += ENTRY;
+    }
+}
+
+/// One row of a dialog body: the label column, then the controls.
+///
+/// DESIGN.md 9 gives the label column 170 points and stacks the controls
+/// of a row with an 8 point gap.
+fn dialog_row(ui: &mut egui::Ui, label: &str, controls: impl FnOnce(&mut egui::Ui)) {
+    let tokens = theme::of(ui.ctx());
+    ui.horizontal_top(|ui| {
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(LABEL_COLUMN, widget::CONTROL),
+            egui::Sense::hover(),
+        );
+        ui.painter().text(
+            // DESIGN.md 9: the label sits 8 points below the top of the row.
+            egui::pos2(rect.left(), rect.top() + 8.0),
+            egui::Align2::LEFT_TOP,
+            label,
+            theme::font(theme::BODY, false),
+            tokens.ink,
+        );
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+            controls(ui);
+        });
+    });
+}
+
+/// The Table tab of DESIGN.md 9.1. Returns `true` when a value changed.
+fn table_tab(ui: &mut egui::Ui, frame: &mut Frame<'_>, tokens: Tokens) -> bool {
+    let mut edited = false;
+    let displays = frame.displays;
+    let label = |i: usize| {
+        let display = &displays[i];
+        let size = display.size();
+        display_label(display.name().as_deref(), size.width, size.height)
+    };
+    dialog_row(ui, "Display", |ui| {
+        let shown = frame
+            .settings
+            .tv_display
+            .map_or_else(|| "Window".to_owned(), &label);
+        let field = widget::select_field(ui, &shown, widget::SELECT_WIDTH);
+        let popup = egui::Popup::menu(&field)
+            .gap(-1.0)
+            .width(widget::SELECT_WIDTH);
+        popup.show(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let picked = frame.settings.tv_display;
+            if widget::select_row(ui, "Window", picked.is_none()).clicked() {
+                frame.settings.tv_display = None;
+                edited = true;
+            }
+            for i in 0..displays.len() {
+                if widget::select_row(ui, &label(i), picked == Some(i)).clicked() {
+                    frame.settings.tv_display = Some(i);
+                    edited = true;
+                }
+            }
+        });
+    });
+    dialog_row(ui, "Size", |ui| {
+        widget::helper(
+            ui,
+            "The TV diagonal, its pixels per inch and its width arrive with story #6.",
+        );
+    });
+    dialog_row(ui, "Snap to true size", |ui| {
+        let mut percent = frame.settings.snap_percent;
+        if widget::input(ui, &mut percent, "%", 90.0, 0.0..=MAX_SNAP_PERCENT, 0.1).changed() {
+            frame.settings.snap_percent = percent;
+            edited = true;
+        }
+        widget::helper(ui, "either side of 100 %");
+    });
+    dialog_row(ui, "Windows", |ui| {
+        let mut swap = frame.settings.swap_windows;
+        if widget::checkbox(
+            ui,
+            &mut swap,
+            "Swap the two windows instead of moving the DM window",
+        )
+        .clicked()
+        {
+            frame.settings.swap_windows = swap;
+            edited = true;
+        }
+    });
+    dialog_row(ui, "Theme", |ui| {
+        // DESIGN.md 2 gives two themes and no place to pick one, so the
+        // choice sits here, beside the other settings about the screens.
+        let mut mode = frame.settings.theme;
+        let choices = [
+            (theme::Mode::Light, theme::Mode::Light.label()),
+            (theme::Mode::Dark, theme::Mode::Dark.label()),
+        ];
+        if widget::segmented(ui, &mut mode, &choices) {
+            frame.settings.theme = mode;
+            edited = true;
+        }
+        let _ = tokens;
+    });
+    edited
+}
+
+/// One line that says a tab waits for its story. DESIGN.md 9.
+fn not_built(ui: &mut egui::Ui, text: &str) {
+    widget::helper(ui, text);
+}
+
+/// The scenes dialog of DESIGN.md 9.5.
+///
+/// Returns what the DM asked for. The program does the work, so an error
+/// on the disk has one place to go.
+fn scenes_dialog(
+    ui: &egui::Ui,
+    scenes: &mut Scenes,
+    frame: &Frame<'_>,
+    tokens: Tokens,
+) -> Option<SceneCommand> {
+    if !scenes.open {
+        return None;
+    }
+    let mut command = None;
+    let close = dialog_frame(
+        ui.ctx(),
+        "scenes",
+        "Scenes",
+        egui::vec2(760.0, 520.0),
+        tokens,
+        |ui, rest| {
+            let footer = egui::Rect::from_min_size(
+                egui::pos2(rest.left(), rest.bottom() - FOOTER),
+                egui::vec2(rest.width(), FOOTER),
+            );
+            let body = egui::Rect::from_min_max(
+                egui::pos2(rest.left() + 24.0, rest.top() + 24.0),
+                egui::pos2(rest.right() - 24.0, footer.top() - 24.0),
+            );
+            let mut body_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(body)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            body_ui.set_clip_rect(body);
+            body_ui.spacing_mut().item_spacing.y = 14.0;
+            body_ui.horizontal(|ui| {
+                widget::row_label(ui, "Scenes folder");
+                let path = frame.scenes_dir.display().to_string();
+                let (rect, response) = ui.allocate_exact_size(
+                    egui::vec2(PATH_WIDTH, widget::CONTROL),
+                    egui::Sense::hover(),
+                );
+                ui.painter().rect(
+                    rect,
+                    0,
+                    tokens.field,
+                    tokens.hairline(),
+                    egui::StrokeKind::Inside,
+                );
+                row_name(
+                    ui,
+                    rect.shrink2(egui::vec2(10.0, 0.0)),
+                    &path,
+                    false,
+                    tokens,
+                );
+                let _ = response;
+                if widget::button(ui, "Change", None, Height::Full).clicked() {
+                    command = Some(SceneCommand::ScenesFolder);
+                }
+            });
+            if !frame.scene_error.is_empty() {
+                ui.label(
+                    egui::RichText::new(frame.scene_error)
+                        .font(theme::font(theme::HELPER, false))
+                        .color(tokens.accent),
+                );
+            }
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(&mut body_ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for name in (frame.list_scenes)() {
+                        // Two scenes of one name can live in two folders, so
+                        // the row that stands out is the one whose folder is
+                        // open.
+                        let open = frame.scenes_dir.join(&name) == *frame.scene_dir;
+                        scene_row(ui, scenes, open, &name, &mut command, tokens, SCENE_ROW);
+                    }
+                });
+            let mut foot = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(footer.shrink2(egui::vec2(24.0, 0.0)))
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            widget::rule_bottom(
+                ui,
+                egui::Rect::from_min_size(
+                    egui::pos2(footer.left(), footer.top()),
+                    egui::vec2(footer.width(), 0.0),
+                ),
+                tokens,
+            );
+            if widget::button(&mut foot, "New scene", Some(Icon::Plus), Height::Full).clicked() {
+                command = Some(SceneCommand::New);
+            }
+        },
+    );
+    if close {
+        scenes.open = false;
+    }
+    // A half-typed name, or a question no one answered, does not wait for
+    // the next time the dialog opens.
+    if command.is_some() || !scenes.open {
+        scenes.renaming = None;
+        scenes.deleting = None;
+    }
+    command
+}
+
+/// One scene in the dialog: its name, and what the DM can do to it.
+///
+/// DESIGN.md 9.5. Caution: Delete takes the scene folder and every map in
+/// it, so the row asks the question on itself before it goes.
+fn scene_row(
+    ui: &mut egui::Ui,
+    scenes: &mut Scenes,
+    open: bool,
+    name: &str,
+    command: &mut Option<SceneCommand>,
+    tokens: Tokens,
+    height: f32,
+) {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+    widget::rule_bottom(ui, rect, tokens);
+    let mut row = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    if scenes.deleting.as_deref() == Some(name) {
+        row.label(
+            egui::RichText::new(format!("Delete {name} and its maps?"))
+                .font(theme::font(theme::BODY, false))
+                .color(tokens.accent),
+        );
+        if widget::button(&mut row, "Delete", Some(Icon::Trash), Height::Row).clicked() {
+            *command = Some(SceneCommand::Delete(name.to_owned()));
+        }
+        if widget::button(&mut row, "Keep", None, Height::Row).clicked() {
+            scenes.deleting = None;
+        }
+        return;
+    }
+    if let Some((from, typed)) = scenes.renaming.as_mut().filter(|(from, _)| from == name) {
+        let field = row.add(
+            egui::TextEdit::singleline(typed)
+                .desired_width(220.0)
+                .font(theme::font(theme::BODY, false)),
+        );
+        let done = field.lost_focus() && row.input(|i| i.key_pressed(egui::Key::Enter));
+        field.request_focus();
+        if done || widget::button(&mut row, "Save", None, Height::Row).clicked() {
+            *command = Some(SceneCommand::Rename {
+                from: from.clone(),
+                to: typed.clone(),
+            });
+        }
+        if widget::button(&mut row, "Cancel", None, Height::Row).clicked() {
+            scenes.renaming = None;
+        }
+        return;
+    }
+    let color = if open { tokens.accent } else { tokens.ink };
+    icon::paint(
+        row.painter(),
+        Icon::Folder,
+        egui::pos2(rect.left() + widget::SMALL_ICON / 2.0, rect.center().y),
+        widget::SMALL_ICON,
+        color,
+    );
+    row.add_space(widget::SMALL_ICON + 10.0);
+    row.label(
+        egui::RichText::new(name)
+            .font(theme::font(theme::BODY, open))
+            .color(color),
+    );
+    row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |row| {
+        if widget::button(row, "Delete", None, Height::Row).clicked() {
+            scenes.deleting = Some(name.to_owned());
+        }
+        if widget::button(row, "Folder", None, Height::Row).clicked() {
+            *command = Some(SceneCommand::Reveal(name.to_owned()));
+        }
+        if widget::button(row, "Rename", None, Height::Row).clicked() {
+            scenes.renaming = Some((name.to_owned(), name.to_owned()));
+        }
+        if open {
+            row.label(
+                egui::RichText::new("Open now")
+                    .font(theme::font(theme::BODY, false))
+                    .color(tokens.mute),
+            );
+        } else if widget::button(row, "Open", None, Height::Row).clicked() {
+            *command = Some(SceneCommand::Open(name.to_owned()));
+        }
+    });
+}
+
+/// What the tree list holds between frames.
+#[derive(Debug)]
+struct Tree {
+    /// The group a new asset joins.
+    active: NodeId,
+    /// The groups whose children the list shows.
+    open: std::collections::HashSet<NodeId>,
+    /// The node the list opened its groups for.
+    shown: Option<NodeId>,
+    /// How wide the panel stands, in points. DESIGN.md 8.4.
+    width: f32,
+}
+
+impl Default for Tree {
+    fn default() -> Self {
+        Self {
+            active: ROOT_ID,
+            open: std::collections::HashSet::from([ROOT_ID]),
+            shown: None,
+            width: PANEL_WIDTH,
+        }
+    }
+}
 /// The rows under one group. Returns `true` when the DM changed one.
+///
+/// DESIGN.md 8.4 gives every row the same shape: a twist, the glyph that
+/// says what the row is, the name, then the two switches.
 fn tree_rows(
     ui: &mut egui::Ui,
     nodes: &mut [Node],
@@ -909,6 +1648,7 @@ fn tree_rows(
     tree: &mut Tree,
     depth: usize,
     moved: &mut Option<(NodeId, NodeId, bool)>,
+    tokens: Tokens,
 ) -> bool {
     let mut edited = false;
     // The list reads from the top down, and the last node draws over the
@@ -918,69 +1658,260 @@ fn tree_rows(
             Node::Group(group) => {
                 let id = group.id;
                 let open = tree.open.contains(&id);
-                let row = ui.horizontal(|ui| {
-                    indent(ui, depth);
-                    grip(ui, id);
-                    if ui.add(mark(tree.active == id)).clicked() {
-                        tree.active = id;
-                    }
-                    if select.holds(id) {
-                        ui.label(egui::RichText::new("|").color(ACCENT));
-                    }
-                    if ui.add(arrow(open)).clicked() {
-                        flip(&mut tree.open, id);
-                    }
-                    let name = egui::TextEdit::singleline(&mut group.name).desired_width(72.0);
-                    let field = ui.add(name);
-                    // A click on the name takes the group, so the DM can
-                    // reach one whose box hides under an asset.
-                    if field.gained_focus() {
-                        select.take(id, ui.input(|i| i.modifiers.ctrl));
-                    }
-                    edited |= field.changed();
-                    edited |= ui.checkbox(&mut group.shown.dm, "").changed();
-                    edited |= ui.checkbox(&mut group.shown.tv, "").changed();
+                let picked = select.holds(id);
+                let row = tree_row(ui, RowLook {
+                    depth,
+                    picked,
+                    twist: Some(open),
+                    glyph: Icon::Folder,
+                    accent_glyph: tree.active == id,
+                    tokens,
                 });
-                dropped_on(ui, &row.response, id, true, moved);
+                if row.twist.is_some_and(|twist| twist.clicked()) {
+                    flip(&mut tree.open, id);
+                }
+                if row.body.clicked() {
+                    select.take(id, ui.input(|i| i.modifiers.ctrl));
+                    tree.active = id;
+                }
+                if row.body.drag_started() {
+                    egui::DragAndDrop::set_payload(ui.ctx(), id);
+                }
+                if picked {
+                    edited |= rename_field(ui, row.name, &mut group.name, tokens);
+                } else {
+                    row_name(ui, row.name, &group.name, picked, tokens);
+                }
+                edited |= switches(ui, row.switches, &mut group.shown, tokens);
+                dropped_on(ui, &row.whole, id, true, moved, tokens);
                 if open {
-                    edited |= tree_rows(ui, &mut group.children, select, tree, depth + 1, moved);
+                    edited |=
+                        tree_rows(ui, &mut group.children, select, tree, depth + 1, moved, tokens);
                 }
             }
             Node::Asset(asset) => {
-                let picked = select.holds(asset.id);
-                let row = ui.horizontal(|ui| {
-                    indent(ui, depth);
-                    grip(ui, asset.id);
-                    let name = asset.path.to_string_lossy().into_owned();
-                    let text = if picked {
-                        egui::RichText::new(name).color(ACCENT)
-                    } else {
-                        egui::RichText::new(name)
-                    };
-                    if ui
-                        .add(egui::Button::new(text).frame(false).truncate())
-                        .clicked()
-                    {
-                        select.take(asset.id, ui.input(|i| i.modifiers.ctrl));
-                    }
-                    edited |= ui.checkbox(&mut asset.shown.dm, "").changed();
-                    edited |= ui.checkbox(&mut asset.shown.tv, "").changed();
+                let id = asset.id;
+                let picked = select.holds(id);
+                let row = tree_row(ui, RowLook {
+                    depth,
+                    picked,
+                    twist: None,
+                    glyph: Icon::Image,
+                    accent_glyph: false,
+                    tokens,
                 });
-                dropped_on(ui, &row.response, asset.id, false, moved);
+                if row.body.clicked() {
+                    select.take(id, ui.input(|i| i.modifiers.ctrl));
+                }
+                if row.body.drag_started() {
+                    egui::DragAndDrop::set_payload(ui.ctx(), id);
+                }
+                let name = asset.path.to_string_lossy().into_owned();
+                row_name(ui, row.name, &name, picked, tokens);
+                edited |= switches(ui, row.switches, &mut asset.shown, tokens);
+                dropped_on(ui, &row.whole, id, false, moved, tokens);
             }
         }
     }
     edited
 }
 
-/// The handle a DM takes hold of to move a row through the tree.
-///
-/// Only the grip drags. A drag source over the whole row would swallow
-/// every click meant for the switches.
-fn grip(ui: &mut egui::Ui, id: NodeId) {
-    ui.dnd_drag_source(egui::Id::new(("node", id)), id, |ui| {
-        ui.label(egui::RichText::new(GRIP).color(MUTE));
+/// What one row of the objects list looks like. DESIGN.md 8.4.
+#[derive(Debug, Clone, Copy)]
+struct RowLook {
+    /// How deep the row sits under the root.
+    depth: usize,
+    /// Whether the DM holds this row.
+    picked: bool,
+    /// `Some(true)` for an open group, `None` for an asset.
+    twist: Option<bool>,
+    /// The glyph that says what the row is.
+    glyph: Icon,
+    /// Whether the glyph takes the accent, for the group a new asset joins.
+    accent_glyph: bool,
+    /// The colors of the theme.
+    tokens: Tokens,
+}
+
+/// The parts of a drawn row that the caller still has to fill.
+#[derive(Debug)]
+struct Row {
+    /// The whole row, for a drop.
+    whole: egui::Response,
+    /// The glyph and the name, for a click and a drag.
+    body: egui::Response,
+    /// Where the name goes.
+    name: egui::Rect,
+    /// Where the two switches go.
+    switches: egui::Rect,
+    /// The twist of a group.
+    twist: Option<egui::Response>,
+}
+
+/// Paints the frame of one row and hands back the space that is left.
+fn tree_row(ui: &mut egui::Ui, look: RowLook) -> Row {
+    let tokens = look.tokens;
+    let (rect, whole) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), ROW_HEIGHT),
+        egui::Sense::hover(),
+    );
+    if look.picked {
+        ui.painter().rect_filled(rect, 0, tokens.raised);
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(rect.left_top(), egui::vec2(widget::BAR, ROW_HEIGHT)),
+            0,
+            tokens.accent,
+        );
+    }
+    let mut left = rect.left() + widget::BAR + 4.0 + look.depth as f32 * ROW_INDENT;
+    let twist = look.twist.map(|open| {
+        let square = egui::Rect::from_center_size(
+            egui::pos2(left + TWIST / 2.0, rect.center().y),
+            egui::Vec2::splat(TWIST + 4.0),
+        );
+        let response = ui.interact(square, ui.id().with(("twist", left as i32, rect.top() as i32)), egui::Sense::click());
+        icon::paint(
+            ui.painter(),
+            if open { Icon::ChevronDown } else { Icon::ChevronRight },
+            square.center(),
+            TWIST,
+            tokens.mute,
+        );
+        response
     });
+    if look.twist.is_some() {
+        left += TWIST + 6.0;
+    } else {
+        // An asset has no twist, so its glyph lines up with the group's.
+        left += TWIST + 6.0;
+    }
+    // The accent says two things on one glyph: the DM holds this row, or a
+    // new asset joins this group.
+    let glyph_color = if look.accent_glyph || look.picked {
+        tokens.accent
+    } else {
+        tokens.ink
+    };
+    icon::paint(
+        ui.painter(),
+        look.glyph,
+        egui::pos2(left + widget::SMALL_ICON / 2.0, rect.center().y),
+        widget::SMALL_ICON,
+        glyph_color,
+    );
+    left += widget::SMALL_ICON + 8.0;
+    let switches = egui::Rect::from_min_max(
+        egui::pos2(rect.right() - 2.0 * SWITCH, rect.top()),
+        rect.right_bottom(),
+    );
+    let name = egui::Rect::from_min_max(
+        egui::pos2(left, rect.top()),
+        egui::pos2(switches.left() - 6.0, rect.bottom()),
+    );
+    let body = ui.interact(
+        egui::Rect::from_min_max(rect.left_top(), egui::pos2(name.right(), rect.bottom())),
+        ui.id().with(("row", rect.top() as i32, look.depth)),
+        egui::Sense::click_and_drag(),
+    );
+    Row {
+        whole,
+        body,
+        name,
+        switches,
+        twist,
+    }
+}
+
+/// The name of a row, cut with an ellipsis when it runs too long.
+///
+/// DESIGN.md 8.4: the whole name comes up under the pointer.
+fn row_name(ui: &egui::Ui, rect: egui::Rect, name: &str, picked: bool, tokens: Tokens) {
+    let color = if picked { tokens.accent } else { tokens.ink };
+    let font = theme::font(theme::BODY, false);
+    let galley = ui.ctx().fonts_mut(|fonts| {
+        let mut job = egui::text::LayoutJob::simple_singleline(name.to_owned(), font, color);
+        job.wrap.max_width = rect.width();
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        job.wrap.overflow_character = Some('…');
+        fonts.layout_job(job)
+    });
+    let cut = galley.rows.first().is_some_and(|row| row.ends_with_newline)
+        || galley.size().x >= rect.width();
+    ui.painter().galley(
+        egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0),
+        galley,
+        color,
+    );
+    if cut {
+        ui.interact(rect, ui.id().with(("name", rect.top() as i32)), egui::Sense::hover())
+            .on_hover_text(name);
+    }
+}
+
+/// A rename in place, on the row the DM holds. DESIGN.md 10.
+fn rename_field(ui: &mut egui::Ui, rect: egui::Rect, name: &mut String, tokens: Tokens) -> bool {
+    let mut field = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    field.style_mut().visuals.extreme_bg_color = egui::Color32::TRANSPARENT;
+    field.style_mut().visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+    field.style_mut().visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
+    field.style_mut().visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, tokens.accent);
+    let response = field.add(
+        egui::TextEdit::singleline(name)
+            .desired_width(rect.width())
+            .font(theme::font(theme::BODY, false))
+            .text_color(tokens.accent)
+            .margin(egui::Margin::ZERO),
+    );
+    response.changed()
+}
+
+/// The two switches on a row: the DM screen, then the TV. DESIGN.md 8.4.
+fn switches(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    shown: &mut crate::scene::Shown,
+    tokens: Tokens,
+) -> bool {
+    let mut edited = false;
+    for (index, (on, glyph, off_glyph)) in [
+        (&mut shown.dm, Icon::Eye, Icon::EyeOff),
+        (&mut shown.tv, Icon::Monitor, Icon::MonitorOff),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let square = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + index as f32 * SWITCH, rect.top()),
+            egui::vec2(SWITCH, rect.height()),
+        );
+        let response = ui.interact(
+            square,
+            ui.id().with(("switch", index, rect.top() as i32)),
+            egui::Sense::click(),
+        );
+        if response.clicked() {
+            *on = !*on;
+            edited = true;
+        }
+        let (glyph, color) = if *on {
+            (glyph, tokens.ink)
+        } else {
+            (off_glyph, tokens.mute)
+        };
+        icon::paint(
+            ui.painter(),
+            glyph,
+            square.center(),
+            widget::SMALL_ICON,
+            color,
+        );
+    }
+    edited
 }
 
 /// Marks where a row on its way through the tree would land.
@@ -993,28 +1924,16 @@ fn dropped_on(
     id: NodeId,
     is_group: bool,
     moved: &mut Option<(NodeId, NodeId, bool)>,
+    tokens: Tokens,
 ) {
     if row.dnd_hover_payload::<NodeId>().is_some() {
         let rect = row.rect;
         ui.painter()
-            .hline(rect.x_range(), rect.top(), egui::Stroke::new(2.0, ACCENT));
+            .hline(rect.x_range(), rect.top(), egui::Stroke::new(2.0, tokens.accent));
     }
     if let Some(dragged) = row.dnd_release_payload::<NodeId>() {
         *moved = Some((*dragged, id, is_group));
     }
-}
-
-/// The mark that says where a new asset goes.
-fn mark(marked: bool) -> egui::Button<'static> {
-    let glyph = if marked { "*" } else { "\u{00b7}" };
-    let color = if marked { ACCENT } else { MUTE };
-    egui::Button::new(egui::RichText::new(glyph).color(color)).frame(false)
-}
-
-/// The arrow that opens or closes a group.
-fn arrow(open: bool) -> egui::Button<'static> {
-    let glyph = if open { "v" } else { ">" };
-    egui::Button::new(egui::RichText::new(glyph).color(MUTE)).frame(false)
 }
 
 /// Opens a closed group, and closes an open one.
@@ -1024,101 +1943,167 @@ fn flip(open: &mut std::collections::HashSet<NodeId>, id: NodeId) {
     }
 }
 
-/// The step that shows how deep a row sits in the tree.
-fn indent(ui: &mut egui::Ui, depth: usize) {
-    ui.add_space(10.0 * depth as f32);
-}
-
-/// The properties of the TV box. Returns `true` when the zoom changed.
+/// The properties of the TV box. DESIGN.md 8.2.
 ///
 /// The DM drags a corner handle to reach a zoom by eye. This field reaches
 /// an exact one, such as 50 percent for a map twice the size of the table.
-fn box_properties(ui: &mut egui::Ui, tv_box: &mut TvBox) -> bool {
+///
+/// `frame_box` comes back `true` when the DM asked to see the whole box.
+fn box_properties(
+    ui: &mut egui::Ui,
+    tv_box: &mut TvBox,
+    frame_box: &mut bool,
+    tokens: Tokens,
+) -> bool {
+    let _ = tokens;
     let mut percent = tv_box.zoom(TV_WIDTH_INCHES) * 100.0;
     let mut edited = false;
-    ui.separator();
-    ui.heading("TV box");
-    ui.horizontal(|ui| {
-        ui.label("Zoom");
-        let field = egui::DragValue::new(&mut percent)
-            .suffix(" %")
-            .range(MIN_ZOOM_PERCENT..=MAX_ZOOM_PERCENT);
-        if ui.add(field).changed() {
-            tv_box.width = clamp_width(TV_WIDTH_INCHES / (percent / 100.0));
-            edited = true;
-        }
-    });
-    ui.label(egui::RichText::new("100 % is true size on the TV").color(MUTE));
+    widget::row_label(ui, "Zoom");
+    if widget::input(
+        ui,
+        &mut percent,
+        "%",
+        110.0,
+        MIN_ZOOM_PERCENT..=MAX_ZOOM_PERCENT,
+        0.1,
+    )
+    .changed()
+    {
+        tv_box.width = clamp_width(TV_WIDTH_INCHES / (percent / 100.0));
+        edited = true;
+    }
+    widget::helper(ui, "100 % is true size on the TV");
+    widget::row_label(ui, "Move");
+    widget::helper(ui, "The arrow keys move the box one cell");
+    widget::row_label(ui, "Frame");
+    *frame_box = widget::button(ui, "Show the whole box", None, Height::Panel).clicked();
     edited
 }
 
-/// The properties of the selected map. Returns `true` when one changed.
+/// The properties of the selected map. DESIGN.md 8.1.
 ///
 /// The grid size decides the true size of the map: one grid cell is one
 /// inch on the canvas. Only a Foundry or a Universal VTT file carries that
 /// number, so for a plain PNG or JPEG the DM types it or measures it.
-fn map_properties(ui: &mut egui::Ui, select: &mut Select, scene: &mut Scene) -> bool {
+fn map_properties(
+    ui: &mut egui::Ui,
+    select: &mut Select,
+    scene: &mut Scene,
+    tokens: Tokens,
+) -> bool {
     let Some(id) = select.only() else {
         return false;
     };
-    if crate::scene::find(scene, id)
+    let Some(name) = crate::scene::find(scene, id)
         .and_then(Node::asset)
-        .is_none()
-    {
+        .map(|asset| asset.path.to_string_lossy().into_owned())
+    else {
         return false;
-    }
+    };
     let names = crate::scene::group_names(scene);
     let mut edited = false;
-    ui.separator();
-    ui.heading("Map");
-    ui.horizontal(|ui| {
-        ui.label("Group");
-        let holder = crate::scene::parent_of(scene, id).map(|(group, _)| group);
-        let open = holder
-            .and_then(|group| names.iter().find(|(id, ..)| *id == group))
-            .map_or("", |(_, name, _)| name.as_str());
-        egui::ComboBox::from_id_salt("asset_group")
-            .selected_text(open)
-            .show_ui(ui, |ui| {
-                for (group, name, depth) in &names {
-                    let label = format!("{}{name}", "  ".repeat(*depth));
-                    if ui.selectable_label(holder == Some(*group), label).clicked()
-                        && crate::scene::move_into(scene, id, *group)
-                    {
-                        edited = true;
-                    }
+    widget::row_label(ui, "Map");
+    widget::helper(ui, &name);
+    widget::row_label(ui, "Group");
+    let holder = crate::scene::parent_of(scene, id).map(|(group, _)| group);
+    let open = holder
+        .and_then(|group| names.iter().find(|(other, ..)| *other == group))
+        .map_or("", |(_, group_name, _)| group_name.as_str());
+    let field = widget::select_field(ui, open, ui.available_width());
+    egui::Popup::menu(&field)
+        .gap(-1.0)
+        .width(ui.available_width())
+        .show(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for (group, group_name, depth) in &names {
+                let label = format!("{}{group_name}", "  ".repeat(*depth));
+                if widget::select_row(ui, &label, holder == Some(*group)).clicked()
+                    && crate::scene::move_into(scene, id, *group)
+                {
+                    edited = true;
                 }
-            });
-    });
+            }
+        });
     let Some(map) = crate::scene::asset_mut(scene, id) else {
         return edited;
     };
-    ui.horizontal(|ui| {
-        ui.label("Pixels per cell");
-        edited |= ui
-            .add(egui::DragValue::new(&mut map.grid_px).range(MIN_GRID_PX..=MAX_GRID_PX))
-            .changed();
-    });
+    widget::row_label(ui, "Pixels per cell");
+    let mut grid_px = map.grid_px;
+    if widget::input(ui, &mut grid_px, "px", 110.0, MIN_GRID_PX..=MAX_GRID_PX, 1.0).changed() {
+        map.grid_px = grid_px;
+        edited = true;
+    }
     // The size sits next to the grid size because the two multiply: a map
     // with the right grid size draws at true size only at 100 percent.
     let mut percent = map.scale * 100.0;
-    ui.horizontal(|ui| {
-        ui.label("Size");
-        let field = egui::DragValue::new(&mut percent)
-            .suffix(" %")
-            .range(MIN_PERCENT..=MAX_PERCENT);
-        if ui.add(field).changed() {
-            map.scale = percent / 100.0;
-            edited = true;
-        }
-    });
-    if ui.button("Measure a cell").clicked() {
+    widget::row_label(ui, "Size");
+    if widget::input(ui, &mut percent, "%", 110.0, MIN_PERCENT..=MAX_PERCENT, 0.5).changed() {
+        map.scale = percent / 100.0;
+        edited = true;
+    }
+    let mut degrees = map.rotation.to_degrees();
+    widget::row_label(ui, "Turn");
+    if widget::input(ui, &mut degrees, "\u{b0}", 110.0, -360.0..=360.0, 0.5).changed() {
+        map.rotation = degrees.to_radians();
+        edited = true;
+    }
+    if widget::button(ui, "Measure a cell", Some(Icon::Ruler), Height::Panel).clicked() {
         select.measure = Some(Measure::Start);
     }
     if select.measure.is_some() {
-        ui.label("Click two corners of one grid cell.");
+        widget::helper(ui, "Click two corners of one cell. Escape gives it up.");
     }
+    // DESIGN.md 8.1 puts the turn and the flip in the footer of the panel.
+    ui.horizontal(|ui| {
+        if widget::button(ui, "Turn", Some(Icon::RotateCw), Height::Row).clicked() {
+            map.rotation += std::f64::consts::FRAC_PI_2;
+            edited = true;
+        }
+        if widget::button(ui, "Flip", Some(Icon::FlipHorizontal2), Height::Row).clicked() {
+            map.flip_x = !map.flip_x;
+            edited = true;
+        }
+    });
+    widget::helper(ui, "Shift with F flips the map the other way.");
+    let _ = tokens;
     edited
+}
+
+/// The canvas grid of DESIGN.md 5.1, over the maps and under the chrome.
+///
+/// One cell is one inch on the canvas, so the lines follow the camera. The
+/// step of the theme is the step at true size; a zoomed-out camera drops
+/// lines by whole doublings, so the grid never turns into a solid wash.
+fn canvas_grid(painter: &egui::Painter, rect: egui::Rect, view: &View, tokens: Tokens) {
+    /// The narrowest a cell may draw, in points. Under this the grid
+    /// doubles its step, so the lines stay apart at any zoom.
+    const MIN_CELL: f32 = 12.0;
+    let origin = view.to_screen((0.0, 0.0));
+    let one_cell = view.to_screen((1.0, 0.0)).x - origin.x;
+    if !one_cell.is_finite() || one_cell <= 0.0 {
+        return;
+    }
+    let mut cells = 1.0_f32;
+    while one_cell * cells < MIN_CELL {
+        cells *= 2.0;
+    }
+    let step = one_cell * cells;
+    let stroke = egui::Stroke::new(1.0, tokens.grid);
+    let first = |start: f32, at: f32| start + ((at - start) / step).ceil() * step;
+    let mut x = first(origin.x, rect.left() - step);
+    while x <= rect.right() {
+        if x >= rect.left() {
+            painter.vline(x.round(), rect.y_range(), stroke);
+        }
+        x += step;
+    }
+    let mut y = first(origin.y, rect.top() - step);
+    while y <= rect.bottom() {
+        if y >= rect.top() {
+            painter.hline(rect.x_range(), y.round(), stroke);
+        }
+        y += step;
+    }
 }
 
 /// The Select tool on the canvas: pick, move, scale, turn and flip maps.
@@ -1130,8 +2115,10 @@ fn canvas(
     frame: &mut Frame<'_>,
     viewport: (u32, u32),
     zoom_goes_to: &mut Option<bool>,
+    tokens: Tokens,
 ) -> bool {
     let (rect, view, pointer) = canvas_area(ui, frame.camera, viewport, false, zoom_goes_to);
+    canvas_grid(&ui.painter_at(rect), rect, &view, tokens);
     let snap = !ui.input(|i| i.modifiers.ctrl);
 
     // The measure tool takes the canvas for two clicks. Escape gives up.
@@ -1149,7 +2136,7 @@ fn canvas(
         // cell that is being measured.
         if let (Some(Measure::From(first)), Some(pos)) = (select.measure, pointer.pos) {
             ui.painter_at(rect)
-                .line_segment([view.to_screen(first), pos], egui::Stroke::new(2.0, ACCENT));
+                .line_segment([view.to_screen(first), pos], egui::Stroke::new(2.0, tokens.accent));
         }
         return edited;
     }
@@ -1196,22 +2183,22 @@ fn canvas(
     set_cursor(ui, select.drag.is_some(), icon, pointer, &handles);
 
     edited |= keys(ui, select, frame.scene);
-    edited |= selection_popup(ui, select, frame, rect);
+    edited |= selection_popup(ui, select, frame, rect, tokens);
 
     if let (Some(Drag::Band { start_cursor }), Some(pos)) = (select.drag.as_ref(), pointer.pos) {
         let band = egui::Rect::from_two_pos(view.to_screen(*start_cursor), pos);
         let on_canvas = ui.painter_at(rect);
-        on_canvas.rect_filled(band, 0.0, DIM);
+        on_canvas.rect_filled(band, 0.0, tokens.dim);
         on_canvas.rect_stroke(
             band,
             0.0,
-            egui::Stroke::new(1.0, ACCENT),
+            egui::Stroke::new(1.0, tokens.accent),
             egui::StrokeKind::Inside,
         );
     }
-    draw_group_boxes(&ui.painter_at(rect), frame, &select.chosen, &view);
+    draw_group_boxes(&ui.painter_at(rect), frame, &select.chosen, &view, tokens);
     if handles.len() == 5 {
-        draw_selection(&ui.painter_at(rect), &handles);
+        draw_selection(&ui.painter_at(rect), &handles, tokens);
     }
     edited
 }
@@ -1220,7 +2207,13 @@ fn canvas(
 ///
 /// The root has no box: it holds the whole scene, so a box around it says
 /// nothing. The group the DM picked draws its box solid.
-fn draw_group_boxes(painter: &egui::Painter, frame: &Frame<'_>, picked: &[NodeId], view: &View) {
+fn draw_group_boxes(
+    painter: &egui::Painter,
+    frame: &Frame<'_>,
+    picked: &[NodeId],
+    view: &View,
+    tokens: Tokens,
+) {
     for group in crate::scene::groups(frame.scene) {
         if !group.shown.dm {
             continue;
@@ -1230,7 +2223,7 @@ fn draw_group_boxes(painter: &egui::Painter, frame: &Frame<'_>, picked: &[NodeId
         };
         let box_rect =
             egui::Rect::from_two_pos(view.to_screen(min), view.to_screen(max)).expand(GROUP_MARGIN);
-        let stroke = egui::Stroke::new(1.0, ACCENT);
+        let stroke = egui::Stroke::new(1.0, tokens.accent);
         let corners = [
             box_rect.left_top(),
             box_rect.right_top(),
@@ -1255,6 +2248,7 @@ fn selection_popup(
     select: &mut Select,
     frame: &mut Frame<'_>,
     canvas: egui::Rect,
+    tokens: Tokens,
 ) -> bool {
     if !select.popup || select.chosen.is_empty() {
         return false;
@@ -1274,7 +2268,7 @@ fn selection_popup(
                         Some(Node::Asset(asset)) => asset.path.to_string_lossy().into_owned(),
                         None => continue,
                     };
-                    ui.label(egui::RichText::new(name).color(MUTE));
+                    ui.label(egui::RichText::new(name).color(tokens.mute));
                 }
                 ui.horizontal(|ui| {
                     if ui.button("Group").clicked() {
@@ -1347,8 +2341,10 @@ fn table_tool(
     frame: &mut Frame<'_>,
     viewport: (u32, u32),
     zoom_goes_to: &mut Option<bool>,
+    tokens: Tokens,
 ) -> bool {
     let (rect, view, pointer) = canvas_area(ui, frame.camera, viewport, true, zoom_goes_to);
+    canvas_grid(&ui.painter_at(rect), rect, &view, tokens);
     let corners = frame.scene.tv_box.corners(frame.tv_viewport);
     let handles: Vec<egui::Pos2> = corners.iter().map(|&c| view.to_screen(c)).collect();
     let handle_points: Vec<(f64, f64)> = handles
@@ -1420,7 +2416,7 @@ fn table_tool(
     let icon = table.drag.map(|_| egui::CursorIcon::ResizeNwSe);
     set_cursor(ui, table.drag.is_some(), icon, pointer, &handles);
     let zoom = frame.scene.tv_box.zoom(TV_WIDTH_INCHES);
-    draw_tv_box(&ui.painter_at(rect), rect, &handles, zoom);
+    draw_tv_box(&ui.painter_at(rect), rect, &handles, zoom, tokens);
     edited
 }
 
@@ -1488,7 +2484,13 @@ fn arrow_keys(ui: &egui::Ui, tv_box: &mut TvBox) -> bool {
 }
 
 /// The wash outside the box, the outline of the box and its handles.
-fn draw_tv_box(painter: &egui::Painter, canvas: egui::Rect, handles: &[egui::Pos2], zoom: f64) {
+fn draw_tv_box(
+    painter: &egui::Painter,
+    canvas: egui::Rect,
+    handles: &[egui::Pos2],
+    zoom: f64,
+    tokens: Tokens,
+) {
     let inside = egui::Rect::from_two_pos(handles[0], handles[2]);
     // Four rectangles around the box, so the box itself stays clear.
     let (top, bottom) = (inside.top(), inside.bottom());
@@ -1504,18 +2506,23 @@ fn draw_tv_box(painter: &egui::Painter, canvas: egui::Rect, handles: &[egui::Pos
             egui::pos2(canvas.right(), bottom),
         ),
     ] {
-        painter.rect_filled(wash.intersect(canvas), 0.0, DIM);
+        painter.rect_filled(wash.intersect(canvas), 0.0, tokens.dim);
     }
-    let stroke = egui::Stroke::new(2.0, ACCENT);
+    let stroke = egui::Stroke::new(2.0, tokens.accent);
     painter.add(egui::Shape::closed_line(handles.to_vec(), stroke));
+    // DESIGN.md 5.4: a handle stands 4 points outside the box, so the
+    // outline stays whole under it.
+    let middle = handles.iter().fold(egui::Vec2::ZERO, |sum, at| sum + at.to_vec2())
+        / handles.len() as f32;
     for handle in handles {
+        let away = (handle.to_vec2() - middle).normalized() * HANDLE_STANDOFF;
         painter.rect_filled(
-            egui::Rect::from_center_size(*handle, egui::vec2(HANDLE_SIZE, HANDLE_SIZE)),
+            egui::Rect::from_center_size(*handle + away, egui::vec2(HANDLE_SIZE, HANDLE_SIZE)),
             0.0,
-            ACCENT,
+            tokens.accent,
         );
     }
-    // DESIGN.md 5.3: the zoom stands above the top-right corner, and takes
+    // DESIGN.md 5.4: the zoom stands above the top-right corner, and takes
     // the accent while the box is at true size. A box wider than the canvas
     // keeps its label on screen, since the corner it belongs to is not.
     let corner = egui::pos2(handles[1].x, handles[1].y - ZOOM_LABEL_GAP);
@@ -1523,8 +2530,8 @@ fn draw_tv_box(painter: &egui::Painter, canvas: egui::Rect, handles: &[egui::Pos
         canvas.shrink(ZOOM_LABEL_GAP).clamp(corner),
         egui::Align2::RIGHT_BOTTOM,
         format!("{} %", (zoom * 100.0).round()),
-        egui::FontId::proportional(ZOOM_LABEL_SIZE),
-        if at_true_size(zoom) { ACCENT } else { INK },
+        theme::font(ZOOM_LABEL_SIZE, true),
+        if at_true_size(zoom) { tokens.accent } else { tokens.ink },
     );
 }
 
@@ -1854,8 +2861,15 @@ fn zoomed(factor: f32) -> bool {
 }
 
 /// `T` puts the whole TV box on the DM screen. PLAN.md section 5.4.
-fn frame_tv_box(ui: &egui::Ui, frame: &mut Frame<'_>, rect: egui::Rect, viewport: (u32, u32)) {
-    let asked = ui.input(|i| i.key_pressed(egui::Key::T)) && !ui.ctx().egui_wants_keyboard_input();
+fn frame_tv_box(
+    ui: &egui::Ui,
+    frame: &mut Frame<'_>,
+    rect: egui::Rect,
+    viewport: (u32, u32),
+    asked: bool,
+) {
+    let asked = asked
+        || (ui.input(|i| i.key_pressed(egui::Key::T)) && !ui.ctx().egui_wants_keyboard_input());
     if !asked {
         return;
     }
@@ -2002,8 +3016,8 @@ fn snap_step(
 }
 
 /// The outline, the corner handles and the rotation handle of the selection.
-fn draw_selection(painter: &egui::Painter, handles: &[egui::Pos2]) {
-    let stroke = egui::Stroke::new(2.0, ACCENT);
+fn draw_selection(painter: &egui::Painter, handles: &[egui::Pos2], tokens: Tokens) {
+    let stroke = egui::Stroke::new(2.0, tokens.accent);
     painter.add(egui::Shape::closed_line(handles[..4].to_vec(), stroke));
     // The same function that placed the rotation handle, so the line always
     // starts exactly where the handle's offset is measured from.
@@ -2017,18 +3031,19 @@ fn draw_selection(painter: &egui::Painter, handles: &[egui::Pos2]) {
         painter.rect_filled(
             egui::Rect::from_center_size(*handle, egui::vec2(HANDLE_SIZE, HANDLE_SIZE)),
             0.0,
-            ACCENT,
+            tokens.accent,
         );
     }
-    painter.circle_filled(handles[4], HANDLE_SIZE / 2.0, ACCENT);
+    painter.circle_filled(handles[4], HANDLE_SIZE / 2.0, tokens.accent);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{Settings, theme};
 
     fn settings() -> Settings {
         Settings {
+            theme: theme::Mode::default(),
             tv_display: Some(1),
             swap_windows: false,
             snap_percent: 8.0,

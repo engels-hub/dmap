@@ -48,6 +48,8 @@ pub struct Config {
     pub swap_windows: bool,
     /// How close to true size the TV box must come before it snaps.
     pub snap_percent: f64,
+    /// The theme the DM window draws. DESIGN.md 2.
+    pub theme: crate::theme::Mode,
 }
 
 impl Default for Config {
@@ -58,6 +60,7 @@ impl Default for Config {
             tv_display: TvPlacement::default(),
             swap_windows: false,
             snap_percent: DEFAULT_SNAP_PERCENT,
+            theme: crate::theme::Mode::default(),
         }
     }
 }
@@ -271,6 +274,7 @@ mod tests {
             tv_display: TvPlacement::Display("HDMI-1".to_owned()),
             swap_windows: true,
             snap_percent: 12.0,
+            theme: crate::theme::Mode::Dark,
         };
         assert_eq!(Config::from_json(&config.to_json()).unwrap(), config);
     }

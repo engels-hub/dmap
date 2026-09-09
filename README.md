@@ -56,7 +56,9 @@ To move your scenes somewhere else, such as a campaign folder you already keep, 
 
 The program copies an image you add into the scene folder. The same image twice keeps one copy. A different image of the same name gets a number.
 
-Pick the TV display in the Settings panel. The program keeps the choice in the config file.
+Pick the TV display in the Settings dialog. The program keeps the choice in the config file.
+
+The window has a light theme and a dark theme. The light one is the default. Pick the other one under **Theme** in the Settings dialog, and the program keeps that choice too.
 
 ## Controls
 
@@ -72,7 +74,7 @@ The canvas takes its controls from Figma.
 
 The DM view is the game master's own. The TV never moves with it.
 
-Pick a tool in the rail on the left.
+Pick a view in the toolbar at the bottom of the window.
 
 **Select** works on the assets and the groups on the canvas.
 
@@ -108,20 +110,21 @@ Add a map with the Add map button, or drop an image file on the DM window.
 
 ### Groups and assets
 
-A scene is a tree. The root group holds everything else, and under it sit your assets and the groups you make. The **Scene** list in the settings panel shows that tree, with the top of the pile first.
+A scene is a tree. The root group holds everything else, and under it sit your assets and the groups you make. The **Objects** panel on the left shows that tree, with the top of the pile first.
 
 | In a row | What it does |
 |---|---|
-| `::` | Drag the row. Drop it on a group to put it in that group, or on an asset to take that asset's place |
-| Mark | The group a new asset joins. Click it to move the mark |
-| `>` or `v` | Open or close a group. A group starts closed |
-| Name | Type a name for a group. The root keeps its own |
-| Me | Draw this node on the DM screen |
-| TV | Draw this node on the TV |
+| The name | Click it to take the row. Drag it onto a group to put it in that group, or onto an asset to take that asset's place |
+| The arrow | Open or close a group. A group starts closed |
+| The folder | Accent marks the group a new asset joins. A click on a group row moves the mark |
+| The eye | Draw this node on the DM screen |
+| The screen | Draw this node on the TV |
+
+A group you hold shows its name in a field. Type there to rename it.
 
 The two switches work on their own, and a group rules the nodes under it. A group with **TV** off keeps every asset in it off the TV, whatever the asset says. Use it for the room the players have not found.
 
-To move something you already placed, drag its row by the `::` grip onto a group. The **Group** field in the Map section does the same without a drag.
+To move something you already placed, drag its row onto a group. The **Group** field in the Map panel does the same without a drag.
 
 A group draws over the groups under it, and its assets draw inside its place. Every group but the root shows a dashed box around what it holds. Click the box, or the group's name in the list, to take the group.
 
@@ -131,7 +134,7 @@ A group you hold takes handles of its own. Drag the box to move it, a corner to 
 
 To take several things, drag over bare canvas. A list says what you took, and **Group** puts them in a new group. The new group lands in the lowest group that held them all. An uncle and a nephew meet in the group above both.
 
-**Scenes** in the rail opens the list of your scenes. Every row is a folder.
+**Scenes** in the toolbar opens the list of your scenes. Every row is a folder.
 
 Caution: Delete takes the scene folder and every map in it. Nothing brings them back. The list asks you once before it does this.
 
