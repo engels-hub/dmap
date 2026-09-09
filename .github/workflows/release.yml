@@ -1,0 +1,106 @@
+name: Release
+
+# A tag that starts with `v` cuts a release. The tag is the version, so
+# `v1.0.0` builds and publishes 1.0.0. Nothing here runs on a push to a
+# branch: CI already gates those.
+on:
+  push:
+    tags: ["v*"]
+  # A run by hand, for a tag that was pushed before this file existed.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to build, such as v1.0.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: x86_64-linux
+          - os: windows-latest
+            name: x86_64-windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the tag against the version in Cargo.toml
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$tag" != "v$version" ]; then
+            echo "the tag is $tag and Cargo.toml says $version" >&2
+            exit 1
+          fi
+
+      - run: cargo build --release --workspace
+
+      # The program carries GPL code, a font under the SIL license and a
+      # glyph set under ISC. Every one of those asks that its license
+      # travel with the binary, so the archive holds all three.
+      - name: Gather the release
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          out="dmap-$tag-${{ matrix.name }}"
+          mkdir -p "dist/$out"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/release/dmap.exe "dist/$out/"
+          else
+            cp target/release/dmap "dist/$out/"
+          fi
+          cp README.md LICENSE "dist/$out/"
+          cp crates/app/assets/fonts/LICENSE-OFL.txt "dist/$out/LICENSE-font-OFL.txt"
+          cp crates/app/assets/icons/LICENSE-ISC.txt "dist/$out/LICENSE-icons-ISC.txt"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "$out.zip" "$out" > /dev/null
+          else
+            tar czf "$out.tar.gz" "$out"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          # A release that is already there takes the files it is missing,
+          # so a run by hand can fill in a build that failed the first time.
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* \
+              --title "$tag" \
+              --generate-notes
+          fi
