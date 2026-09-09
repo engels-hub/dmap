@@ -114,6 +114,8 @@ Add a map with the Add map button, or drop an image file on the DM window.
 
 A scene is a tree. The root group holds everything else, and under it sit your assets and the groups you make. The **Objects** panel on the left shows that tree, with the top of the pile first.
 
+The list shows one group and what is in it, never the whole tree. Click a group and the list goes into it. The path over the list names where you are, such as `Scene > Group 6`, and a click on a part of the path takes you back up.
+
 | In a row | What it does |
 |---|---|
 | The name | Click it to take the row. Drag it onto a group to put it in that group, or onto an asset to take that asset's place |

@@ -148,8 +148,9 @@ A panel, a menu and a message strip share one recipe: a `surface` box, a 1 px `i
 
 ### 7.1 Panel
 
-- Width 232 px to 268 px. The list of objects goes to 480 px. See 8.4.
+- Width 232 px to 268 px. The list of objects goes to 480 px. See 8.5.
 - Header 32 px: the title 14 px bold at 10 px from the left, a close icon in a 24 px square on the right, 1 px `rule` bottom border.
+- The title names what the panel is about: the file of a map, the name of a group, or the name of the view. A title too long for the header ends in an ellipsis, and the whole title comes up under the pointer.
 - Body: padding 10 px, rows with a 10 px gap.
 - A panel is narrower than a dialog. So the label of a row sits over its control, not beside it, and the control keeps the full width of the body. A label column of its own leaves too little room for a segmented control or a slider.
 - Footer: 1 px `rule` top border, padding 10 px, buttons 26 px high with an 8 px gap. A row of buttons that does not fit takes a second line.
@@ -175,17 +176,23 @@ A panel, a menu and a message strip share one recipe: a `surface` box, a 1 px `i
 
 ### 8.1 Map panel, in the Select view
 
-Rows: Map with the file name in `mute`; Pixels per cell with an input and the Measure a cell button; Size in percent; Turn in degrees. A helper line under Measure reads "Click two corners of one cell. Escape gives it up." The footer holds Turn, Flip and Delete.
+The title of the panel is the file name. Rows: Group with a select that moves the map to another group; Pixels per cell with an input and the Measure a cell button; Size in percent; Turn in degrees. A helper line under Measure reads "Click two corners of one cell. Escape gives it up." The footer holds Turn, Flip and Delete.
 
-### 8.2 TV box panel, in the Table view
+### 8.2 Group panel, in the Select view
+
+A group carries no size and no turn of its own, because everything in it keeps its own place. So the panel names it and says which screens it reaches.
+
+The title of the panel is the name of the group. Rows: Name with a text input; Show on with a checkbox for the DM screen and a checkbox for the TV, and the helper "A group that is off for the TV takes everything in it off the TV"; Holds, with a line that counts the rows in the group and the maps under it.
+
+### 8.3 TV box panel, in the Table view
 
 Rows: Zoom in percent, with the helper "100 % is true size on the TV"; Move, with the helper "The arrow keys move the box one cell"; Frame, with a button that shows the whole box.
 
-### 8.3 Draw panel, in the Draw view
+### 8.4 Draw panel, in the Draw view
 
 A row of five 28 px squares holds the pen, the line, the rectangle, the ellipse and the eraser. The squares share a 1 px `rule` border and overlap by 1 px. The chosen square takes the segmented control treatment. Rows below: Color as a swatch, Width as a slider.
 
-### 8.4 Objects list
+### 8.5 Objects list
 
 The list shows the scene as a tree of groups and assets. It docks on the left.
 

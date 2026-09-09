@@ -312,6 +312,35 @@ fn collect_for_dm<'a>(nodes: &'a [Node], on_tv: bool, drawn: &mut Vec<(&'a Asset
     }
 }
 
+/// The groups from the root down to `group`, with the name of each.
+///
+/// The last pair is `group` itself. The list is empty when the scene holds
+/// no group of that id, so a caller can fall back to the root. DESIGN.md
+/// 8.4 draws this as the path line over the objects list.
+pub fn path_to(scene: &Scene, group: NodeId) -> Vec<(NodeId, String)> {
+    if group == ROOT_ID {
+        return vec![(ROOT_ID, scene.root.name.clone())];
+    }
+    if !has_group(scene, group) {
+        return Vec::new();
+    }
+    let mut walk = ancestors(scene, group);
+    walk.reverse();
+    walk.push(group);
+    walk.into_iter()
+        .map(|id| {
+            let name = if id == ROOT_ID {
+                scene.root.name.clone()
+            } else {
+                find(scene, id)
+                    .and_then(Node::group)
+                    .map_or_else(String::new, |held| held.name.clone())
+            };
+            (id, name)
+        })
+        .collect()
+}
+
 /// The group that holds this node, and where in it the node sits.
 pub fn parent_of(scene: &Scene, id: NodeId) -> Option<(NodeId, usize)> {
     parent_in(&scene.root, id)
@@ -1000,7 +1029,7 @@ mod tests {
     use super::{
         Asset, Audience, Group, Node, NodeId, ROOT_ID, Scene, assets, assets_of, copy_into_scene,
         dm_draw_order, draw_order, find, free_name, group_selection, move_above, normalize,
-        parent_of, path_of,
+        parent_of, path_of, path_to,
     };
 
     /// A folder of its own for one test, under the system's temp folder.
@@ -1039,6 +1068,32 @@ mod tests {
             .into_iter()
             .map(|(asset, on_tv)| (asset.path.to_string_lossy().into_owned(), on_tv))
             .collect()
+    }
+
+    #[test]
+    fn the_path_to_the_root_is_the_root_alone() {
+        let scene = scene_with_a_group();
+        let path = path_to(&scene, ROOT_ID);
+        assert_eq!(path.len(), 1);
+        assert_eq!(path[0].0, ROOT_ID);
+    }
+
+    #[test]
+    fn the_path_to_a_group_starts_at_the_root_and_ends_at_the_group() {
+        let scene = scene_with_a_group();
+        let names: Vec<String> = path_to(&scene, 2).into_iter().map(|(_, n)| n).collect();
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[1], "Notes");
+        assert_eq!(path_to(&scene, 2)[0].0, ROOT_ID);
+    }
+
+    #[test]
+    fn a_path_to_a_group_that_went_is_empty() {
+        // The panel falls back to the root when its group is gone.
+        let scene = scene_with_a_group();
+        assert!(path_to(&scene, 99).is_empty());
+        // An asset is not a group, so it names no path either.
+        assert!(path_to(&scene, 3).is_empty());
     }
 
     #[test]

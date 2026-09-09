@@ -46,10 +46,10 @@ const TOOL_ICON: f32 = 18.0;
 /// The gap between a toolbar glyph and its label, in points. DESIGN.md 5.2.
 const TOOL_GAP: f32 = 3.0;
 
-/// The width a panel opens at, in points. DESIGN.md 8.4.
+/// The width a panel opens at, in points. DESIGN.md 8.5.
 const PANEL_WIDTH: f32 = 240.0;
 
-/// The widest a panel goes when the DM drags its edge. DESIGN.md 8.4.
+/// The widest a panel goes when the DM drags its edge. DESIGN.md 8.5.
 const PANEL_MAX: f32 = 480.0;
 
 /// The height of a panel header, in points. DESIGN.md 7.1.
@@ -58,17 +58,26 @@ const PANEL_HEADER: f32 = 32.0;
 /// The padding inside the body of a panel, in points. DESIGN.md 7.1.
 const PANEL_PAD: f32 = 10.0;
 
-/// The height of one row of the objects list, in points. DESIGN.md 8.4.
+/// The height of one row of the objects list, in points. DESIGN.md 8.5.
 const ROW_HEIGHT: f32 = 26.0;
 
-/// How far a child row stands from its parent, in points. DESIGN.md 8.4.
+/// How far a child row stands from its parent, in points. DESIGN.md 8.5.
 const ROW_INDENT: f32 = 14.0;
 
 /// The size of the glyph that opens a group, in points. DESIGN.md 4.
 const TWIST: f32 = 14.0;
 
-/// The square that holds a switch on a list row, in points. DESIGN.md 8.4.
+/// The square that holds a switch on a list row, in points. DESIGN.md 8.5.
 const SWITCH: f32 = 22.0;
+
+/// The height of the path line over the objects list. DESIGN.md 8.5.
+const PATH_HEIGHT: f32 = 24.0;
+
+/// How many parts a path shows before it drops its middle. DESIGN.md 8.5.
+const PATH_PARTS: usize = 4;
+
+/// The size of the glyph between two parts of a path. DESIGN.md 4.
+const PATH_GLYPH: f32 = 13.0;
 
 /// The size of a dialog, in points. DESIGN.md 9.
 ///
@@ -849,13 +858,38 @@ fn panel(
             let shadow = ui.painter().add(egui::Shape::Noop);
             let box_shape = ui.painter().add(egui::Shape::Noop);
             let header = egui::Rect::from_min_size(left_top, egui::vec2(width, PANEL_HEADER));
-            ui.painter().text(
-                egui::pos2(header.left() + PANEL_PAD, header.center().y),
-                egui::Align2::LEFT_CENTER,
-                title,
-                theme::font(theme::PANEL_TITLE, true),
+            // A file name is often longer than the panel. It ends in an
+            // ellipsis, and the whole name comes up under the pointer.
+            let room = width - 2.0 * PANEL_PAD;
+            let galley = ui.ctx().fonts_mut(|fonts| {
+                let mut job = egui::text::LayoutJob::simple_singleline(
+                    title.to_owned(),
+                    theme::font(theme::PANEL_TITLE, true),
+                    tokens.ink,
+                );
+                job.wrap.max_width = room;
+                job.wrap.max_rows = 1;
+                job.wrap.break_anywhere = true;
+                job.wrap.overflow_character = Some('\u{2026}');
+                fonts.layout_job(job)
+            });
+            let cut = galley.size().x >= room;
+            // The clip is the guarantee. `epaint` hangs the ellipsis past
+            // the width it was given, and a title that reached over the
+            // border would sit on the canvas.
+            let inside = egui::Rect::from_min_max(
+                egui::pos2(header.left() + PANEL_PAD, header.top()),
+                egui::pos2(header.right() - PANEL_PAD, header.bottom()),
+            );
+            ui.painter().with_clip_rect(inside).galley(
+                egui::pos2(inside.left(), header.center().y - galley.size().y / 2.0),
+                galley,
                 tokens.ink,
             );
+            if cut {
+                ui.interact(header, ui.id().with("title"), egui::Sense::hover())
+                    .on_hover_text(title);
+            }
             widget::rule_bottom(ui, header, tokens);
             let bottom = height.map_or(f32::INFINITY, |tall| left_top.y + tall - PANEL_PAD);
             let inner = egui::Rect::from_min_max(
@@ -906,7 +940,7 @@ fn panel(
     rect
 }
 
-/// The objects list of DESIGN.md 8.4, docked on the left.
+/// The objects list of DESIGN.md 8.5, docked on the left.
 ///
 /// Returns `true` when the DM changed the scene.
 fn objects_panel(
@@ -921,12 +955,23 @@ fn objects_panel(
     if !crate::scene::has_group(scene, tree.active) {
         tree.active = ROOT_ID;
     }
+    // The group the list shows can go the same way, and then the list
+    // falls back to the root.
+    if !crate::scene::has_group(scene, tree.scope) {
+        tree.scope = ROOT_ID;
+    }
     // A node the DM picked on the canvas opens the groups above it, so the
-    // list shows the row without a hunt.
+    // list shows the row without a hunt. A node outside the group the list
+    // shows takes the list back to the root, or the row would have nowhere
+    // to appear.
     if tree.shown != select.only() {
         tree.shown = select.only();
         if let Some(id) = select.only() {
-            tree.open.extend(crate::scene::ancestors(scene, id));
+            let above = crate::scene::ancestors(scene, id);
+            if tree.scope != ROOT_ID && !above.contains(&tree.scope) && id != tree.scope {
+                tree.scope = ROOT_ID;
+            }
+            tree.open.extend(above);
         }
     }
     let screen = ctx.content_rect();
@@ -948,17 +993,20 @@ fn objects_panel(
         },
         tokens,
         |ui| {
+        // DESIGN.md 8.5: the path names the group the list shows, and each
+        // part of it takes a click and goes back up.
+        let path = crate::scene::path_to(scene, tree.scope);
+        if let Some(up) = path_line(ui, &path, tokens) {
+            tree.scope = up;
+            tree.open.insert(up);
+        }
         let footer = 2.0 * Height::Panel.points() + 3.0 * PANEL_PAD;
         let list = ui.available_height() - footer;
         egui::ScrollArea::vertical()
             .max_height(list.max(ROW_HEIGHT))
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                edited |= root_row(ui, scene, tree, tokens);
-                if tree.open.contains(&ROOT_ID) {
-                    edited |= tree_rows(ui, &mut scene.root.children, select, tree, 1, &mut moved, tokens);
-                }
+                edited |= scoped_rows(ui, scene, select, tree, &mut moved, tokens);
             });
         // DESIGN.md 7.1: a rule runs the whole width above the footer, so
         // it reaches past the padding of the body.
@@ -1016,7 +1064,157 @@ fn objects_panel(
     edited
 }
 
-/// The grip on the right edge that widens the objects list. DESIGN.md 8.4.
+/// The group the list shows, and every row under it. DESIGN.md 8.5.
+///
+/// The group stands at the top, so the DM sees where the list is before
+/// they read a single child.
+fn scoped_rows(
+    ui: &mut egui::Ui,
+    scene: &mut Scene,
+    select: &mut Select,
+    tree: &mut Tree,
+    moved: &mut Option<(NodeId, NodeId, bool)>,
+    tokens: Tokens,
+) -> bool {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let scope = tree.scope;
+    let open = tree.open.contains(&scope);
+    let picked = scope != ROOT_ID && select.holds(scope);
+    let Some(group) = crate::scene::group_mut(scene, scope) else {
+        return false;
+    };
+    let mut edited = false;
+    let row = tree_row(ui, RowLook {
+        depth: 0,
+        picked,
+        twist: Some(open),
+        glyph: Icon::Folder,
+        accent_glyph: tree.active == scope,
+        tokens,
+    });
+    row_name(ui, row.name, &group.name, picked, tokens);
+    // DESIGN.md 8.5: the root is always visible and carries no switches. A
+    // group the DM went into carries its own.
+    if scope != ROOT_ID {
+        edited |= switches(ui, row.switches, &mut group.shown, tokens);
+    }
+    if row.twist.is_some_and(|twist| twist.clicked()) {
+        flip(&mut tree.open, scope);
+    }
+    if row.body.clicked() {
+        tree.active = scope;
+        if scope != ROOT_ID {
+            select.take(scope, ui.input(|i| i.modifiers.ctrl));
+        }
+    }
+    if open {
+        edited |= tree_rows(ui, &mut group.children, select, tree, 1, moved, tokens);
+    }
+    edited
+}
+
+/// The path over the objects list. DESIGN.md 8.5.
+///
+/// Each part names a group on the way down to the one the list shows, and
+/// a click on a part takes the list back up to it. The last part is the
+/// group the list shows, so it takes no click. A path of more than four
+/// parts drops its middle to an ellipsis.
+///
+/// Returns the group the DM asked to go back to.
+fn path_line(ui: &mut egui::Ui, path: &[(NodeId, String)], tokens: Tokens) -> Option<NodeId> {
+    // The root shows itself at the top of the list already, so a path of
+    // one part would say the same thing twice.
+    if path.len() < 2 {
+        return None;
+    }
+    let font = theme::font(theme::SMALL, false);
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), PATH_HEIGHT),
+        egui::Sense::hover(),
+    );
+    let mut asked = None;
+    let mut left = rect.left();
+    for (index, part) in shortened(path).into_iter().enumerate() {
+        if index > 0 {
+            icon::paint(
+                ui.painter(),
+                Icon::ChevronRight,
+                egui::pos2(left + PATH_GLYPH / 2.0, rect.center().y),
+                PATH_GLYPH,
+                tokens.mute,
+            );
+            left += PATH_GLYPH + 2.0;
+        }
+        let Some((id, name)) = part else {
+            ui.painter().text(
+                egui::pos2(left, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                "\u{2026}",
+                font.clone(),
+                tokens.mute,
+            );
+            left += 12.0;
+            continue;
+        };
+        let width = ui.ctx().fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap((*name).to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
+                .size()
+                .x
+        });
+        let part_rect =
+            egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(width, PATH_HEIGHT));
+        // The last part is where the list already stands, so it is a label.
+        let last = index + 1 == shortened(path).len();
+        let color = if last {
+            tokens.ink
+        } else {
+            let response = ui.interact(part_rect, ui.id().with(("path", id)), egui::Sense::click());
+            if response.clicked() {
+                asked = Some(id);
+            }
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                ui.painter().hline(
+                    part_rect.x_range(),
+                    part_rect.bottom() - 5.0,
+                    egui::Stroke::new(1.0, tokens.accent),
+                );
+                tokens.accent
+            } else {
+                tokens.mute
+            }
+        };
+        ui.painter().text(
+            egui::pos2(left, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            name,
+            font.clone(),
+            color,
+        );
+        left += width;
+    }
+    asked
+}
+
+/// The parts a path shows. `None` stands for the middle it dropped.
+///
+/// DESIGN.md 8.5: a path of more than four parts keeps its first part and
+/// its last two, so the DM still sees where the list stands and how to
+/// reach the root.
+fn shortened(path: &[(NodeId, String)]) -> Vec<Option<(NodeId, &str)>> {
+    fn named(part: &(NodeId, String)) -> (NodeId, &str) {
+        (part.0, part.1.as_str())
+    }
+    if path.len() <= PATH_PARTS {
+        return path.iter().map(|part| Some(named(part))).collect();
+    }
+    let mut parts = vec![path.first().map(named), None];
+    parts.extend(path[path.len() - 2..].iter().map(|part| Some(named(part))));
+    parts
+}
+
+/// The grip on the right edge that widens the objects list. DESIGN.md 8.5.
 ///
 /// Returns `false`: the width is a view setting and never a scene change.
 fn drag_panel_edge(ctx: &egui::Context, rect: egui::Rect, width: &mut f32, tokens: Tokens) -> bool {
@@ -1046,49 +1244,10 @@ fn drag_panel_edge(ctx: &egui::Context, rect: egui::Rect, width: &mut f32, token
     false
 }
 
-/// The row of the root group, which carries no switch. DESIGN.md 8.4.
-fn root_row(ui: &mut egui::Ui, scene: &mut Scene, tree: &mut Tree, tokens: Tokens) -> bool {
-    let open = tree.open.contains(&ROOT_ID);
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), egui::Sense::click());
-    if tree.active == ROOT_ID {
-        ui.painter().rect_filled(
-            egui::Rect::from_min_size(rect.left_top(), egui::vec2(widget::BAR, ROW_HEIGHT)),
-            0,
-            tokens.accent,
-        );
-    }
-    if response.clicked() {
-        flip(&mut tree.open, ROOT_ID);
-    }
-    let mut left = rect.left() + widget::BAR + 3.0;
-    icon::paint(
-        ui.painter(),
-        if open { Icon::ChevronDown } else { Icon::ChevronRight },
-        egui::pos2(left + TWIST / 2.0, rect.center().y),
-        TWIST,
-        tokens.mute,
-    );
-    left += TWIST + 5.0;
-    icon::paint(
-        ui.painter(),
-        Icon::Folder,
-        egui::pos2(left + widget::SMALL_ICON / 2.0, rect.center().y),
-        widget::SMALL_ICON,
-        tokens.ink,
-    );
-    left += widget::SMALL_ICON + 6.0;
-    ui.painter().text(
-        egui::pos2(left, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        &scene.root.name,
-        theme::font(theme::BODY, false),
-        tokens.ink,
-    );
-    false
-}
-
-/// The properties of the view or of the selection. DESIGN.md 8.1 and 8.2.
+/// The properties of the view or of the selection. DESIGN.md 8.1 to 8.3.
+///
+/// The title names what the DM holds: the file of a map, or the name of a
+/// group. A panel headed "Map" over a group said nothing about it.
 fn properties_panel(
     ctx: &egui::Context,
     frame: &mut Frame<'_>,
@@ -1098,35 +1257,99 @@ fn properties_panel(
     tokens: Tokens,
 ) -> bool {
     let screen = ctx.content_rect();
-    let title = match tool {
-        Tool::Select => "Map",
-        Tool::Table => "TV box",
+    let held = match tool {
+        Tool::Table => Held::TvBox,
+        Tool::Select => match select.only().map(|id| (id, crate::scene::find(frame.scene, id))) {
+            Some((id, Some(Node::Asset(asset)))) => {
+                Held::Map(id, asset.path.to_string_lossy().into_owned())
+            }
+            Some((id, Some(Node::Group(group)))) if id != ROOT_ID => {
+                Held::Group(id, group.name.clone())
+            }
+            _ => return false,
+        },
     };
-    if tool == Tool::Select && select.only().is_none() {
-        return false;
-    }
     let left_top = egui::pos2(screen.right() - MARGIN - PANEL_WIDTH, MARGIN);
     let mut edited = false;
     panel(
         ctx,
         "properties",
-        title,
+        held.title(),
         Place {
             left_top,
             width: PANEL_WIDTH,
             height: None,
         },
         tokens,
-        |ui| match tool {
-        Tool::Select => edited = map_properties(ui, select, frame.scene, tokens),
-        Tool::Table => {
-            // Another tool does not run the measure, so the panel must not
-            // leave a measure armed behind it.
-            select.measure = None;
-            edited = box_properties(ui, &mut frame.scene.tv_box, frame_box, tokens);
-        }
+        |ui| match &held {
+            Held::TvBox => {
+                // Another tool does not run the measure, so the panel must
+                // not leave a measure armed behind it.
+                select.measure = None;
+                edited = box_properties(ui, &mut frame.scene.tv_box, frame_box, tokens);
+            }
+            Held::Map(id, _) => edited = map_properties(ui, *id, select, frame.scene, tokens),
+            Held::Group(id, _) => edited = group_properties(ui, *id, frame.scene, tokens),
         },
     );
+    edited
+}
+
+/// What the properties panel is about.
+#[derive(Debug, Clone)]
+enum Held {
+    /// The box that decides what the TV shows. DESIGN.md 8.3.
+    TvBox,
+    /// One map, by id, with the name of its file. DESIGN.md 8.1.
+    Map(NodeId, String),
+    /// One group, by id, with its name.
+    Group(NodeId, String),
+}
+
+impl Held {
+    /// The title the panel takes.
+    fn title(&self) -> &str {
+        match self {
+            Self::TvBox => "TV box",
+            Self::Map(_, name) | Self::Group(_, name) => name,
+        }
+    }
+}
+
+/// The properties of a group. DESIGN.md 8.2.
+///
+/// Returns `true` when the DM changed one.
+///
+/// A group carries no size and no turn of its own. What it holds keeps
+/// its own place, so the panel names the group, says which screens it
+/// reaches, and counts what is inside it.
+fn group_properties(ui: &mut egui::Ui, id: NodeId, scene: &mut Scene, tokens: Tokens) -> bool {
+    let maps = crate::scene::assets_of(scene, id).len();
+    let holds = crate::scene::children_of(scene, id).map_or(0, <[Node]>::len);
+    let Some(group) = crate::scene::group_mut(scene, id) else {
+        return false;
+    };
+    let mut edited = false;
+    widget::row_label(ui, "Name");
+    let width = ui.available_width();
+    let field = ui.add(
+        egui::TextEdit::singleline(&mut group.name)
+            .desired_width(width)
+            .font(theme::font(theme::BODY, false))
+            .text_color(tokens.ink),
+    );
+    edited |= field.changed();
+    widget::row_label(ui, "Show on");
+    edited |= widget::checkbox(ui, &mut group.shown.dm, "The DM screen").clicked();
+    edited |= widget::checkbox(ui, &mut group.shown.tv, "The TV").clicked();
+    widget::helper(
+        ui,
+        "A group that is off for the TV takes everything in it off the TV.",
+    );
+    widget::row_label(ui, "Holds");
+    let rows = if holds == 1 { "row" } else { "rows" };
+    let each = if maps == 1 { "map" } else { "maps" };
+    widget::helper(ui, &format!("{holds} {rows}, and {maps} {each} in all."));
     edited
 }
 
@@ -1690,8 +1913,13 @@ struct Tree {
     open: std::collections::HashSet<NodeId>,
     /// The node the list opened its groups for.
     shown: Option<NodeId>,
-    /// How wide the panel stands, in points. DESIGN.md 8.4.
+    /// How wide the panel stands, in points. DESIGN.md 8.5.
     width: f32,
+    /// The group the list shows. Its children are the rows under it.
+    ///
+    /// DESIGN.md 8.5: the list never shows the whole tree from the root,
+    /// so the indent of a deep scene has no room to run away.
+    scope: NodeId,
 }
 
 impl Default for Tree {
@@ -1701,12 +1929,13 @@ impl Default for Tree {
             open: std::collections::HashSet::from([ROOT_ID]),
             shown: None,
             width: PANEL_WIDTH,
+            scope: ROOT_ID,
         }
     }
 }
 /// The rows under one group. Returns `true` when the DM changed one.
 ///
-/// DESIGN.md 8.4 gives every row the same shape: a twist, the glyph that
+/// DESIGN.md 8.5 gives every row the same shape: a twist, the glyph that
 /// says what the row is, the name, then the two switches.
 fn tree_rows(
     ui: &mut egui::Ui,
@@ -1738,17 +1967,21 @@ fn tree_rows(
                     flip(&mut tree.open, id);
                 }
                 if row.body.clicked() {
-                    select.take(id, ui.input(|i| i.modifiers.ctrl));
+                    let add = ui.input(|i| i.modifiers.ctrl);
+                    select.take(id, add);
                     tree.active = id;
+                    // DESIGN.md 8.5: a click into a group puts that group
+                    // at the top of the list. Ctrl gathers a selection
+                    // instead, so it leaves the list where it stands.
+                    if !add {
+                        tree.scope = id;
+                        tree.open.insert(id);
+                    }
                 }
                 if row.body.drag_started() {
                     egui::DragAndDrop::set_payload(ui.ctx(), id);
                 }
-                if picked {
-                    edited |= rename_field(ui, row.name, &mut group.name, tokens);
-                } else {
-                    row_name(ui, row.name, &group.name, picked, tokens);
-                }
+                row_name(ui, row.name, &group.name, picked, tokens);
                 edited |= switches(ui, row.switches, &mut group.shown, tokens);
                 dropped_on(ui, &row.whole, id, true, moved, tokens);
                 if open {
@@ -1783,7 +2016,7 @@ fn tree_rows(
     edited
 }
 
-/// What one row of the objects list looks like. DESIGN.md 8.4.
+/// What one row of the objects list looks like. DESIGN.md 8.5.
 #[derive(Debug, Clone, Copy)]
 struct RowLook {
     /// How deep the row sits under the root.
@@ -1815,7 +2048,7 @@ struct Row {
     twist: Option<egui::Response>,
 }
 
-/// Where each part of one row of the objects list sits. DESIGN.md 8.4.
+/// Where each part of one row of the objects list sits. DESIGN.md 8.5.
 #[derive(Debug, Clone, Copy)]
 struct RowParts {
     /// The square that opens and closes a group, or `None` for an asset.
@@ -1960,7 +2193,7 @@ fn tree_row(ui: &mut egui::Ui, look: RowLook) -> Row {
 
 /// The name of a row, cut with an ellipsis when it runs too long.
 ///
-/// DESIGN.md 8.4: the whole name comes up under the pointer.
+/// DESIGN.md 8.5: the whole name comes up under the pointer.
 fn row_name(ui: &egui::Ui, rect: egui::Rect, name: &str, picked: bool, tokens: Tokens) {
     let color = if picked { tokens.accent } else { tokens.ink };
     let font = theme::font(theme::BODY, false);
@@ -1974,7 +2207,7 @@ fn row_name(ui: &egui::Ui, rect: egui::Rect, name: &str, picked: bool, tokens: T
     });
     let cut = galley.rows.first().is_some_and(|row| row.ends_with_newline)
         || galley.size().x >= rect.width();
-    ui.painter().galley(
+    ui.painter().with_clip_rect(rect).galley(
         egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0),
         galley,
         color,
@@ -1985,28 +2218,7 @@ fn row_name(ui: &egui::Ui, rect: egui::Rect, name: &str, picked: bool, tokens: T
     }
 }
 
-/// A rename in place, on the row the DM holds. DESIGN.md 10.
-fn rename_field(ui: &mut egui::Ui, rect: egui::Rect, name: &mut String, tokens: Tokens) -> bool {
-    let mut field = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(rect)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    field.style_mut().visuals.extreme_bg_color = egui::Color32::TRANSPARENT;
-    field.style_mut().visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
-    field.style_mut().visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
-    field.style_mut().visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, tokens.accent);
-    let response = field.add(
-        egui::TextEdit::singleline(name)
-            .desired_width(rect.width())
-            .font(theme::font(theme::BODY, false))
-            .text_color(tokens.accent)
-            .margin(egui::Margin::ZERO),
-    );
-    response.changed()
-}
-
-/// The two switches on a row: the DM screen, then the TV. DESIGN.md 8.4.
+/// The two switches on a row: the DM screen, then the TV. DESIGN.md 8.5.
 fn switches(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -2079,7 +2291,7 @@ fn flip(open: &mut std::collections::HashSet<NodeId>, id: NodeId) {
     }
 }
 
-/// The properties of the TV box. DESIGN.md 8.2.
+/// The properties of the TV box. DESIGN.md 8.3.
 ///
 /// The DM drags a corner handle to reach a zoom by eye. This field reaches
 /// an exact one, such as 50 percent for a map twice the size of the table.
@@ -2123,23 +2335,15 @@ fn box_properties(
 /// number, so for a plain PNG or JPEG the DM types it or measures it.
 fn map_properties(
     ui: &mut egui::Ui,
+    id: NodeId,
     select: &mut Select,
     scene: &mut Scene,
     tokens: Tokens,
 ) -> bool {
-    let Some(id) = select.only() else {
-        return false;
-    };
-    let Some(name) = crate::scene::find(scene, id)
-        .and_then(Node::asset)
-        .map(|asset| asset.path.to_string_lossy().into_owned())
-    else {
-        return false;
-    };
     let names = crate::scene::group_names(scene);
     let mut edited = false;
-    widget::row_label(ui, "Map");
-    widget::helper(ui, &name);
+    // DESIGN.md 8.1 gives the file name a row of its own. The title of the
+    // panel carries it now, so the row would say it twice.
     widget::row_label(ui, "Group");
     let holder = crate::scene::parent_of(scene, id).map(|(group, _)| group);
     let open = holder
@@ -3217,7 +3421,7 @@ mod tests {
 
     #[test]
     fn a_deeper_row_indents_and_keeps_its_switches() {
-        // DESIGN.md 8.4: a child row indents from its parent, and the two
+        // DESIGN.md 8.5: a child row indents from its parent, and the two
         // switches stay on the right edge whatever the depth.
         let shallow = row_parts(row(), 1, true);
         let deep = row_parts(row(), 2, true);
