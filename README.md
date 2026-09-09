@@ -2,7 +2,7 @@
 
 [![aislop](https://badges.scanaislop.com/score/engels-hub/dmap.svg)](https://scanaislop.com/engels-hub/dmap)
 
-## WARNING: This is a work in progress. Keep track of feature completion in the "Issues" section
+## WARNING: The list below is where dmap is going, not where it is. Version 1.0.0 is the MVP. Keep track of feature completion in the "Issues" section
 
 
 dmap shows maps for a tabletop role-playing game on a TV.
@@ -14,6 +14,15 @@ dmap shows maps for a tabletop role-playing game on a TV.
 - The program reads PNG, JPEG, Foundry VTT scenes and Universal VTT files.
 - The GPU calculates the light. Walls and doors make shadows.
 - The program runs on Linux. A new build runs on Windows. The code is Rust with wgpu, winit and egui.
+
+## Versions
+
+dmap follows semantic versioning.
+
+- 1.0.0 is the MVP: a canvas, the TV box, scenes that save themselves, a tree of groups, and the window of DESIGN.md.
+- The third number goes up for a release that only fixes bugs, such as 1.0.1.
+- The second number goes up for a release that adds a feature, such as 1.1.0. It resets the third to zero.
+- The first number goes up when a release asks a DM to change something they already have, such as a scene file the older program cannot read.
 
 ## Setup
 
