@@ -12,44 +12,44 @@ use crate::icons::Icon;
 use crate::theme::{self, Tokens};
 
 /// The height of a control that DESIGN.md 6 gives a fixed size.
-pub const CONTROL: f32 = 36.0;
+pub const CONTROL: f32 = 28.0;
 
 /// The width of a select. DESIGN.md 6.
-pub const SELECT_WIDTH: f32 = 300.0;
+pub const SELECT_WIDTH: f32 = 260.0;
 
 /// The horizontal padding inside a button or a segment. DESIGN.md 6.
-const PAD: f32 = 14.0;
+const PAD: f32 = 10.0;
 
 /// The horizontal padding inside an input. DESIGN.md 6.
-const INPUT_PAD: f32 = 10.0;
+const INPUT_PAD: f32 = 8.0;
 
 /// The width of the bar that marks an active entry. DESIGN.md 6.
 pub const BAR: f32 = 3.0;
 
 /// The size of the check inside a checkbox. DESIGN.md 6.
-const CHECK: f32 = 16.0;
+const CHECK: f32 = 14.0;
 
 /// The side of the checkbox itself. DESIGN.md 6.
-const BOX_SIDE: f32 = 20.0;
+const BOX_SIDE: f32 = 18.0;
 
 /// The gap between a checkbox and its label. DESIGN.md 6.
-const CHECK_GAP: f32 = 10.0;
+const CHECK_GAP: f32 = 8.0;
 
 /// The size of an icon inside a button or a list row. DESIGN.md 4.
-pub const SMALL_ICON: f32 = 18.0;
+pub const SMALL_ICON: f32 = 16.0;
 
 /// The gap between an icon and the text beside it. DESIGN.md 6.
-const ICON_GAP: f32 = 8.0;
+const ICON_GAP: f32 = 6.0;
 
 /// How tall a button is, by where it sits. DESIGN.md 6.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Height {
-    /// 36 px, on the canvas or in a dialog.
+    /// 28 px, on the canvas or in a dialog.
     #[default]
     Full,
-    /// 32 px, in a panel.
+    /// 26 px, in a panel.
     Panel,
-    /// 28 px, in a row.
+    /// 24 px, in a row. The floor of DESIGN.md 6.
     Row,
 }
 
@@ -58,8 +58,8 @@ impl Height {
     pub fn points(self) -> f32 {
         match self {
             Self::Full => CONTROL,
-            Self::Panel => 32.0,
-            Self::Row => 28.0,
+            Self::Panel => 26.0,
+            Self::Row => 24.0,
         }
     }
 }
@@ -93,7 +93,7 @@ pub fn helper(ui: &mut Ui, text: &str) {
     ui.add(
         egui::Label::new(
             egui::RichText::new(text)
-                .font(theme::font(theme::HELPER, false))
+                .font(theme::font(theme::SMALL, false))
                 .color(tokens.mute),
         )
         .wrap(),
@@ -423,10 +423,14 @@ mod tests {
 
     #[test]
     fn a_button_takes_the_height_of_its_place() {
-        // DESIGN.md 6: 36 px on the canvas, 32 px in a panel, 28 px in a row.
-        assert!((Height::Full.points() - 36.0).abs() < f32::EPSILON);
-        assert!((Height::Panel.points() - 32.0).abs() < f32::EPSILON);
-        assert!((Height::Row.points() - 28.0).abs() < f32::EPSILON);
+        // DESIGN.md 6: 28 px on the canvas, 26 px in a panel, 24 px in a row.
+        assert!((Height::Full.points() - 28.0).abs() < f32::EPSILON);
+        assert!((Height::Panel.points() - 26.0).abs() < f32::EPSILON);
+        assert!((Height::Row.points() - 24.0).abs() < f32::EPSILON);
+        // No button goes under the floor DESIGN.md 6 sets.
+        for height in [Height::Full, Height::Panel, Height::Row] {
+            assert!(height.points() >= 24.0, "{height:?} is under 24 px");
+        }
         assert_eq!(Height::default(), Height::Full);
     }
 }

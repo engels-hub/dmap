@@ -26,76 +26,76 @@ use crate::tvbox::{
 use crate::widget::{self, Height};
 
 /// The gap between the chrome and the window edge, in points. DESIGN.md 5.3.
-const MARGIN: f32 = 16.0;
+const MARGIN: f32 = 12.0;
 
 /// The height of a toolbar entry, in points. DESIGN.md 5.2.
-const TOOL_HEIGHT: f32 = 56.0;
+const TOOL_HEIGHT: f32 = 44.0;
 
 /// The width of a toolbar entry, in points. DESIGN.md 5.2.
 ///
 /// An entry grows past this when its label needs the room. DESIGN.md 1
 /// puts legibility first, so the label never runs into its neighbour.
-const TOOL_WIDTH: f32 = 64.0;
+const TOOL_WIDTH: f32 = 52.0;
 
 /// The padding beside a toolbar label that outgrows its entry, in points.
-const TOOL_PAD: f32 = 10.0;
+const TOOL_PAD: f32 = 8.0;
 
 /// The size of a toolbar glyph, in points. DESIGN.md 4.
-const TOOL_ICON: f32 = 22.0;
+const TOOL_ICON: f32 = 18.0;
 
 /// The gap between a toolbar glyph and its label, in points. DESIGN.md 5.2.
-const TOOL_GAP: f32 = 4.0;
+const TOOL_GAP: f32 = 3.0;
 
 /// The width a panel opens at, in points. DESIGN.md 8.4.
-const PANEL_WIDTH: f32 = 280.0;
+const PANEL_WIDTH: f32 = 240.0;
 
 /// The widest a panel goes when the DM drags its edge. DESIGN.md 8.4.
-const PANEL_MAX: f32 = 560.0;
+const PANEL_MAX: f32 = 480.0;
 
 /// The height of a panel header, in points. DESIGN.md 7.1.
-const PANEL_HEADER: f32 = 40.0;
+const PANEL_HEADER: f32 = 32.0;
 
 /// The padding inside the body of a panel, in points. DESIGN.md 7.1.
-const PANEL_PAD: f32 = 14.0;
+const PANEL_PAD: f32 = 10.0;
 
 /// The height of one row of the objects list, in points. DESIGN.md 8.4.
-const ROW_HEIGHT: f32 = 32.0;
+const ROW_HEIGHT: f32 = 26.0;
 
 /// How far a child row stands from its parent, in points. DESIGN.md 8.4.
-const ROW_INDENT: f32 = 18.0;
+const ROW_INDENT: f32 = 14.0;
 
 /// The size of the glyph that opens a group, in points. DESIGN.md 4.
-const TWIST: f32 = 16.0;
+const TWIST: f32 = 14.0;
 
 /// The square that holds a switch on a list row, in points. DESIGN.md 8.4.
-const SWITCH: f32 = 26.0;
+const SWITCH: f32 = 22.0;
 
 /// The size of a dialog, in points. DESIGN.md 9.
 ///
-/// The widest the range allows, because the Table tab holds a checkbox
-/// whose label is a whole sentence.
-const DIALOG: egui::Vec2 = egui::vec2(880.0, 560.0);
+/// The low end of the range. A label too long for the control column
+/// wraps, so no row needs the extra width.
+const DIALOG: egui::Vec2 = egui::vec2(660.0, 440.0);
 
 /// The height of a dialog header, in points. DESIGN.md 9.
-const DIALOG_HEADER: f32 = 52.0;
+const DIALOG_HEADER: f32 = 42.0;
 
 /// The width of the navigation column of a dialog, in points. DESIGN.md 9.
-const DIALOG_NAV: f32 = 200.0;
+const DIALOG_NAV: f32 = 168.0;
 
 /// The width of the label column in a dialog body, in points. DESIGN.md 9.
-const LABEL_COLUMN: f32 = 170.0;
+const LABEL_COLUMN: f32 = 140.0;
 
 /// The gap between two rows of a dialog body, in points. DESIGN.md 9.
-const ROW_GAP: f32 = 22.0;
+const ROW_GAP: f32 = 16.0;
 
 /// The height of the footer of a dialog, in points. DESIGN.md 9.
-const FOOTER: f32 = 60.0;
+const FOOTER: f32 = 48.0;
 
 /// The height of one scene row, in points. DESIGN.md 9.5.
-const SCENE_ROW: f32 = 52.0;
+const SCENE_ROW: f32 = 40.0;
 
 /// The width of the scenes folder input, in points. DESIGN.md 9.5.
-const PATH_WIDTH: f32 = 420.0;
+const PATH_WIDTH: f32 = 360.0;
 
 /// Size of a corner handle in points.
 const HANDLE_SIZE: f32 = 8.0;
@@ -981,7 +981,7 @@ fn objects_panel(
         } else {
             ui.label(
                 egui::RichText::new(&select.note)
-                    .font(theme::font(theme::HELPER, false))
+                    .font(theme::font(theme::SMALL, false))
                     .color(tokens.accent),
             );
         }
@@ -1043,7 +1043,7 @@ fn root_row(ui: &mut egui::Ui, scene: &mut Scene, tree: &mut Tree, tokens: Token
     if response.clicked() {
         flip(&mut tree.open, ROOT_ID);
     }
-    let mut left = rect.left() + widget::BAR + 4.0;
+    let mut left = rect.left() + widget::BAR + 3.0;
     icon::paint(
         ui.painter(),
         if open { Icon::ChevronDown } else { Icon::ChevronRight },
@@ -1051,7 +1051,7 @@ fn root_row(ui: &mut egui::Ui, scene: &mut Scene, tree: &mut Tree, tokens: Token
         TWIST,
         tokens.mute,
     );
-    left += TWIST + 6.0;
+    left += TWIST + 5.0;
     icon::paint(
         ui.painter(),
         Icon::Folder,
@@ -1059,7 +1059,7 @@ fn root_row(ui: &mut egui::Ui, scene: &mut Scene, tree: &mut Tree, tokens: Token
         widget::SMALL_ICON,
         tokens.ink,
     );
-    left += widget::SMALL_ICON + 8.0;
+    left += widget::SMALL_ICON + 6.0;
     ui.painter().text(
         egui::pos2(left, rect.center().y),
         egui::Align2::LEFT_CENTER,
@@ -1192,21 +1192,21 @@ fn dialog_frame(
             let header =
                 egui::Rect::from_min_size(rect.left_top(), egui::vec2(rect.width(), DIALOG_HEADER));
             ui.painter().text(
-                egui::pos2(header.left() + 24.0, header.center().y),
+                egui::pos2(header.left() + 20.0, header.center().y),
                 egui::Align2::LEFT_CENTER,
                 title,
                 theme::font(theme::TITLE, true),
                 tokens.ink,
             );
             let close_rect = egui::Rect::from_center_size(
-                egui::pos2(header.right() - 16.0 - 18.0, header.center().y),
-                egui::Vec2::splat(36.0),
+                egui::pos2(header.right() - 12.0 - 14.0, header.center().y),
+                egui::Vec2::splat(28.0),
             );
             let button = ui.interact(close_rect, ui.id().with("close"), egui::Sense::click());
             if button.hovered() {
                 ui.painter().rect_filled(close_rect, 0, tokens.raised);
             }
-            icon::paint(ui.painter(), Icon::X, close_rect.center(), 20.0, tokens.ink);
+            icon::paint(ui.painter(), Icon::X, close_rect.center(), 18.0, tokens.ink);
             close |= button.clicked();
             widget::rule_bottom(ui, header, tokens);
             body(ui, egui::Rect::from_min_max(
@@ -1232,8 +1232,8 @@ fn settings_dialog(
         let nav = egui::Rect::from_min_size(rest.left_top(), egui::vec2(DIALOG_NAV, rest.height()));
         dialog_nav(ui, nav, &mut dialog.tab, tokens);
         let body = egui::Rect::from_min_max(
-            egui::pos2(nav.right() + 28.0, rest.top() + 24.0),
-            egui::pos2(rest.right() - 28.0, rest.bottom() - 24.0),
+            egui::pos2(nav.right() + 20.0, rest.top() + 18.0),
+            egui::pos2(rest.right() - 20.0, rest.bottom() - 18.0),
         );
         let mut body_ui = ui.new_child(
             egui::UiBuilder::new()
@@ -1258,10 +1258,10 @@ fn settings_dialog(
 /// The navigation column of a dialog. DESIGN.md 9.
 fn dialog_nav(ui: &egui::Ui, rect: egui::Rect, tab: &mut Tab, tokens: Tokens) {
     /// The vertical padding of the column, in points. DESIGN.md 9.
-    const NAV_PAD: f32 = 12.0;
-    /// The height of one entry, in points: 15 px text and 10 px above and
+    const NAV_PAD: f32 = 10.0;
+    /// The height of one entry, in points: 14 px text and 8 px above and
     /// below it, rounded up to a whole point. DESIGN.md 9.
-    const ENTRY: f32 = 40.0;
+    const ENTRY: f32 = 32.0;
     ui.painter()
         .vline(rect.right(), rect.y_range(), tokens.hairline());
     let mut top = rect.top() + NAV_PAD;
@@ -1290,12 +1290,12 @@ fn dialog_nav(ui: &egui::Ui, rect: egui::Rect, tab: &mut Tab, tokens: Tokens) {
         icon::paint(
             ui.painter(),
             glyph,
-            egui::pos2(entry.left() + 16.0 + 10.0, entry.center().y),
-            20.0,
+            egui::pos2(entry.left() + 12.0 + 9.0, entry.center().y),
+            18.0,
             color,
         );
         ui.painter().text(
-            egui::pos2(entry.left() + 16.0 + 20.0 + 10.0, entry.center().y),
+            egui::pos2(entry.left() + 12.0 + 18.0 + 8.0, entry.center().y),
             egui::Align2::LEFT_CENTER,
             label,
             theme::font(theme::BODY, false),
@@ -1317,15 +1317,15 @@ fn dialog_row(ui: &mut egui::Ui, label: &str, controls: impl FnOnce(&mut egui::U
             egui::Sense::hover(),
         );
         ui.painter().text(
-            // DESIGN.md 9: the label sits 8 points below the top of the row.
-            egui::pos2(rect.left(), rect.top() + 8.0),
+            // DESIGN.md 9: the label sits 6 points below the top of the row.
+            egui::pos2(rect.left(), rect.top() + 6.0),
             egui::Align2::LEFT_TOP,
             label,
             theme::font(theme::BODY, false),
             tokens.ink,
         );
         ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.spacing_mut().item_spacing.y = 6.0;
             controls(ui);
         });
     });
@@ -1431,7 +1431,7 @@ fn scenes_dialog(
         ui.ctx(),
         "scenes",
         "Scenes",
-        egui::vec2(760.0, 520.0),
+        egui::vec2(660.0, 440.0),
         tokens,
         |ui, rest| {
             let footer = egui::Rect::from_min_size(
@@ -1439,8 +1439,8 @@ fn scenes_dialog(
                 egui::vec2(rest.width(), FOOTER),
             );
             let body = egui::Rect::from_min_max(
-                egui::pos2(rest.left() + 24.0, rest.top() + 24.0),
-                egui::pos2(rest.right() - 24.0, footer.top() - 24.0),
+                egui::pos2(rest.left() + 20.0, rest.top() + 18.0),
+                egui::pos2(rest.right() - 20.0, footer.top() - 18.0),
             );
             let mut body_ui = ui.new_child(
                 egui::UiBuilder::new()
@@ -1448,7 +1448,7 @@ fn scenes_dialog(
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
             body_ui.set_clip_rect(body);
-            body_ui.spacing_mut().item_spacing.y = 14.0;
+            body_ui.spacing_mut().item_spacing.y = 10.0;
             body_ui.horizontal(|ui| {
                 widget::row_label(ui, "Scenes folder");
                 let path = frame.scenes_dir.display().to_string();
@@ -1465,7 +1465,7 @@ fn scenes_dialog(
                 );
                 row_name(
                     ui,
-                    rect.shrink2(egui::vec2(10.0, 0.0)),
+                    rect.shrink2(egui::vec2(8.0, 0.0)),
                     &path,
                     false,
                     tokens,
@@ -1478,7 +1478,7 @@ fn scenes_dialog(
             if !frame.scene_error.is_empty() {
                 ui.label(
                     egui::RichText::new(frame.scene_error)
-                        .font(theme::font(theme::HELPER, false))
+                        .font(theme::font(theme::SMALL, false))
                         .color(tokens.accent),
                 );
             }
@@ -1496,7 +1496,7 @@ fn scenes_dialog(
                 });
             let mut foot = ui.new_child(
                 egui::UiBuilder::new()
-                    .max_rect(footer.shrink2(egui::vec2(24.0, 0.0)))
+                    .max_rect(footer.shrink2(egui::vec2(20.0, 0.0)))
                     .layout(egui::Layout::left_to_right(egui::Align::Center)),
             );
             widget::rule_bottom(
@@ -1562,7 +1562,7 @@ fn scene_row(
     if let Some((from, typed)) = scenes.renaming.as_mut().filter(|(from, _)| from == name) {
         let field = row.add(
             egui::TextEdit::singleline(typed)
-                .desired_width(220.0)
+                .desired_width(190.0)
                 .font(theme::font(theme::BODY, false)),
         );
         let done = field.lost_focus() && row.input(|i| i.key_pressed(egui::Key::Enter));
@@ -1586,7 +1586,7 @@ fn scene_row(
         widget::SMALL_ICON,
         color,
     );
-    row.add_space(widget::SMALL_ICON + 10.0);
+    row.add_space(widget::SMALL_ICON + 8.0);
     row.label(
         egui::RichText::new(name)
             .font(theme::font(theme::BODY, open))
@@ -1763,7 +1763,7 @@ fn tree_row(ui: &mut egui::Ui, look: RowLook) -> Row {
             tokens.accent,
         );
     }
-    let mut left = rect.left() + widget::BAR + 4.0 + look.depth as f32 * ROW_INDENT;
+    let mut left = rect.left() + widget::BAR + 3.0 + look.depth as f32 * ROW_INDENT;
     let twist = look.twist.map(|open| {
         let square = egui::Rect::from_center_size(
             egui::pos2(left + TWIST / 2.0, rect.center().y),
@@ -1780,10 +1780,10 @@ fn tree_row(ui: &mut egui::Ui, look: RowLook) -> Row {
         response
     });
     if look.twist.is_some() {
-        left += TWIST + 6.0;
+        left += TWIST + 5.0;
     } else {
         // An asset has no twist, so its glyph lines up with the group's.
-        left += TWIST + 6.0;
+        left += TWIST + 5.0;
     }
     // The accent says two things on one glyph: the DM holds this row, or a
     // new asset joins this group.
@@ -1799,14 +1799,14 @@ fn tree_row(ui: &mut egui::Ui, look: RowLook) -> Row {
         widget::SMALL_ICON,
         glyph_color,
     );
-    left += widget::SMALL_ICON + 8.0;
+    left += widget::SMALL_ICON + 6.0;
     let switches = egui::Rect::from_min_max(
         egui::pos2(rect.right() - 2.0 * SWITCH, rect.top()),
         rect.right_bottom(),
     );
     let name = egui::Rect::from_min_max(
         egui::pos2(left, rect.top()),
-        egui::pos2(switches.left() - 6.0, rect.bottom()),
+        egui::pos2(switches.left() - 5.0, rect.bottom()),
     );
     let body = ui.interact(
         egui::Rect::from_min_max(rect.left_top(), egui::pos2(name.right(), rect.bottom())),
@@ -1963,7 +1963,7 @@ fn box_properties(
         ui,
         &mut percent,
         "%",
-        110.0,
+        100.0,
         MIN_ZOOM_PERCENT..=MAX_ZOOM_PERCENT,
         0.1,
     )
@@ -2029,7 +2029,7 @@ fn map_properties(
     };
     widget::row_label(ui, "Pixels per cell");
     let mut grid_px = map.grid_px;
-    if widget::input(ui, &mut grid_px, "px", 110.0, MIN_GRID_PX..=MAX_GRID_PX, 1.0).changed() {
+    if widget::input(ui, &mut grid_px, "px", 100.0, MIN_GRID_PX..=MAX_GRID_PX, 1.0).changed() {
         map.grid_px = grid_px;
         edited = true;
     }
@@ -2037,13 +2037,13 @@ fn map_properties(
     // with the right grid size draws at true size only at 100 percent.
     let mut percent = map.scale * 100.0;
     widget::row_label(ui, "Size");
-    if widget::input(ui, &mut percent, "%", 110.0, MIN_PERCENT..=MAX_PERCENT, 0.5).changed() {
+    if widget::input(ui, &mut percent, "%", 100.0, MIN_PERCENT..=MAX_PERCENT, 0.5).changed() {
         map.scale = percent / 100.0;
         edited = true;
     }
     let mut degrees = map.rotation.to_degrees();
     widget::row_label(ui, "Turn");
-    if widget::input(ui, &mut degrees, "\u{b0}", 110.0, -360.0..=360.0, 0.5).changed() {
+    if widget::input(ui, &mut degrees, "\u{b0}", 100.0, -360.0..=360.0, 0.5).changed() {
         map.rotation = degrees.to_radians();
         edited = true;
     }

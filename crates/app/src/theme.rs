@@ -18,20 +18,19 @@ const BOLD_FAMILY: &str = "bold";
 /// Where `install` leaves the theme, so any widget can read its tokens.
 const MODE_KEY: &str = "dmap-theme";
 
-/// The size of a toolbar label and of a small line, in points. DESIGN.md 3.
+/// The size of a toolbar label, a helper line and small print, in points.
+///
+/// The floor of DESIGN.md 1. No text in the window goes under it.
 pub const SMALL: f32 = 13.0;
 
-/// The size of a helper line and of the zoom label, in points. DESIGN.md 3.
-pub const HELPER: f32 = 14.0;
-
-/// The size of control text and of a row label, in points. DESIGN.md 3.
-pub const BODY: f32 = 15.0;
+/// The size of control text, a row label and dialog navigation, in points.
+pub const BODY: f32 = 14.0;
 
 /// The size of a dialog title, in points. DESIGN.md 3.
-pub const TITLE: f32 = 18.0;
+pub const TITLE: f32 = 16.0;
 
 /// The size of a panel title, in points. DESIGN.md 7.1.
-pub const PANEL_TITLE: f32 = 15.0;
+pub const PANEL_TITLE: f32 = 14.0;
 
 /// Which theme the window draws. DESIGN.md 2.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -163,12 +162,12 @@ pub fn install(ctx: &egui::Context, mode: Mode) {
     // one it thinks is current. Nothing then depends on the system setting.
     let mut style = (*ctx.style_of(egui::Theme::Light)).clone();
     style.text_styles = text_styles();
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.button_padding = egui::vec2(14.0, 0.0);
-    style.spacing.interact_size = egui::vec2(36.0, 36.0);
-    style.spacing.icon_width = 20.0;
-    style.spacing.icon_width_inner = 16.0;
-    style.spacing.icon_spacing = 10.0;
+    style.spacing.item_spacing = egui::vec2(6.0, 6.0);
+    style.spacing.button_padding = egui::vec2(10.0, 0.0);
+    style.spacing.interact_size = egui::vec2(28.0, 28.0);
+    style.spacing.icon_width = 18.0;
+    style.spacing.icon_width_inner = 14.0;
+    style.spacing.icon_spacing = 8.0;
     style.spacing.menu_margin = egui::Margin::symmetric(0, 4);
     style.spacing.window_margin = egui::Margin::same(0);
     // DESIGN.md 1 bans the rounded corner, so no radius survives anywhere.
@@ -193,7 +192,7 @@ fn text_styles() -> std::collections::BTreeMap<TextStyle, FontId> {
         (TextStyle::Small, FontId::new(SMALL, FontFamily::Proportional)),
         (TextStyle::Body, FontId::new(BODY, FontFamily::Proportional)),
         (TextStyle::Button, FontId::new(BODY, FontFamily::Proportional)),
-        (TextStyle::Monospace, FontId::new(HELPER, FontFamily::Proportional)),
+        (TextStyle::Monospace, FontId::new(SMALL, FontFamily::Proportional)),
         (TextStyle::Heading, FontId::new(TITLE, bold)),
     ]
     .into_iter()
