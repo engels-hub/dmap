@@ -14,6 +14,7 @@
 
 mod camera;
 mod color;
+mod command;
 mod config;
 mod gpu;
 mod grid;
@@ -44,6 +45,7 @@ use egui_winit::winit::{
 };
 
 use crate::camera::{Camera, DEFAULT_PIXELS_PER_INCH};
+use crate::command::{History, reshape};
 use crate::config::Config;
 use crate::gpu::{Gpu, Pane};
 use crate::grid::GridLayer;
@@ -211,6 +213,12 @@ struct Running {
     active_group: scene::NodeId,
     /// The tree the DM works on.
     scene: Scene,
+    /// Every change the DM made to that tree, for undo and redo.
+    ///
+    /// The stack belongs to the open scene, not to the files: a save
+    /// leaves it alone, so the DM saves and undoes past the save. Another
+    /// scene on the canvas clears it.
+    history: History,
     map_layer: MapLayer,
     grid_layer: GridLayer,
     loader: Loader,
@@ -280,6 +288,7 @@ impl Running {
             scene_error: String::new(),
             active_group: scene::ROOT_ID,
             scene: scene.clone(),
+            history: History::default(),
             map_layer,
             grid_layer,
             loader,
@@ -373,7 +382,14 @@ impl Running {
         }
         let id = self.scene.next_id();
         let asset = Asset::new(id, stored, self.camera.center);
-        push_into(&mut self.scene, self.active_group, Node::Asset(asset))
+        let into = self.active_group;
+        let Some(change) = reshape(&mut self.scene, |scene| {
+            push_into(scene, into, Node::Asset(asset));
+        }) else {
+            return false;
+        };
+        self.history.kept(change);
+        true
     }
 
     /// Asks for an image file and adds it. Returns `true` when a file was added.
@@ -416,6 +432,7 @@ impl Running {
                 displays: &self.displays,
                 settings: &mut self.settings,
                 scene: &mut self.scene,
+                history: &mut self.history,
                 camera: &mut self.camera,
                 scene_dir: &self.scene_dir,
                 list_scenes: &|| config::scene_list(&self.scenes_dir),
@@ -527,6 +544,8 @@ impl Running {
         self.scene_dir = dir;
         self.scene = scene.clone();
         self.scene.tv_box = scene.tv_box.clamped();
+        // The changes belong to the scene that has left the canvas.
+        self.history.clear();
         self.map_layer.clear();
         self.reload_images();
         self.dm.window.set_title(&window_title(&self.scene_dir));

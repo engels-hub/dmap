@@ -168,6 +168,7 @@ Extension point: `trait RenderPass { fn prepare(&mut self, scene, view); fn rend
   - F: flip.
   - R: turn 90°.
   - Arrows: move the TV box one cell.
+  - Ctrl with Z: undo. Ctrl and Shift with Z: redo.
   - `T`: show the TV box.
   - Tab: hide all DM overlays.
 
