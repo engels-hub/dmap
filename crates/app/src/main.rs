@@ -243,6 +243,13 @@ struct Running {
     active_group: scene::NodeId,
     /// The tree the DM works on.
     scene: Scene,
+    /// Every image file the loader was asked for, for this scene.
+    ///
+    /// A change can put an asset back in the tree whose file the loader
+    /// never saw, such as a redo of an add that the DM took back before
+    /// the program closed. Without this the map would draw nothing, take
+    /// no click and show no handles.
+    asked: std::collections::HashSet<PathBuf>,
     /// Every change the DM made to that tree, for undo and redo.
     ///
     /// The stack belongs to the open scene. A save writes it to
@@ -320,6 +327,7 @@ impl Running {
             scene_error: String::new(),
             active_group: scene::ROOT_ID,
             scene: scene.clone(),
+            asked: std::collections::HashSet::new(),
             history,
             map_layer,
             grid_layer,
@@ -406,7 +414,6 @@ impl Running {
                 return false;
             }
         };
-        self.loader.request(self.scene_dir.join(&stored));
         // A new asset joins the group the DM works in. That group may
         // have gone since the DM marked it, and the root is always there.
         if !scene::has_group(&self.scene, self.active_group) {
@@ -422,6 +429,7 @@ impl Running {
             return false;
         };
         self.history.kept(change);
+        self.request_images();
         true
     }
 
@@ -475,6 +483,11 @@ impl Running {
                 size_of: &|path| map_layer.size_of(path),
             },
         );
+        // A change may have put an asset back in the tree, such as a redo
+        // of an add. It is settled by now, because a drag adds nothing.
+        if output.save {
+            self.request_images();
+        }
         let viewport = (self.dm.config.width, self.dm.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
         // DESIGN.md 5.6: a map the TV does not show draws faint here, so
@@ -590,9 +603,24 @@ impl Running {
     ///
     /// A scene that moves takes its images with it, so what is in flight
     /// carries the old folder and never arrives.
-    fn reload_images(&self) {
-        for asset in scene::assets(&self.scene) {
-            self.loader.request(self.scene_dir.join(&asset.path));
+    fn reload_images(&mut self) {
+        self.asked.clear();
+        self.request_images();
+    }
+
+    /// Asks the loader for each image the scene holds and has not asked for.
+    ///
+    /// A file is asked for once. The loader keeps no list of its own, and
+    /// a file that will not decode would be read again on every frame.
+    fn request_images(&mut self) {
+        let files: Vec<PathBuf> = scene::assets(&self.scene)
+            .iter()
+            .map(|asset| asset.path.clone())
+            .collect();
+        for file in files {
+            if self.asked.insert(file.clone()) {
+                self.loader.request(self.scene_dir.join(&file));
+            }
         }
     }
 
@@ -703,7 +731,7 @@ fn reveal(dir: &Path) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error when a folder cannot be made or a file cannot be written.
-fn save(config: &Config, scene: &Scene, history: &History, scene_dir: &Path) -> Result<()> {
+fn save(config: &Config, scene: &Scene, history: &mut History, scene_dir: &Path) -> Result<()> {
     save_scene(scene, scene_dir)?;
     save_history(history, scene_dir)?;
     save_config(config)
@@ -711,13 +739,22 @@ fn save(config: &Config, scene: &Scene, history: &History, scene_dir: &Path) -> 
 
 /// Writes the changes beside the scene file.
 ///
+/// A stack with nothing new to say writes nothing. The file holds every
+/// step, and a step that reshaped the tree holds branches of it, so the
+/// file grows with the scene and a write of it is not free.
+///
 /// # Errors
 ///
 /// Returns an error when the file cannot be written.
-fn save_history(history: &History, scene_dir: &Path) -> Result<()> {
+fn save_history(history: &mut History, scene_dir: &Path) -> Result<()> {
+    if !history.unwritten() {
+        return Ok(());
+    }
     let file = scene_dir.join(HISTORY_FILE);
     std::fs::write(&file, history.to_json())
-        .with_context(|| format!("{}: cannot save the history", file.display()))
+        .with_context(|| format!("{}: cannot save the history", file.display()))?;
+    history.wrote();
+    Ok(())
 }
 
 /// Writes the scene file beside its images.
@@ -768,7 +805,12 @@ impl App {
             running.update(&mut self.config, &mut self.scene);
             // A write that fails leaves the session alone. The DM keeps
             // working, and the message says what went wrong.
-            if let Err(error) = save(&self.config, &self.scene, &running.history, &self.scene_dir) {
+            if let Err(error) = save(
+                &self.config,
+                &self.scene,
+                &mut running.history,
+                &self.scene_dir,
+            ) {
                 eprintln!("{error:#}");
                 running.scene_error = format!("{error:#}");
             }
@@ -840,7 +882,12 @@ impl App {
                 self.config.last_scene = Some(self.config.remember(&self.scene_dir));
             }
         }
-        save(&self.config, &self.scene, &running.history, &self.scene_dir)
+        save(
+            &self.config,
+            &self.scene,
+            &mut running.history,
+            &self.scene_dir,
+        )
     }
 
     /// Saves the open scene, then puts another one on the canvas.
@@ -850,7 +897,12 @@ impl App {
     /// Returns an error when a file cannot be written or read.
     fn open_scene(&mut self, running: &mut Running, name: &str) -> Result<()> {
         running.update(&mut self.config, &mut self.scene);
-        save(&self.config, &self.scene, &running.history, &self.scene_dir)?;
+        save(
+            &self.config,
+            &self.scene,
+            &mut running.history,
+            &self.scene_dir,
+        )?;
         self.load_scene(running, name)
     }
 

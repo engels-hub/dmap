@@ -182,10 +182,10 @@ impl Command for SetTvBox {
     fn note(&self) -> Note {
         Note::new(
             "The TV box",
-            "the players' window".to_owned(),
+            String::new(),
             format!(
-                "{} in wide at {}",
-                format_args!("{:.1}", self.after.width),
+                "{:.1} in wide at {}",
+                self.after.width,
                 spot(self.after.center)
             ),
         )
@@ -671,6 +671,12 @@ pub struct History {
     undone: Vec<Step>,
     /// The change under the DM's hand, which is not a step yet.
     open: Option<Step>,
+    /// Whether the stack changed since the last write to `history.json`.
+    ///
+    /// A step carries the values it wrote, and a step that reshaped the
+    /// tree carries branches of it, so the file grows with the scene. A
+    /// save that has nothing new to say writes nothing.
+    unwritten: bool,
 }
 
 impl History {
@@ -686,6 +692,7 @@ impl History {
         // The time of a drag is the time it ends, because every frame of
         // it writes this again.
         self.open = Some(Step { change, at: now() });
+        self.unwritten = true;
     }
 
     /// Closes the change [`History::hold`] wrote, once the drag ends.
@@ -697,6 +704,7 @@ impl History {
         if self.done.len() > STEPS {
             self.done.pop_front();
         }
+        self.unwritten = true;
     }
 
     /// Writes a change that is over in one frame.
@@ -735,6 +743,7 @@ impl History {
         };
         step.change.revert(scene);
         self.undone.push(step);
+        self.unwritten = true;
         true
     }
 
@@ -745,6 +754,7 @@ impl History {
         };
         step.change.apply(scene);
         self.done.push_back(step);
+        self.unwritten = true;
         true
     }
 
@@ -783,6 +793,16 @@ impl History {
         moved
     }
 
+    /// Whether the stack has something the file beside the scene lacks.
+    pub fn unwritten(&self) -> bool {
+        self.unwritten
+    }
+
+    /// Marks the stack as written, once the file holds it.
+    pub fn wrote(&mut self) {
+        self.unwritten = false;
+    }
+
     /// The stack as JSON, for the file beside the scene.
     ///
     /// The change under the DM's hand is left out. It is no step yet, and
@@ -814,6 +834,7 @@ impl History {
             done: steps.into(),
             undone: taken_back,
             open: None,
+            unwritten: false,
         })
     }
 }
@@ -1143,6 +1164,29 @@ mod tests {
         assert_eq!(scene, all);
         // The place it stands on already asks for no walk.
         assert!(!history.walk_to(&mut scene, 4));
+    }
+
+    #[test]
+    fn a_stack_that_wrote_itself_asks_for_no_second_write() {
+        let mut scene = scene();
+        let mut history = History::default();
+        assert!(!history.unwritten());
+        history.run(
+            &mut scene,
+            SetName {
+                id: 7,
+                before: "Group 7".to_owned(),
+                after: "Cave".to_owned(),
+            },
+        );
+        assert!(history.unwritten());
+        history.wrote();
+        assert!(!history.unwritten());
+        assert!(history.undo(&mut scene));
+        assert!(history.unwritten());
+        // A stack that came from a file is the file.
+        let back = History::from_json(&history.to_json()).unwrap();
+        assert!(!back.unwritten());
     }
 
     #[test]

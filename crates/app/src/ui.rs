@@ -605,7 +605,8 @@ impl DmUi {
                 *frame_box = false;
                 // Undo works in every view, and before the tools, so a
                 // tool never writes over what it put back this frame.
-                edited |= undo_keys(ui, &mut frame);
+                let dragging = select.drag.is_some() || table.drag.is_some();
+                edited |= undo_keys(ui, &mut frame, dragging);
                 edited |= match *tool {
                     Tool::Select => canvas(ui, select, &mut frame, viewport, zoom_goes_to, tokens),
                     Tool::Table => {
@@ -3761,12 +3762,17 @@ fn keys(ui: &egui::Ui, select: &mut Select, frame: &mut Frame<'_>) -> bool {
 /// `Ctrl+Z` takes the last change back. `Ctrl+Shift+Z` writes it again.
 ///
 /// A field in a panel takes the keyboard first, because egui keeps an undo
-/// of its own for the text in it. A change the DM still holds waits as
-/// well: the drag that is running would write over what the undo put back.
+/// of its own for the text in it.
+///
+/// A drag waits, `dragging`, and so does a change the DM still holds. A
+/// drag rewrites the scene from the state it started in, every frame, so
+/// it would write over whatever the undo put back. The press that starts
+/// one writes nothing until the pointer moves, so the history alone does
+/// not say that a hand is on the canvas.
 ///
 /// Returns `true` when the scene changed.
-fn undo_keys(ui: &egui::Ui, frame: &mut Frame<'_>) -> bool {
-    if ui.ctx().egui_wants_keyboard_input() || frame.history.holding() {
+fn undo_keys(ui: &egui::Ui, frame: &mut Frame<'_>, dragging: bool) -> bool {
+    if dragging || ui.ctx().egui_wants_keyboard_input() || frame.history.holding() {
         return false;
     }
     // Redo goes first. Ctrl and Shift with Z would answer to the undo
@@ -4020,7 +4026,10 @@ fn hovered_handle(pos: egui::Pos2, handles: &[egui::Pos2]) -> Option<egui::Curso
 ///
 /// Returns `true` when the map changed.
 fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), snap: bool) -> bool {
-    let Some(drag) = select.drag.clone() else {
+    // The drag is read where it lies. A frame of a move drag would
+    // otherwise clone every asset the DM holds twice: once to read the
+    // spots it started from, and once for the change it builds.
+    let Some(drag) = select.drag.as_ref() else {
         return false;
     };
     match drag {
@@ -4029,7 +4038,7 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
         Drag::Move { was, start_cursor } => {
             // A press without motion picks and nothing more: a snap would
             // shift a map that the DM placed off the grid.
-            if cursor == start_cursor || was.is_empty() {
+            if cursor == *start_cursor || was.is_empty() {
                 return false;
             }
             let step = (cursor.0 - start_cursor.0, cursor.1 - start_cursor.1);
@@ -4049,9 +4058,8 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
                     asset
                 })
                 .collect();
-            frame
-                .history
-                .hold(frame.scene, SetAssets { before: was, after });
+            let before = was.clone();
+            frame.history.hold(frame.scene, SetAssets { before, after });
             true
         }
         Drag::Scale {
@@ -4059,13 +4067,13 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             pivot,
             start_cursor,
         } => {
-            let factor = scale_from_drag(pivot, start_cursor, cursor);
+            let factor = scale_from_drag(*pivot, *start_cursor, cursor);
             frame.history.hold(
                 frame.scene,
                 Grow {
-                    subject: held_names(frame.scene, &starts),
-                    starts,
-                    pivot,
+                    subject: held_names(frame.scene, starts),
+                    starts: starts.clone(),
+                    pivot: *pivot,
                     factor,
                 },
             );
@@ -4081,13 +4089,13 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             // can get back on one. A group turns as one piece, so every
             // asset in it takes the same angle.
             let base = starts.first().map_or(0.0, |first| first.rotation);
-            let turned = rotation_from_drag(base, pivot, start_cursor, cursor, snap);
+            let turned = rotation_from_drag(base, *pivot, *start_cursor, cursor, snap);
             frame.history.hold(
                 frame.scene,
                 Turn {
-                    subject: held_names(frame.scene, &starts),
-                    starts,
-                    pivot,
+                    subject: held_names(frame.scene, starts),
+                    starts: starts.clone(),
+                    pivot: *pivot,
                     angle: turned - base,
                 },
             );
