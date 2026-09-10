@@ -922,7 +922,8 @@ impl DmUi {
             canvas,
             draw_maps,
             draw_canvas,
-        )
+        )?;
+        Ok(())
     }
 }
 
@@ -938,9 +939,11 @@ impl DmUi {
 /// overlays it shows, and it draws them the same way the DM window draws
 /// its panels. See [`crate::overlay`].
 ///
+/// Returns `false` when the surface gave no frame and nothing was shown.
+///
 /// # Errors
 ///
-/// Returns an error when the surface has no frame to draw into.
+/// Returns an error when the surface fails validation.
 pub fn render_pane(
     gpu: &Gpu,
     pane: &mut Pane,
@@ -949,7 +952,7 @@ pub fn render_pane(
     canvas: egui::Color32,
     draw_maps: impl FnOnce(&mut wgpu::RenderPass<'static>),
     draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
-) -> Result<()> {
+) -> Result<bool> {
     {
         let Paint {
             jobs,
@@ -968,7 +971,9 @@ pub fn render_pane(
             }
         }
 
-        if let Some(frame) = pane.acquire(&gpu.device)? {
+        let frame = pane.acquire(&gpu.device)?;
+        let shown = frame.is_some();
+        if let Some(frame) = frame {
             let view = frame
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
@@ -999,7 +1004,7 @@ pub fn render_pane(
         if repaint {
             pane.window.request_redraw();
         }
-        Ok(())
+        Ok(shown)
     }
 }
 

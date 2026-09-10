@@ -238,6 +238,8 @@ struct Running {
     settings: Settings,
     /// Whether the first DM frame has checked the window placement.
     placed: bool,
+    /// Whether something changed what the TV shows since its last frame.
+    tv_dirty: bool,
     /// Where the pointer is over the TV window, in pixels, or `None` when outside.
     tv_pointer: Option<(f32, f32)>,
     /// Folder of the open scene; every map path is a name inside it.
@@ -343,6 +345,8 @@ impl Running {
                 paper_dark: config.paper_dark.clone(),
             },
             placed: false,
+            // The first frame owes the players the scene the DM opened.
+            tv_dirty: true,
             tv_pointer: None,
             scene_dir,
             scenes_dir: config.scenes_dir.clone(),
@@ -373,15 +377,15 @@ impl Running {
         let pane = if is_dm { &mut self.dm } else { &mut self.tv };
         match event {
             WindowEvent::Resized(size) => {
-                pane.resize(&self.gpu.device, size.width, size.height);
-                // The TV box on the DM screen has the shape of the TV, so a
-                // TV that changes size changes what the DM must draw.
-                if !is_dm {
+                let resized = pane.resize(&self.gpu.device, size.width, size.height);
+                // The TV box on the DM screen has the shape of the TV. A TV
+                // that takes a new size changes what the DM must draw. An
+                // event that leaves the surface alone changes nothing.
+                if resized && !is_dm {
                     self.dm.window.request_redraw();
+                    self.tv_dirty = true;
                 }
             }
-            // The window manager places a new window where it likes, so check
-            // after every move that the DM window is not on the TV display.
             // The window manager places a new window where it likes, so check
             // after every move that the DM window is not on the TV display.
             // Swap mode checks only on demand: a swap makes the window manager
@@ -390,66 +394,103 @@ impl Running {
                 move_dm_off_tv(&self.dm.window, &self.displays, self.settings.tv_display);
             }
             WindowEvent::RedrawRequested if is_dm => return self.redraw_dm(),
-            WindowEvent::RedrawRequested => {
-                let viewport = (pane.config.width, pane.config.height);
-                let (device, queue) = (&self.gpu.device, &self.gpu.queue);
-                let gpu = &self.gpu;
-                let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
-                let tv_camera = self.scene.tv_box.camera(viewport);
-                // The TV draws what it shows, and every map at full strength.
-                let shown: Vec<(&Asset, f32)> = draw_order(&self.scene, Audience::Tv)
-                    .into_iter()
-                    .map(|asset| (asset, maps::FULL_STRENGTH))
-                    .collect();
-                // The strokes draw over every map and over the grid, and
-                // what the DM has under their hand draws with them.
-                let mut ink = scene::ink_order(&self.scene, Audience::Tv);
-                if let Some(live) = self.live.as_ref() {
-                    ink.push(live);
-                }
-                let map_layer = &mut self.map_layer;
-                let grid_layer = &self.grid_layer;
-                let ink_layer = &mut self.ink_layer;
-                let mode = self.settings.theme;
-                let paper = self.settings.paper();
-                let line = paper.line(mode, pane.window.scale_factor() as f32);
-                let canvas = paper.canvas(mode);
-                // A clone of the handle, because the pane goes into the
-                // call that draws it.
-                let beneath = pane.beneath.view().clone();
-                self.overlay.render(
-                    &self.gpu,
-                    pane,
-                    &ink,
-                    &tv_camera,
-                    mode,
-                    canvas,
-                    |pass| {
-                        map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
-                    },
-                    |pass| {
-                        // DESIGN.md 5.1: one grid covers the canvas and it
-                        // lies over every map, on both screens. The pass
-                        // carries the maps to the window with it.
-                        grid_layer.draw(gpu, pass, &beneath, &tv_camera, viewport, line);
-                        ink_layer.draw(device, queue, pass, &ink, &tv_camera, viewport);
-                        if let Some(center) = tv_pointer {
-                            pointer.draw(queue, pass, center, viewport);
-                        }
-                    },
-                )?;
-            }
+            // The desktop still asks for a TV frame of its own, such as after
+            // it uncovers the window. The flag holds that ask until the
+            // batch of events ends, so the TV has one draw site.
+            WindowEvent::RedrawRequested => self.tv_dirty = true,
             WindowEvent::CursorMoved { position, .. } if !is_dm => {
                 self.tv_pointer = Some((position.x as f32, position.y as f32));
-                self.tv.window.request_redraw();
+                self.tv_dirty = true;
             }
             WindowEvent::CursorLeft { .. } if !is_dm => {
                 self.tv_pointer = None;
-                self.tv.window.request_redraw();
+                self.tv_dirty = true;
             }
             _ => {}
         }
         Ok(Outcome::default())
+    }
+
+    /// Draws the TV when something changed what it shows.
+    ///
+    /// Windows makes a `WM_PAINT` only when the message queue runs dry. It
+    /// gives that frame to the window in front. A drag holds the DM window
+    /// in front and asks for a frame every turn. A redraw request for the
+    /// TV therefore waits for the next click on it. The TV draws here
+    /// instead, and the click is no longer necessary.
+    ///
+    /// The caller runs this once for each batch of events. A fast pointer
+    /// over the TV thus makes one frame and does not fill the queue.
+    ///
+    /// The flag stays up when the surface has nothing to show. The window
+    /// is behind another one, and the next frame carries the change.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the GPU cannot draw the frame.
+    fn flush_tv(&mut self) -> Result<()> {
+        if self.tv_dirty && self.draw_tv()? {
+            self.tv_dirty = false;
+        }
+        Ok(())
+    }
+
+    /// Draws one TV frame: the maps, the grid, the strokes and the pointer.
+    ///
+    /// Returns `false` when the surface gave no frame and nothing was shown.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the GPU cannot draw the frame.
+    fn draw_tv(&mut self) -> Result<bool> {
+        let pane = &mut self.tv;
+        let viewport = (pane.config.width, pane.config.height);
+        let (device, queue) = (&self.gpu.device, &self.gpu.queue);
+        let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
+        let tv_camera = self.scene.tv_box.camera(viewport);
+        // The TV draws what it shows, and every map at full strength.
+        let shown: Vec<(&Asset, f32)> = draw_order(&self.scene, Audience::Tv)
+            .into_iter()
+            .map(|asset| (asset, maps::FULL_STRENGTH))
+            .collect();
+        // The strokes draw over every map and over the grid, and what the
+        // DM has under their hand draws with them.
+        let mut ink = scene::ink_order(&self.scene, Audience::Tv);
+        if let Some(live) = self.live.as_ref() {
+            ink.push(live);
+        }
+        let map_layer = &mut self.map_layer;
+        let grid_layer = &self.grid_layer;
+        let ink_layer = &mut self.ink_layer;
+        let gpu = &self.gpu;
+        let mode = self.settings.theme;
+        let paper = self.settings.paper();
+        let line = paper.line(mode, pane.window.scale_factor() as f32);
+        let canvas = paper.canvas(mode);
+        // A clone of the handle, because the pane goes into the call that
+        // draws it.
+        let beneath = pane.beneath.view().clone();
+        self.overlay.render(
+            gpu,
+            pane,
+            &ink,
+            &tv_camera,
+            mode,
+            canvas,
+            |pass| {
+                map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
+            },
+            |pass| {
+                // DESIGN.md 5.1: one grid covers the canvas and it lies over
+                // every map, on both screens. The pass carries the maps to
+                // the window with it.
+                grid_layer.draw(gpu, pass, &beneath, &tv_camera, viewport, line);
+                ink_layer.draw(device, queue, pass, &ink, &tv_camera, viewport);
+                if let Some(center) = tv_pointer {
+                    pointer.draw(queue, pass, center, viewport);
+                }
+            },
+        )
     }
 
     /// Adds a map file at the middle of the DM view.
@@ -504,7 +545,9 @@ impl Running {
                 Ok(decoded) => {
                     self.map_layer
                         .upload(&self.gpu.device, &self.gpu.queue, stored, &decoded);
-                    self.tv.window.request_redraw();
+                    // A new image belongs on both screens.
+                    self.dm.window.request_redraw();
+                    self.tv_dirty = true;
                 }
                 Err(message) => eprintln!("{}: {message}", file.display()),
             }
@@ -513,7 +556,6 @@ impl Running {
 
     /// Runs a DM frame. Returns what the program must do next.
     fn redraw_dm(&mut self) -> Result<Outcome> {
-        self.upload_loaded_images();
         let before = self.settings.clone();
         let map_layer = &self.map_layer;
         let output = self.ui.run(
@@ -583,7 +625,7 @@ impl Running {
             },
         )?;
         if output.edited || drawing {
-            self.tv.window.request_redraw();
+            self.tv_dirty = true;
         }
         self.active_group = output.active_group;
         let added = output.add_map && self.pick_map_file();
@@ -633,6 +675,9 @@ impl Running {
     /// new TV window still needs `place_tv`.
     fn swap_roles(&mut self, target: usize) {
         std::mem::swap(&mut self.dm, &mut self.tv);
+        // The new TV window last showed the DM chrome, so it owes the
+        // players a frame of the scene.
+        self.tv_dirty = true;
         self.dm.window.set_title("dmap");
         self.dm.window.set_fullscreen(None);
         self.dm.window.set_decorations(true);
@@ -660,7 +705,7 @@ impl Running {
         self.reload_images();
         self.dm.window.set_title(&window_title(&self.scene_dir));
         self.dm.window.request_redraw();
-        self.tv.window.request_redraw();
+        self.tv_dirty = true;
     }
 
     /// Asks the loader for every image of the open scene again.
@@ -1034,6 +1079,28 @@ impl ApplicationHandler for App {
         let result = self.handle_event(&mut running, window_id, &event);
         self.running = Some(running);
         if let Err(error) = result {
+            self.error = Some(error);
+            event_loop.exit();
+        }
+    }
+
+    /// Takes the loaded images and draws the TV, once for each batch.
+    ///
+    /// Every path that marks the TV runs before this call. One drain here
+    /// therefore puts the TV at most one batch behind the DM. The loader
+    /// wakes the loop through whichever window it holds, so the images
+    /// come off the queue here as well.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // A window that closes takes its surface with it, and the error
+        // that ends the loop is already told.
+        if event_loop.exiting() {
+            return;
+        }
+        let Some(running) = self.running.as_mut() else {
+            return;
+        };
+        running.upload_loaded_images();
+        if let Err(error) = running.flush_tv() {
             self.error = Some(error);
             event_loop.exit();
         }
