@@ -199,6 +199,8 @@ struct Running {
     settings: Settings,
     /// Whether the first DM frame has checked the window placement.
     placed: bool,
+    /// Whether something changed what the TV shows since its last frame.
+    tv_dirty: bool,
     /// Where the pointer is over the TV window, in pixels, or `None` when outside.
     tv_pointer: Option<(f32, f32)>,
     /// Folder of the open scene; every map path is a name inside it.
@@ -274,6 +276,7 @@ impl Running {
                 ui_scale: crate::theme::clamp_scale(config.ui_scale),
             },
             placed: false,
+            tv_dirty: false,
             tv_pointer: None,
             scene_dir,
             scenes_dir: config.scenes_dir.clone(),
@@ -304,6 +307,7 @@ impl Running {
                 // TV that changes size changes what the DM must draw.
                 if !is_dm {
                     self.dm.window.request_redraw();
+                    self.tv_dirty = true;
                 }
             }
             // The window manager places a new window where it likes, so check
@@ -316,42 +320,61 @@ impl Running {
                 move_dm_off_tv(&self.dm.window, &self.displays, self.settings.tv_display);
             }
             WindowEvent::RedrawRequested if is_dm => return self.redraw_dm(),
-            WindowEvent::RedrawRequested => {
-                let viewport = (pane.config.width, pane.config.height);
-                let (device, queue) = (&self.gpu.device, &self.gpu.queue);
-                let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
-                let canvas = self.settings.theme.tokens().canvas;
-                let tv_camera = self.scene.tv_box.camera(viewport);
-                // The TV draws what it shows, and every map at full strength.
-                let shown: Vec<(&Asset, f32)> = draw_order(&self.scene, Audience::Tv)
-                    .into_iter()
-                    .map(|asset| (asset, maps::FULL_STRENGTH))
-                    .collect();
-                let map_layer = &mut self.map_layer;
-                let grid_layer = &self.grid_layer;
-                let line = self.settings.theme.tokens().grid_line();
-                let width = pane.window.scale_factor() as f32;
-                self.gpu.clear(pane, color::linear_token(canvas), |pass| {
-                    map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
-                    // DESIGN.md 5.1: one grid covers the canvas and it
-                    // lies over every map, on both screens.
-                    grid_layer.draw(queue, pass, &tv_camera, viewport, line, width);
-                    if let Some(center) = tv_pointer {
-                        pointer.draw(queue, pass, center, viewport);
-                    }
-                })?;
-            }
+            // The desktop still asks for a TV frame of its own, such as after
+            // it uncovers the window.
+            WindowEvent::RedrawRequested => self.draw_tv()?,
             WindowEvent::CursorMoved { position, .. } if !is_dm => {
                 self.tv_pointer = Some((position.x as f32, position.y as f32));
-                self.tv.window.request_redraw();
+                self.tv_dirty = true;
             }
             WindowEvent::CursorLeft { .. } if !is_dm => {
                 self.tv_pointer = None;
-                self.tv.window.request_redraw();
+                self.tv_dirty = true;
             }
             _ => {}
         }
         Ok(Outcome::default())
+    }
+
+    /// Draws the TV when something changed what it shows.
+    ///
+    /// Windows makes a `WM_PAINT` only when the message queue runs dry, and
+    /// it gives that frame to the window in front. A drag holds the DM window
+    /// in front and asks for a frame every turn, so a redraw request for the
+    /// TV waited for the next click on it. The TV is drawn here instead.
+    fn flush_tv(&mut self) -> Result<()> {
+        if std::mem::take(&mut self.tv_dirty) {
+            self.draw_tv()?;
+        }
+        Ok(())
+    }
+
+    /// Draws one TV frame: the maps the players see, the grid and the pointer.
+    fn draw_tv(&mut self) -> Result<()> {
+        let pane = &mut self.tv;
+        let viewport = (pane.config.width, pane.config.height);
+        let (device, queue) = (&self.gpu.device, &self.gpu.queue);
+        let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
+        let canvas = self.settings.theme.tokens().canvas;
+        let tv_camera = self.scene.tv_box.camera(viewport);
+        // The TV draws what it shows, and every map at full strength.
+        let shown: Vec<(&Asset, f32)> = draw_order(&self.scene, Audience::Tv)
+            .into_iter()
+            .map(|asset| (asset, maps::FULL_STRENGTH))
+            .collect();
+        let map_layer = &mut self.map_layer;
+        let grid_layer = &self.grid_layer;
+        let line = self.settings.theme.tokens().grid_line();
+        let width = pane.window.scale_factor() as f32;
+        self.gpu.clear(pane, color::linear_token(canvas), |pass| {
+            map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
+            // DESIGN.md 5.1: one grid covers the canvas and it lies over
+            // every map, on both screens.
+            grid_layer.draw(queue, pass, &tv_camera, viewport, line, width);
+            if let Some(center) = tv_pointer {
+                pointer.draw(queue, pass, center, viewport);
+            }
+        })
     }
 
     /// Adds a map file at the middle of the DM view.
@@ -398,7 +421,7 @@ impl Running {
                 Ok(decoded) => {
                     self.map_layer
                         .upload(&self.gpu.device, &self.gpu.queue, stored, &decoded);
-                    self.tv.window.request_redraw();
+                    self.tv_dirty = true;
                 }
                 Err(message) => eprintln!("{}: {message}", file.display()),
             }
@@ -456,7 +479,7 @@ impl Running {
             },
         )?;
         if output.edited {
-            self.tv.window.request_redraw();
+            self.tv_dirty = true;
         }
         self.active_group = output.active_group;
         let added = output.add_map && self.pick_map_file();
@@ -531,7 +554,7 @@ impl Running {
         self.reload_images();
         self.dm.window.set_title(&window_title(&self.scene_dir));
         self.dm.window.request_redraw();
-        self.tv.window.request_redraw();
+        self.tv_dirty = true;
     }
 
     /// Asks the loader for every image of the open scene again.
@@ -718,7 +741,9 @@ impl App {
             };
             running.dm.window.request_redraw();
         }
-        Ok(())
+        // Every path that marks the TV runs inside this call, so one drain
+        // here puts the TV at most one frame behind the DM.
+        running.flush_tv()
     }
 
     /// Does what the scenes dialog asked for.
