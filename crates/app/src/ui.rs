@@ -844,7 +844,12 @@ impl DmUi {
         self.settle_history(&ctx, frame.history);
         // Save once a drag is over, not on every frame of it.
         self.dirty |= edited;
-        let save = self.dirty && self.select.drag.is_none() && self.table.drag.is_none();
+        // A rub of the eraser writes the scene on every frame it cuts,
+        // unless the save waits for the hand to come off it.
+        let save = self.dirty
+            && self.select.drag.is_none()
+            && self.table.drag.is_none()
+            && !self.draw.busy();
         if save {
             self.dirty = false;
         }
@@ -3541,7 +3546,21 @@ fn draw_tool(
     let (_, view, pointer) = canvas_area(ui, frame.camera, viewport, false, zoom_goes_to);
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     let at = pointer.pos.map(|pos| view.to_world(pos));
-    let Some(ink) = frame.settings.ink_nib.ink() else {
+    let nib = frame.settings.ink_nib;
+    // A DM who picks another square in the middle of a gesture leaves the
+    // last one behind. Without this the stroke stands under their hand for
+    // ever: it draws on both screens, and the history waits on a hand that
+    // has let go. Issue #12.
+    if draw
+        .live
+        .as_ref()
+        .is_some_and(|live| nib.ink() != Some(live.ink))
+    {
+        draw.live = None;
+        draw.spanning = false;
+        draw.pulled = false;
+    }
+    let Some(ink) = nib.ink() else {
         return erase(draw, frame, at, pointer);
     };
     // A shape starts on a crossing of the grid, because a spell lands on
@@ -3606,7 +3625,9 @@ fn draw_tool(
     if let (true, true, Some(at)) = (pointer.pressed(), pointer.hovered, at) {
         frame.history.settle();
         draw.live = Some(Stroke {
-            id: frame.scene.next_id(),
+            // The name comes at the end, in `join_scene`, because a map
+            // the DM adds while they draw would take the same one.
+            id: ROOT_ID,
             shown: crate::scene::Shown::default(),
             ink,
             points: vec![if snap { on_grid(at) } else { at }],
@@ -3654,15 +3675,27 @@ fn keep(live: Option<Stroke>, frame: &mut Frame<'_>) -> bool {
             return false;
         }
     }
-    let name = live.ink.name().to_owned();
-    let into = crate::scene::ink_group(frame.scene, text::panel_objects_drawings().to_owned());
-    let Some(change) = reshape(frame.scene, Deed::Draw, name, |scene| {
-        crate::scene::push_into(scene, into, Node::Stroke(live));
-    }) else {
+    let Some(change) = join_scene(frame.scene, live) else {
         return false;
     };
     frame.history.kept(change);
     true
+}
+
+/// Puts a finished stroke in the group the Draw view fills, as one change.
+///
+/// The group is made inside the change and not before it, or the first
+/// stroke of a scene would leave the group behind when the DM takes that
+/// stroke back. The stroke takes its name here as well, so a map added
+/// while the DM drew cannot have taken the same one. Issue #12.
+fn join_scene(scene: &mut Scene, live: Stroke) -> Option<Restructure> {
+    let name = live.ink.name().to_owned();
+    reshape(scene, Deed::Draw, name, |scene| {
+        let into = crate::scene::ink_group(scene, text::panel_objects_drawings().to_owned());
+        let mut live = live;
+        live.id = scene.next_id();
+        crate::scene::push_into(scene, into, Node::Stroke(live));
+    })
 }
 
 /// How wide the pointer makes a cone or a beam, in cells.
@@ -5315,7 +5348,8 @@ fn draw_selection(painter: &egui::Painter, handles: &[egui::Pos2], tokens: Token
 
 #[cfg(test)]
 mod tests {
-    use super::{ROW_HEIGHT, Settings, bite, row_parts, theme};
+    use super::{ROW_HEIGHT, Settings, bite, join_scene, row_parts, theme};
+    use crate::command::Command as _;
     use crate::scene::{Group, Node, Scene, Shown};
     use crate::stroke::{Ink, Rule, Stroke};
 
@@ -5360,6 +5394,37 @@ mod tests {
         let mut found = Vec::new();
         walk(&scene.root.children, 0, &mut found);
         found
+    }
+
+    #[test]
+    fn taking_back_the_first_stroke_takes_its_group_with_it() {
+        let mut scene = Scene::default();
+        let mark = stroke(0, Ink::Pen, &[(0.0, 0.0), (1.0, 0.0)]);
+        let change = join_scene(&mut scene, mark).expect("the stroke joins the tree");
+        assert_eq!(
+            inside(&scene),
+            vec![(0, "Drawings".to_owned()), (1, "Pen".to_owned())]
+        );
+        // The group was made inside the change, so the change takes it
+        // back as well and no empty group stands behind.
+        change.revert(&mut scene);
+        assert!(inside(&scene).is_empty(), "{:?}", inside(&scene));
+    }
+
+    #[test]
+    fn a_stroke_takes_its_name_where_it_joins_the_tree() {
+        let mut scene = drawn(vec![stroke(9000, Ink::Pen, &[(0.0, 0.0), (1.0, 0.0)])]);
+        // The stroke comes in with the name a press would have left on
+        // it, which is no name at all.
+        let mark = stroke(crate::scene::ROOT_ID, Ink::Line, &[(2.0, 2.0), (3.0, 3.0)]);
+        join_scene(&mut scene, mark).expect("the stroke joins the tree");
+        let names: Vec<u64> = crate::scene::ink_order(&scene, crate::scene::Audience::Dm)
+            .iter()
+            .map(|stroke| stroke.id)
+            .collect();
+        assert_eq!(names.len(), 2);
+        assert_ne!(names[0], names[1], "two strokes took one name");
+        assert!(names.iter().all(|id| *id != crate::scene::ROOT_ID));
     }
 
     #[test]
