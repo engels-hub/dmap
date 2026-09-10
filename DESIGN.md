@@ -65,7 +65,7 @@ Caution: a scale under 100 % takes a button under the 24 px floor of section 6. 
 - Set: Lucide (ISC license). Keep the license text in the repository.
 - Stroke 2 px on a 24 px grid. Round caps and joins. No fills. A star that is set is the one glyph with a fill.
 - Sizes: 18 px in the toolbar, in dialog navigation, in a close button and for the select chevron, 16 px in a panel, a menu and a list row, 14 px for a list twist and for the checkbox check, 13 px in a path line.
-- Glyphs in the toolbar: `mouse-pointer` (Select), `pencil` (Draw), `ruler` (Edit), `monitor` (Table), `layers` (Scenes), `plus` (Add map), `sliders-horizontal` (Settings).
+- Glyphs in the toolbar: `mouse-pointer` (Select), `pencil` (Draw), `drafting-compass` (Edit), `monitor` (Table), `layers` (Scenes), `plus` (Add map), `sliders-horizontal` (Settings).
 - Glyphs on the second bar of the Edit view: `brick-wall` (Walls), `door-open` (Doors), `sun` (Light), `cloud-fog` (Fog).
 - Glyphs in a dialog: `monitor` (Table tab), `grid-3x3` (Grid tab), `sun` (Light tab), `keyboard` (Shortcuts tab), `info` (About tab), `x` (close), `chevron-down` (select), `check` (checkbox), `import` (Import).
 - Glyphs in a panel or a menu: `folder`, `image`, `film`, `eye`, `eye-off`, `monitor-off`, `star`, `search`, `chevron-right`, `arrow-up`, `arrow-down`, `rotate-cw`, `flip-horizontal-2`, `flip-vertical-2`, `ruler`, `trash`, `minus` (line), `square`, `circle`, `eraser`, `play`, `pause`, `undo`, `triangle-alert`.
@@ -194,7 +194,9 @@ Rows: Zoom in percent, with the helper "100 % is true size on the TV"; Move, wit
 
 ### 8.3 Draw panel, in the Draw view
 
-A row of five 28 px squares holds the pen, the line, the rectangle, the ellipse and the eraser. The squares share a 1 px `rule` border and overlap by 1 px. The chosen square takes the segmented control treatment. Rows below: Color as a swatch, Width as a slider.
+A row of six 28 px squares holds the pen, the line, the rectangle, the ellipse, the eraser and the ruler. The squares share a 1 px `rule` border and overlap by 1 px. The chosen square takes the segmented control treatment. Rows below: Color as a swatch, Width as a slider. The ruler takes the same color and the same width as a stroke.
+
+The ruler measures a distance. A drag draws a line from the press to the pointer, and a label at the pointer gives the distance. A click in the drag sets a waypoint, so the line bends. `Shift` as the drag ends keeps the measure: the line becomes an asset in the scene, with a row in the Objects list and a place in the project file. A plain end clears the line.
 
 ### 8.4 Objects list
 
@@ -204,7 +206,7 @@ The list shows the scene as a tree of groups and assets. It docks on the left.
 
 - Each row is 26 px high. A child row indents 14 px from its parent.
 - A twist glyph 14 px opens and closes a group. A group starts closed.
-- The icon says what the row is: `folder` for a group, `image` for a picture, `film` for a video.
+- The icon says what the row is: `folder` for a group, `image` for a picture, `film` for a video, `ruler` for a kept measure.
 - The name takes the width that is left. A name too long for its row ends in an ellipsis, and the whole name comes up under the pointer.
 - The right of the row holds the star, then two switches, each 16 px in a 22 px square: `eye` for the DM screen and `monitor` for the TV. An off switch takes the `eye-off` or `monitor-off` glyph in `mute`.
 - The root group is always visible and carries no switches.
