@@ -789,6 +789,9 @@ impl DmUi {
         self.install(&ctx, frame.settings);
         let mut add_map = false;
         let mut edited = false;
+        // Whether the DM changed a setting. It belongs to the config file
+        // and never to the scene. See the settings dialog below.
+        let mut settings_edited = false;
         let mut scene = None;
         let select = &mut self.select;
         let draw = &mut self.draw;
@@ -845,7 +848,12 @@ impl DmUi {
             // A dialog over the canvas takes the keyboard too. egui holds
             // the pointer back on its own, but `R` and the arrow keys would
             // still reach the map behind it.
-            edited |= settings_dialog(ui.ctx(), &mut frame, dialog, tokens);
+            //
+            // A setting is not a change to the scene, and it stays out of
+            // `edited` for that reason. The scene file grows with the
+            // scene, and a drag of a slider in Settings would write every
+            // stroke of it again for each frame of the drag. Issue #66.
+            settings_edited = settings_dialog(ui.ctx(), &mut frame, dialog, tokens);
             scene = scenes_dialog(ui, scenes, &frame, tokens);
         });
         let egui::FullOutput {
@@ -881,7 +889,9 @@ impl DmUi {
         UiOutput {
             live: self.draw.live.clone(),
             add_map,
-            edited,
+            // Both screens draw the canvas, so a setting that changes how
+            // it looks reaches the TV as a change to the scene does.
+            edited: edited || settings_edited,
             save,
             scene,
             active_group: self.tree.active,
@@ -2459,8 +2469,8 @@ fn grid_tab(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     dialog_row(ui, text::dialog_settings_canvas(), |ui| {
         let mut color = rgb_of(paper.canvas(mode));
         ui.horizontal(|ui| {
-            if widget::color_swatch(ui, &mut color) {
-                paper.canvas = Some([color[0], color[1], color[2]]);
+            if widget::color_swatch_rgb(ui, &mut color) {
+                paper.canvas = Some(color);
                 edited = true;
             }
             if reset(ui, paper.canvas.is_some()) {
@@ -2487,15 +2497,14 @@ fn grid_tab(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     if !paper.automatic {
         dialog_row(ui, text::dialog_settings_line_color(), |ui| {
             let token = mode.tokens().grid.0;
-            let shown = paper.line.unwrap_or([
+            let mut color = paper.line.unwrap_or([
                 (token >> 16) as u8,
                 (token >> 8) as u8,
                 u8::try_from(token & 0xff).unwrap_or(u8::MAX),
             ]);
-            let mut color = [shown[0], shown[1], shown[2], u8::MAX];
             ui.horizontal(|ui| {
-                if widget::color_swatch(ui, &mut color) {
-                    paper.line = Some([color[0], color[1], color[2]]);
+                if widget::color_swatch_rgb(ui, &mut color) {
+                    paper.line = Some(color);
                     edited = true;
                 }
                 if reset(ui, paper.line.is_some()) {
@@ -2546,9 +2555,9 @@ fn reset(ui: &mut egui::Ui, live: bool) -> bool {
     .inner
 }
 
-/// The red, green and blue of a color, with a full alpha.
-fn rgb_of(color: egui::Color32) -> [u8; 4] {
-    [color.r(), color.g(), color.b(), u8::MAX]
+/// The red, green and blue of a color, without its alpha.
+fn rgb_of(color: egui::Color32) -> [u8; 3] {
+    [color.r(), color.g(), color.b()]
 }
 
 /// The Language row of the Table tab. DESIGN.md 9.1.

@@ -496,6 +496,27 @@ pub fn color_swatch(ui: &mut Ui, color: &mut [u8; 4]) -> bool {
     true
 }
 
+/// A swatch that picks a color and takes no alpha with it. DESIGN.md 9.2.
+///
+/// The canvas background and the grid line are as solid as the row beside
+/// them says, so an alpha in the popover would be a control that changes
+/// nothing. Issue #66.
+///
+/// Returns `true` when the DM changed the color.
+pub fn color_swatch_rgb(ui: &mut Ui, color: &mut [u8; 3]) -> bool {
+    let mut picked = egui::Color32::from_rgb(color[0], color[1], color[2]);
+    let response = egui::color_picker::color_edit_button_srgba(
+        ui,
+        &mut picked,
+        egui::color_picker::Alpha::Opaque,
+    );
+    if !response.changed() {
+        return false;
+    }
+    *color = [picked.r(), picked.g(), picked.b()];
+    true
+}
+
 /// The faintest a stroke may draw, out of 255.
 ///
 /// Ten is a wash the DM can still see well enough to pick the stroke up

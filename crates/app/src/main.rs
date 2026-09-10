@@ -207,18 +207,29 @@ fn load_history(dir: &Path) -> History {
 }
 
 /// What one event left for the program to do.
+///
+/// The two writes stand apart because a scene file grows with the scene
+/// and a config file does not. A DM who drags a slider in Settings would
+/// otherwise write every stroke of the scene again for each frame of the
+/// drag. Issue #66.
 #[derive(Debug, Default)]
 struct Outcome {
-    /// Write the config and the scene.
-    save: bool,
+    /// Write the scene and the changes beside it.
+    scene_changed: bool,
+    /// Write the config.
+    config_changed: bool,
     /// What the DM asked the scenes dialog to do.
     scene: Option<SceneCommand>,
 }
 
 impl Outcome {
-    /// An outcome that only writes the files.
-    fn saving(save: bool) -> Self {
-        Self { save, scene: None }
+    /// An outcome that only writes the scene.
+    fn saving(scene_changed: bool) -> Self {
+        Self {
+            scene_changed,
+            config_changed: scene_changed,
+            scene: None,
+        }
     }
 }
 
@@ -655,7 +666,11 @@ impl Running {
             }
         }
         Ok(Outcome {
-            save: added || output.save || settings_changed,
+            scene_changed: added || output.save,
+            // The camera and the window of the DM go into the config as
+            // well, and neither asks for a write of its own. The way out
+            // of the program writes those.
+            config_changed: added || output.save || settings_changed,
             scene: output.scene,
         })
     }
@@ -949,6 +964,22 @@ fn fullscreen_on(displays: &[MonitorHandle], index: Option<usize>) -> Option<Ful
 }
 
 impl App {
+    /// Writes the files the outcome asks for.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a file cannot be written.
+    fn write(&self, running: &mut Running, outcome: &Outcome) -> Result<()> {
+        if outcome.scene_changed {
+            save_scene(&self.scene, &self.scene_dir)?;
+            save_history(&mut running.history, &self.scene_dir)?;
+        }
+        if outcome.config_changed {
+            save_config(&self.config)?;
+        }
+        Ok(())
+    }
+
     /// Handles one window event and does what it left behind.
     ///
     /// # Errors
@@ -961,16 +992,11 @@ impl App {
         event: &WindowEvent,
     ) -> Result<()> {
         let outcome = running.window_event(window_id, event)?;
-        if outcome.save {
+        if outcome.scene_changed || outcome.config_changed {
             running.update(&mut self.config, &mut self.scene);
             // A write that fails leaves the session alone. The DM keeps
             // working, and the message says what went wrong.
-            if let Err(error) = save(
-                &self.config,
-                &self.scene,
-                &mut running.history,
-                &self.scene_dir,
-            ) {
+            if let Err(error) = self.write(running, &outcome) {
                 eprintln!("{error:#}");
                 running.scene_error = format!("{error:#}");
             }
@@ -1081,6 +1107,11 @@ impl App {
         self.scene_dir.clone_from(&dir);
         self.config.last_scene = Some(self.config.remember(&dir));
         running.open_scene(dir, &self.scene, history);
+        // The camera in the config belongs to the scene the config names.
+        // A scene that leaves the canvas must not leave its camera behind
+        // for the next one, because a run that ends without a word would
+        // open the new scene where the old one stood. Issue #66.
+        self.config.camera = Some(running.camera);
         Ok(())
     }
 }
