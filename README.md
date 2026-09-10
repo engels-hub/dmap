@@ -148,6 +148,8 @@ Pick a view in the toolbar at the bottom of the window. The toolbar comes in two
 | Keep the measure | `Shift` as you let go. Without it the line goes |
 | Give up the measure | `Escape` |
 | Choose how a diagonal counts | Measure, in the panel: Euclidean, D&D 5e, Pathfinder or Manhattan |
+| Start a shape off the grid | Hold `Shift`, or turn "Start on the grid" off in the panel |
+| Change a stroke you drew | Pick it in the Select view or in the Objects list. Its panel holds the color, the width and the size |
 | Lay a burst | Drag from its middle to its edge |
 | Lay a cone | Drag from its point out to where it ends. It ends as wide as it is long |
 | Lay a beam | Drag for the length and let go, then drag again for the width |

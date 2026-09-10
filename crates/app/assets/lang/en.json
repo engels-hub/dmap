@@ -33,6 +33,9 @@
   "panel.box.frame": "Fit box",
   "panel.box.frame_button": "Show the whole box",
 
+  "panel.stroke.reach": "Reach",
+  "panel.stroke.across": "Across",
+  "unit.cells": "cells",
   "panel.picked.title": "Picked: {count}",
   "panel.picked.group": "Group",
   "panel.picked.close": "Close",
@@ -92,6 +95,7 @@
   "panel.draw.title": "Draw",
   "panel.draw.color": "Color",
   "panel.draw.effects": "Effects",
+  "panel.draw.snap": "Start on the grid",
   "panel.draw.width": "Width",
   "panel.draw.width_value": "{width} in",
   "ruler.rule": "Measure",

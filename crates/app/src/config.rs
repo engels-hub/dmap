@@ -73,6 +73,13 @@ pub struct Config {
     /// How a ruler counts its length. Issue #12.
     #[serde(default)]
     pub ink_rule: crate::stroke::Rule,
+    /// Whether a shape starts on a crossing of the grid.
+    ///
+    /// A spell lands on a cell, so this starts on. `Shift` holds it off
+    /// for one drag, and the ruler holds it off with `Alt`, which leaves
+    /// `Shift` free to keep the measure. Issue #12.
+    #[serde(default = "yes")]
+    pub ink_snap: bool,
 }
 
 impl Default for Config {
@@ -90,8 +97,14 @@ impl Default for Config {
             ink_width: default_ink_width(),
             ink_nib: crate::ui::Nib::default(),
             ink_rule: crate::stroke::Rule::default(),
+            ink_snap: yes(),
         }
     }
+}
+
+/// A setting that starts on.
+fn yes() -> bool {
+    true
 }
 
 /// The color a first run draws with: the accent red of DESIGN.md 2.
@@ -340,6 +353,7 @@ mod tests {
             ink_width: 0.25,
             ink_nib: crate::ui::Nib::Ellipse,
             ink_rule: crate::stroke::Rule::Fifth,
+            ink_snap: false,
         };
         assert_eq!(Config::from_json(&config.to_json()).unwrap(), config);
     }

@@ -11,7 +11,8 @@ use egui_winit::winit::{event::WindowEvent, monitor::MonitorHandle};
 use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::color;
 use crate::command::{
-    Deed, Grow, History, Note, Restructure, SetAssets, SetName, SetShown, SetTvBox, Turn, reshape,
+    Deed, Grow, History, Note, Restructure, SetAssets, SetName, SetShown, SetStrokes, SetTvBox,
+    Turn, reshape,
 };
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::icon;
@@ -150,6 +151,22 @@ const NIB_SQUARE: f32 = 28.0;
 
 /// How wide the width slider draws in the Draw panel, in points.
 const PANEL_SLIDER: f32 = 150.0;
+
+/// The least a shape may reach before it counts as one, in inches.
+///
+/// A press and a release on one spot is a click, not a drag, and the
+/// hand moves a little between the two. Issue #12.
+const MIN_SHAPE: f64 = 0.2;
+
+/// How far from a stroke a press still takes it, in inches.
+///
+/// A thin line is hard to hit exactly, so the press reaches a tenth of a
+/// cell past the edge of it.
+const PICK_REACH: f64 = 0.1;
+
+/// The shortest and the longest an area of effect may reach, in cells.
+const MIN_REACH: f64 = 0.5;
+const MAX_REACH: f64 = 200.0;
 
 /// The thinnest and the thickest a stroke may draw, in inches.
 ///
@@ -412,6 +429,8 @@ pub struct Settings {
     pub ink_nib: Nib,
     /// How a ruler counts its length.
     pub ink_rule: Rule,
+    /// Whether a shape starts on a crossing of the grid.
+    pub ink_snap: bool,
     /// What every size of DESIGN.md is multiplied by. DESIGN.md 3.1.
     pub ui_scale: f64,
 }
@@ -469,6 +488,11 @@ struct Select {
     note: String,
     drag: Option<Drag>,
     measure: Option<Measure>,
+    /// The stroke as it stood when the DM took hold of a field.
+    ///
+    /// A drag of a number runs over many frames, and every one of them
+    /// goes back to this one state, so the whole drag is one step.
+    opened_ink: Option<Stroke>,
     /// The map as it stood when the DM took hold of a field in the panel.
     ///
     /// A drag of a number runs over many frames, and every one of them
@@ -851,6 +875,7 @@ impl DmUi {
         }
         history.settle();
         self.select.opened = None;
+        self.select.opened_ink = None;
         self.table.opened = None;
     }
 
@@ -1914,6 +1939,11 @@ fn properties_panel(
             Some((id, Some(Node::Asset(asset)))) => {
                 Held::Map(id, asset.path.to_string_lossy().into_owned())
             }
+            // A stroke opens a panel of its own, so the DM changes what
+            // they drew after they drew it. Issue #12.
+            Some((id, Some(Node::Stroke(stroke)))) => {
+                Held::Stroke(id, stroke.ink.name().to_owned())
+            }
             // A group has no panel. Its name and its two switches sit on
             // its row, and it carries no size and no turn of its own, so a
             // panel over it would hold nothing the list does not say.
@@ -1942,6 +1972,7 @@ fn properties_panel(
             }
             Held::Draw => draw_properties(ui, frame.settings, tokens),
             Held::Map(id, _) => edited = map_properties(ui, *id, select, frame, tokens),
+            Held::Stroke(id, _) => edited = stroke_properties(ui, *id, select, frame),
         },
     );
     if let Some(after) = box_asked {
@@ -1959,6 +1990,8 @@ enum Held {
     TvBox,
     /// The pen, the shapes, the eraser and the ruler. DESIGN.md 8.3.
     Draw,
+    /// One stroke the DM drew, by name, with what it is called.
+    Stroke(NodeId, String),
     /// One map, by id, with the name of its file. DESIGN.md 8.1.
     Map(NodeId, String),
 }
@@ -1969,7 +2002,7 @@ impl Held {
         match self {
             Self::TvBox => text::panel_box_title(),
             Self::Draw => text::panel_draw_title(),
-            Self::Map(_, name) => name,
+            Self::Stroke(_, name) | Self::Map(_, name) => name,
         }
     }
 }
@@ -3414,6 +3447,10 @@ fn draw_properties(ui: &mut egui::Ui, settings: &mut Settings, tokens: Tokens) {
                 }
             });
     }
+    let mut snap = settings.ink_snap;
+    if widget::checkbox(ui, &mut snap, text::panel_draw_snap()).clicked() {
+        settings.ink_snap = snap;
+    }
     widget::row_label(ui, text::panel_draw_width());
     let mut width = settings.ink_width;
     let shown = text::panel_draw_width_value(format_args!("{width:.2}"));
@@ -3507,9 +3544,26 @@ fn draw_tool(
     let Some(ink) = frame.settings.ink_nib.ink() else {
         return erase(draw, frame, at, pointer);
     };
-    // The ruler lands on the grid unless the DM holds Alt, as a map does.
-    let snap = ink == Ink::Measure && !ui.input(|i| i.modifiers.alt);
-    let at = at.map(|at| if snap { on_grid(at) } else { at });
+    // A shape starts on a crossing of the grid, because a spell lands on
+    // a cell. `Shift` holds that off for one drag. The ruler takes `Alt`
+    // instead, because `Shift` there keeps the measure. Issue #12.
+    let off = ui.input(|i| {
+        if ink == Ink::Measure {
+            i.modifiers.alt
+        } else {
+            i.modifiers.shift
+        }
+    });
+    let snap = frame.settings.ink_snap != off && ink != Ink::Pen;
+    // A measure lands on the grid at both ends. Every other shape starts
+    // on it and reaches wherever the DM pulls.
+    let at = at.map(|at| {
+        if snap && ink == Ink::Measure {
+            on_grid(at)
+        } else {
+            at
+        }
+    });
     if ink == Ink::Measure {
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             draw.live = None;
@@ -3555,7 +3609,7 @@ fn draw_tool(
             id: frame.scene.next_id(),
             shown: crate::scene::Shown::default(),
             ink,
-            points: vec![at],
+            points: vec![if snap { on_grid(at) } else { at }],
             color: frame.settings.ink_color,
             width: frame.settings.ink_width,
             span: 0.0,
@@ -3590,8 +3644,15 @@ fn keep(live: Option<Stroke>, frame: &mut Frame<'_>) -> bool {
     let Some(live) = live else {
         return false;
     };
-    if live.points.len() < 2 && live.ink != Ink::Pen {
-        return false;
+    if live.ink != Ink::Pen {
+        // A twitch of the hand between the press and the release is not a
+        // shape. A shape has to reach at least a little way.
+        let (Some(from), Some(to)) = (live.points.first(), live.points.last()) else {
+            return false;
+        };
+        if (to.0 - from.0).hypot(to.1 - from.1) < MIN_SHAPE {
+            return false;
+        }
     }
     let name = live.ink.name().to_owned();
     let into = crate::scene::ink_group(frame.scene, text::panel_objects_drawings().to_owned());
@@ -3855,6 +3916,130 @@ fn grow(live: &mut Stroke, at: (f64, f64)) {
     // A shape stands between the press and the pointer.
     live.points.truncate(1);
     live.points.push(at);
+}
+
+/// The panel of one stroke: what it is drawn in, and how far it reaches.
+///
+/// The DM changes what they drew after they drew it, and every field
+/// goes through the history as one step. Issue #12.
+fn stroke_properties(
+    ui: &mut egui::Ui,
+    id: NodeId,
+    select: &mut Select,
+    frame: &mut Frame<'_>,
+) -> bool {
+    let Some(mark) = crate::scene::find(frame.scene, id)
+        .and_then(Node::stroke)
+        .cloned()
+    else {
+        return false;
+    };
+    let mut after = mark.clone();
+    let mut changed = false;
+    widget::row_label(ui, text::panel_draw_color());
+    let mut color = egui::Color32::from_rgba_unmultiplied(
+        mark.color[0],
+        mark.color[1],
+        mark.color[2],
+        mark.color[3],
+    );
+    if ui.color_edit_button_srgba(&mut color).changed() {
+        after.color = color.to_srgba_unmultiplied();
+        changed = true;
+    }
+    widget::row_label(ui, text::panel_draw_width());
+    let mut width = mark.width;
+    let shown = text::panel_draw_width_value(format_args!("{width:.2}"));
+    if widget::slider(
+        ui,
+        &mut width,
+        MIN_INK_WIDTH..=MAX_INK_WIDTH,
+        PANEL_SLIDER,
+        &shown,
+    )
+    .is_pointer_button_down_on()
+    {
+        after.width = width;
+        changed = true;
+    }
+    changed |= reach_row(ui, &mark, &mut after);
+    if mark.ink == Ink::Measure {
+        widget::row_label(ui, text::ruler_rule());
+        let field = widget::select_field(ui, mark.rule.name(), ui.available_width());
+        egui::Popup::menu(&field)
+            .gap(-1.0)
+            .width(ui.available_width())
+            .show(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for rule in Rule::all() {
+                    if widget::select_row(ui, rule.name(), rule == mark.rule).clicked() {
+                        after.rule = rule;
+                        changed = true;
+                    }
+                }
+            });
+    }
+    if !changed {
+        return false;
+    }
+    let before = select
+        .opened_ink
+        .clone()
+        .filter(|held| held.id == id)
+        .unwrap_or(mark);
+    select.opened_ink = Some(before.clone());
+    frame.history.hold(
+        frame.scene,
+        SetStrokes {
+            before: vec![before],
+            after: vec![after],
+        },
+    );
+    true
+}
+
+/// The rows that say how far an area of effect reaches. DESIGN.md 8.3.
+///
+/// A reach moves the far point along the line the shape already runs on,
+/// so the shape keeps its heading and takes a new size.
+fn reach_row(ui: &mut egui::Ui, mark: &Stroke, after: &mut Stroke) -> bool {
+    let Some(reach) = mark.ink.reach(&mark.points) else {
+        return false;
+    };
+    let mut changed = false;
+    widget::row_label(ui, text::panel_stroke_reach());
+    let mut cells = reach;
+    if widget::input(
+        ui,
+        &mut cells,
+        text::unit_cells(),
+        100.0,
+        MIN_REACH..=MAX_REACH,
+        0.5,
+    )
+    .changed()
+    {
+        after.points = mark.reached(cells);
+        changed = true;
+    }
+    if mark.ink.spans() {
+        widget::row_label(ui, text::panel_stroke_across());
+        let mut span = if mark.span > 0.0 { mark.span } else { 1.0 };
+        if widget::input(
+            ui,
+            &mut span,
+            text::unit_cells(),
+            100.0,
+            MIN_REACH..=MAX_REACH,
+            0.5,
+        )
+        .changed()
+        {
+            after.span = span;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// The properties of the selected map. DESIGN.md 8.1.
@@ -4560,20 +4745,23 @@ fn press(
         });
         return;
     }
-    // The box of a group takes the press first. Inside the box, the press
-    // goes on to the asset under the pointer.
-    let aimed = group_at(frame, view, pos).or_else(|| {
-        // The topmost asset under the pointer takes the press. The tree
-        // draws the bottom one first, so the search runs the other way.
-        crate::scene::assets(frame.scene)
-            .iter()
-            .rev()
-            .find(|asset| {
-                (frame.size_of)(&asset.path)
-                    .is_some_and(|size| hit_test(cursor, &asset.corners(size)))
-            })
-            .map(|asset| asset.id)
-    });
+    // The box of a group takes the press first, then a stroke, because a
+    // stroke draws over every map. Inside the box, the press goes on to
+    // the asset under the pointer.
+    let aimed = group_at(frame, view, pos)
+        .or_else(|| ink_at(frame, cursor))
+        .or_else(|| {
+            // The topmost asset under the pointer takes the press. The tree
+            // draws the bottom one first, so the search runs the other way.
+            crate::scene::assets(frame.scene)
+                .iter()
+                .rev()
+                .find(|asset| {
+                    (frame.size_of)(&asset.path)
+                        .is_some_and(|size| hit_test(cursor, &asset.corners(size)))
+                })
+                .map(|asset| asset.id)
+        });
     let Some(id) = aimed else {
         // A press on bare canvas starts a band that picks what it covers.
         if !add {
@@ -4592,6 +4780,18 @@ fn press(
         was: standing(frame.scene, &select.chosen),
         start_cursor: cursor,
     });
+}
+
+/// The stroke under the pointer, if the pointer is on one.
+///
+/// The strokes draw over the maps, and the topmost one takes the press,
+/// so the DM picks what they see. Issue #12.
+fn ink_at(frame: &Frame<'_>, cursor: (f64, f64)) -> Option<NodeId> {
+    crate::scene::ink_order(frame.scene, crate::scene::Audience::Dm)
+        .iter()
+        .rev()
+        .find(|stroke| stroke.touches(cursor, PICK_REACH))
+        .map(|stroke| stroke.id)
 }
 
 /// Every asset the DM holds, as it stands now.
@@ -5140,6 +5340,7 @@ mod tests {
             ink_width: 0.1,
             ink_nib: super::Nib::default(),
             ink_rule: crate::stroke::Rule::default(),
+            ink_snap: true,
             ui_scale: theme::DEFAULT_SCALE,
             tv_display: Some(1),
             swap_windows: false,

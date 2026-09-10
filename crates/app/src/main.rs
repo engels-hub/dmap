@@ -337,6 +337,7 @@ impl Running {
                 ink_width: config.ink_width,
                 ink_nib: config.ink_nib,
                 ink_rule: config.ink_rule,
+                ink_snap: config.ink_snap,
                 ui_scale: crate::theme::clamp_scale(config.ui_scale),
             },
             placed: false,
@@ -676,6 +677,7 @@ impl Running {
         config.ink_width = self.settings.ink_width;
         config.ink_nib = self.settings.ink_nib;
         config.ink_rule = self.settings.ink_rule;
+        config.ink_snap = self.settings.ink_snap;
         config.ui_scale = self.settings.ui_scale;
         scene.clone_from(&self.scene);
     }

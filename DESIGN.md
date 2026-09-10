@@ -214,7 +214,9 @@ A row of six 28 px squares holds the pen, the line, the rectangle, the ellipse, 
 
 Under it stands the label Effects and a second row of three squares: the burst, the cone and the beam. They lie over the map instead of marking it, and a row of nine squares outgrows the panel.
 
-Rows below: Color as a swatch, Width as a slider, and Measure as a select when the ruler is on. Every one of these is a choice the program keeps, so the next stroke draws as the last one did.
+Rows below: Color as a swatch, the checkbox "Start on the grid", Width as a slider, and Measure as a select when the ruler is on. Every one of these is a choice the program keeps, so the next stroke draws as the last one did.
+
+A shape starts on a crossing of the grid while that checkbox is on, because a spell lands on a cell. `Shift` holds the snap off for one drag. The ruler takes `Alt` for that instead, because `Shift` there keeps the measure. A free line from the pen never snaps: it follows the hand.
 
 The ruler measures a distance. A drag draws a line from the press to the pointer, and a label at the pointer gives the distance in cells and in feet. The second button bends the ruler where the pointer stands, so a measure walks a corridor. `Shift` as the drag ends keeps the measure: the line becomes a stroke in the scene, with a row in the Objects list and a place in the project file. A plain end clears the line, and `Escape` gives it up. Measure says how the ruler counts a diagonal: Euclidean, D&D 5e, Pathfinder or Manhattan.
 
@@ -223,6 +225,12 @@ An area of effect fills its shape at a quarter of the alpha the DM picked, and i
 A burst takes one drag, from its middle to its edge. A cone takes one as well, from its point out to where it ends: it ends as wide as it is long, on a straight edge. D&D 5e, chapter 10. A beam takes two drags, one for its length and one for its width. The second begins after the first ends, so no gesture asks for a button and a move at the same time.
 
 The eraser takes a bite out of every stroke it passes over, and it bites its way along the path the pointer took. What is left of a shape is a free line: a box with a bite out of it is no longer a box.
+
+**The panel of a stroke, in the Select view**
+
+A stroke the DM picked opens a panel of its own, headed with what it is: Pen, Line, Rectangle, Ellipse, Ruler, Burst, Cone or Beam. Rows: Color as a swatch, Width as a slider, Reach in cells for an area of effect, Across in cells for a beam, and Measure as a select for a ruler. A new reach moves the far point along the line the shape already runs on, so the shape keeps its heading.
+
+A press on the canvas takes the stroke under the pointer before it takes a map, because a stroke draws over every map.
 
 ### 8.4 Objects list
 

@@ -22,6 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::scene::{Asset, Group, Node, NodeId, Placed, Scene, Shown};
+use crate::stroke::Stroke;
 use crate::text;
 use crate::tvbox::TvBox;
 
@@ -360,6 +361,45 @@ fn write_placed(scene: &mut Scene, starts: &[Placed]) {
     }
 }
 
+/// Whole strokes: a color, a width, a reach, or the rule of a measure.
+///
+/// The DM changes what they drew in the panel of the stroke, and one
+/// change carries every field of it. Issue #12.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SetStrokes {
+    /// The strokes as they stood, one for each stroke in `after`.
+    pub before: Vec<Stroke>,
+    /// The strokes as the DM wants them.
+    pub after: Vec<Stroke>,
+}
+
+impl Command for SetStrokes {
+    fn apply(&self, scene: &mut Scene) {
+        write_strokes(scene, &self.after);
+    }
+
+    fn revert(&self, scene: &mut Scene) {
+        write_strokes(scene, &self.before);
+    }
+
+    fn note(&self) -> Note {
+        let subject = self
+            .after
+            .first()
+            .map(|stroke| stroke.ink.name().to_owned())
+            .unwrap_or_default();
+        Note::new(text::history_deed_change(), subject, String::new())
+    }
+}
+
+fn write_strokes(scene: &mut Scene, strokes: &[Stroke]) {
+    for stroke in strokes {
+        if let Some(place) = crate::scene::stroke_mut(scene, stroke.id) {
+            place.clone_from(stroke);
+        }
+    }
+}
+
 /// What the DM calls a group.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SetName {
@@ -598,6 +638,8 @@ pub enum Change {
     TvBox(SetTvBox),
     /// See [`SetAssets`].
     Assets(SetAssets),
+    /// See [`SetStrokes`].
+    Strokes(SetStrokes),
     /// See [`Grow`].
     Grow(Grow),
     /// See [`Turn`].
@@ -615,6 +657,7 @@ impl Command for Change {
         match self {
             Self::TvBox(change) => change.apply(scene),
             Self::Assets(change) => change.apply(scene),
+            Self::Strokes(change) => change.apply(scene),
             Self::Grow(change) => change.apply(scene),
             Self::Turn(change) => change.apply(scene),
             Self::Name(change) => change.apply(scene),
@@ -627,6 +670,7 @@ impl Command for Change {
         match self {
             Self::TvBox(change) => change.revert(scene),
             Self::Assets(change) => change.revert(scene),
+            Self::Strokes(change) => change.revert(scene),
             Self::Grow(change) => change.revert(scene),
             Self::Turn(change) => change.revert(scene),
             Self::Name(change) => change.revert(scene),
@@ -639,6 +683,7 @@ impl Command for Change {
         match self {
             Self::TvBox(change) => change.note(),
             Self::Assets(change) => change.note(),
+            Self::Strokes(change) => change.note(),
             Self::Grow(change) => change.note(),
             Self::Turn(change) => change.note(),
             Self::Name(change) => change.note(),
@@ -657,6 +702,12 @@ impl From<SetTvBox> for Change {
 impl From<SetAssets> for Change {
     fn from(change: SetAssets) -> Self {
         Self::Assets(change)
+    }
+}
+
+impl From<SetStrokes> for Change {
+    fn from(change: SetStrokes) -> Self {
+        Self::Strokes(change)
     }
 }
 

@@ -206,6 +206,28 @@ impl Stroke {
         }
     }
 
+    /// The points this stroke takes when its reach becomes `cells`.
+    ///
+    /// The far point moves along the line the shape already runs on, so
+    /// the shape keeps its heading and takes a new size. The panel of a
+    /// stroke changes an area of effect this way. Issue #12.
+    pub fn reached(&self, cells: f64) -> Vec<(f64, f64)> {
+        let (Some(from), Some(to)) = (self.points.first(), self.points.last()) else {
+            return self.points.clone();
+        };
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        let length = dx.hypot(dy);
+        if length <= f64::EPSILON {
+            // A shape of no length has no heading to keep, so the new
+            // reach runs to the right, where a drag would have started.
+            return vec![*from, (from.0 + cells, from.1)];
+        }
+        vec![
+            *from,
+            (from.0 + dx / length * cells, from.1 + dy / length * cells),
+        ]
+    }
+
     /// The box this stroke covers, in inches, without its width.
     pub fn bounds(&self) -> Option<((f64, f64), (f64, f64))> {
         let line = self.polyline();
@@ -420,6 +442,32 @@ mod tests {
             span: 0.0,
             rule: Rule::default(),
         }
+    }
+
+    #[test]
+    fn a_new_reach_keeps_the_heading_of_the_shape() {
+        let mark = stroke(Ink::Cone, &[(1.0, 1.0), (4.0, 5.0)]);
+        // The shape runs five cells out, three across and four down.
+        let points = mark.reached(10.0);
+        assert_eq!(points[0], (1.0, 1.0));
+        let (dx, dy) = (points[1].0 - 1.0, points[1].1 - 1.0);
+        assert!(
+            (dx.hypot(dy) - 10.0).abs() < 1e-9,
+            "it reaches {}",
+            dx.hypot(dy)
+        );
+        // Six across and eight down is the same heading, twice as far.
+        assert!(
+            (dx - 6.0).abs() < 1e-9 && (dy - 8.0).abs() < 1e-9,
+            "{points:?}"
+        );
+    }
+
+    #[test]
+    fn a_shape_of_no_length_still_takes_a_reach() {
+        let mark = stroke(Ink::Burst, &[(2.0, 2.0), (2.0, 2.0)]);
+        let points = mark.reached(3.0);
+        assert_eq!(points, vec![(2.0, 2.0), (5.0, 2.0)]);
     }
 
     #[test]
