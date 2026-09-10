@@ -276,7 +276,8 @@ impl Running {
                 ui_scale: crate::theme::clamp_scale(config.ui_scale),
             },
             placed: false,
-            tv_dirty: false,
+            // The first frame owes the players the scene the DM opened.
+            tv_dirty: true,
             tv_pointer: None,
             scene_dir,
             scenes_dir: config.scenes_dir.clone(),
@@ -302,16 +303,15 @@ impl Running {
         let pane = if is_dm { &mut self.dm } else { &mut self.tv };
         match event {
             WindowEvent::Resized(size) => {
-                pane.resize(&self.gpu.device, size.width, size.height);
-                // The TV box on the DM screen has the shape of the TV, so a
-                // TV that changes size changes what the DM must draw.
-                if !is_dm {
+                let resized = pane.resize(&self.gpu.device, size.width, size.height);
+                // The TV box on the DM screen has the shape of the TV. A TV
+                // that takes a new size changes what the DM must draw. An
+                // event that leaves the surface alone changes nothing.
+                if resized && !is_dm {
                     self.dm.window.request_redraw();
                     self.tv_dirty = true;
                 }
             }
-            // The window manager places a new window where it likes, so check
-            // after every move that the DM window is not on the TV display.
             // The window manager places a new window where it likes, so check
             // after every move that the DM window is not on the TV display.
             // Swap mode checks only on demand: a swap makes the window manager
@@ -321,8 +321,9 @@ impl Running {
             }
             WindowEvent::RedrawRequested if is_dm => return self.redraw_dm(),
             // The desktop still asks for a TV frame of its own, such as after
-            // it uncovers the window.
-            WindowEvent::RedrawRequested => self.draw_tv()?,
+            // it uncovers the window. The flag holds that ask until the
+            // batch of events ends, so the TV has one draw site.
+            WindowEvent::RedrawRequested => self.tv_dirty = true,
             WindowEvent::CursorMoved { position, .. } if !is_dm => {
                 self.tv_pointer = Some((position.x as f32, position.y as f32));
                 self.tv_dirty = true;
@@ -338,19 +339,36 @@ impl Running {
 
     /// Draws the TV when something changed what it shows.
     ///
-    /// Windows makes a `WM_PAINT` only when the message queue runs dry, and
-    /// it gives that frame to the window in front. A drag holds the DM window
-    /// in front and asks for a frame every turn, so a redraw request for the
-    /// TV waited for the next click on it. The TV is drawn here instead.
+    /// Windows makes a `WM_PAINT` only when the message queue runs dry. It
+    /// gives that frame to the window in front. A drag holds the DM window
+    /// in front and asks for a frame every turn. A redraw request for the
+    /// TV therefore waits for the next click on it. The TV draws here
+    /// instead, and the click is no longer necessary.
+    ///
+    /// The caller runs this once for each batch of events. A fast pointer
+    /// over the TV thus makes one frame and does not fill the queue.
+    ///
+    /// The flag stays up when the surface has nothing to show. The window
+    /// is behind another one, and the next frame carries the change.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the GPU cannot draw the frame.
     fn flush_tv(&mut self) -> Result<()> {
-        if std::mem::take(&mut self.tv_dirty) {
-            self.draw_tv()?;
+        if self.tv_dirty && self.draw_tv()? {
+            self.tv_dirty = false;
         }
         Ok(())
     }
 
     /// Draws one TV frame: the maps the players see, the grid and the pointer.
-    fn draw_tv(&mut self) -> Result<()> {
+    ///
+    /// Returns `false` when the surface gave no frame and nothing was shown.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the GPU cannot draw the frame.
+    fn draw_tv(&mut self) -> Result<bool> {
         let pane = &mut self.tv;
         let viewport = (pane.config.width, pane.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
@@ -421,6 +439,8 @@ impl Running {
                 Ok(decoded) => {
                     self.map_layer
                         .upload(&self.gpu.device, &self.gpu.queue, stored, &decoded);
+                    // A new image belongs on both screens.
+                    self.dm.window.request_redraw();
                     self.tv_dirty = true;
                 }
                 Err(message) => eprintln!("{}: {message}", file.display()),
@@ -430,7 +450,6 @@ impl Running {
 
     /// Runs a DM frame. Returns what the program must do next.
     fn redraw_dm(&mut self) -> Result<Outcome> {
-        self.upload_loaded_images();
         let before = self.settings.clone();
         let map_layer = &self.map_layer;
         let output = self.ui.run(
@@ -529,6 +548,9 @@ impl Running {
     /// new TV window still needs `place_tv`.
     fn swap_roles(&mut self, target: usize) {
         std::mem::swap(&mut self.dm, &mut self.tv);
+        // The new TV window last showed the DM chrome, so it owes the
+        // players a frame of the scene.
+        self.tv_dirty = true;
         self.dm.window.set_title("dmap");
         self.dm.window.set_fullscreen(None);
         self.dm.window.set_decorations(true);
@@ -741,9 +763,7 @@ impl App {
             };
             running.dm.window.request_redraw();
         }
-        // Every path that marks the TV runs inside this call, so one drain
-        // here puts the TV at most one frame behind the DM.
-        running.flush_tv()
+        Ok(())
     }
 
     /// Does what the scenes dialog asked for.
@@ -870,6 +890,28 @@ impl ApplicationHandler for App {
         let result = self.handle_event(&mut running, window_id, &event);
         self.running = Some(running);
         if let Err(error) = result {
+            self.error = Some(error);
+            event_loop.exit();
+        }
+    }
+
+    /// Takes the loaded images and draws the TV, once for each batch.
+    ///
+    /// Every path that marks the TV runs before this call. One drain here
+    /// therefore puts the TV at most one batch behind the DM. The loader
+    /// wakes the loop through whichever window it holds, so the images
+    /// come off the queue here as well.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // A window that closes takes its surface with it, and the error
+        // that ends the loop is already told.
+        if event_loop.exiting() {
+            return;
+        }
+        let Some(running) = self.running.as_mut() else {
+            return;
+        };
+        running.upload_loaded_images();
+        if let Err(error) = running.flush_tv() {
             self.error = Some(error);
             event_loop.exit();
         }
