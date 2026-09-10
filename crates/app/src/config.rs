@@ -180,6 +180,41 @@ pub struct Config {
     /// The canvas and the grid of the dark theme. Issue #66.
     #[serde(default)]
     pub paper_dark: Paper,
+    /// Where the DM window stood, in the pixels of the display.
+    ///
+    /// A DM who gives the window a size and a place keeps it. Wayland
+    /// tells a window nothing about where it stands and takes no place
+    /// from it, so there the size comes back and the place does not.
+    #[serde(default)]
+    pub dm_window: Option<Spot>,
+    /// The tool the rail marked.
+    #[serde(default)]
+    pub tool: crate::ui::Tool,
+    /// The tab the settings dialog marked.
+    #[serde(default)]
+    pub settings_tab: crate::ui::Tab,
+    /// Where the DM looked at the scene of the last run.
+    ///
+    /// It belongs to `last_scene`. Another scene on the canvas starts at
+    /// the middle of the world, because a place in one scene says nothing
+    /// about another.
+    #[serde(default)]
+    pub camera: Option<crate::camera::Camera>,
+}
+
+/// Where a window stands, in the pixels of the display.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Spot {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    /// Whether the window filled its display.
+    ///
+    /// A window that comes back at the size of a whole display, and not
+    /// as a window of that display, sits under the bars of the desktop.
+    pub maximized: bool,
 }
 
 impl Default for Config {
@@ -200,6 +235,10 @@ impl Default for Config {
             ink_snap: yes(),
             paper_light: Paper::default(),
             paper_dark: Paper::default(),
+            dm_window: None,
+            tool: crate::ui::Tool::default(),
+            settings_tab: crate::ui::Tab::default(),
+            camera: None,
         }
     }
 }
@@ -394,7 +433,7 @@ pub fn config_path() -> PathBuf {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Config, DEFAULT_GRID_WIDTH, Paper, TvPlacement, default_scenes_dir};
+    use super::{Config, DEFAULT_GRID_WIDTH, Paper, Spot, TvPlacement, default_scenes_dir};
 
     fn scenes_at(dir: &str) -> Config {
         Config {
@@ -464,6 +503,19 @@ mod tests {
                 opacity: Some(0.5),
                 width: Some(2.0),
             },
+            dm_window: Some(Spot {
+                x: 40,
+                y: 50,
+                width: 1280,
+                height: 800,
+                maximized: false,
+            }),
+            tool: crate::ui::Tool::Draw,
+            settings_tab: crate::ui::Tab::Grid,
+            camera: Some(crate::camera::Camera {
+                center: (3.5, -2.0),
+                pixels_per_inch: 40.0,
+            }),
         };
         assert_eq!(Config::from_json(&config.to_json()).unwrap(), config);
     }
@@ -548,6 +600,11 @@ mod tests {
         let config = Config::from_json("{}").unwrap();
         assert_eq!(config.last_scene, None);
         assert!((config.snap_percent - 8.0).abs() < 1e-9);
+        // A run before the program kept these opens as a first run does.
+        assert_eq!(config.dm_window, None);
+        assert_eq!(config.camera, None);
+        assert_eq!(config.tool, crate::ui::Tool::default());
+        assert_eq!(config.settings_tab, crate::ui::Tab::default());
     }
 
     #[test]

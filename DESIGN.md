@@ -97,6 +97,8 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - The maps of a frame draw into a texture of their own first, because a shader cannot read the surface it writes to. The grid pass reads that texture, mixes its lines into it, and writes both to the window. So the grid pass carries the maps, and it must run before the ink and the panels.
 - Map previews have a hard shadow `2px 3px 0 shadow` when the theme has a shadow value.
 - The DM camera pans with space+drag or the middle button and zooms with the wheel. There is no on-screen control for the DM camera.
+- The program keeps the camera of the scene it had open, so a run opens where the last one stopped. Another scene on the canvas starts at the middle of the world.
+- The program keeps the size and the place of the DM window, the tool of the toolbar, and the tab of the Settings dialog. Every one of them sits in `config.json`, because they belong to this machine and not to a scene.
 
 ### 5.2 Toolbar
 

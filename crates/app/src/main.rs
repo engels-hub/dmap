@@ -41,7 +41,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result, bail};
 use egui_winit::winit::{
     application::ApplicationHandler,
-    dpi::LogicalSize,
+    dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
     event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoop},
     monitor::MonitorHandle,
@@ -50,7 +50,7 @@ use egui_winit::winit::{
 
 use crate::camera::{Camera, DEFAULT_PIXELS_PER_INCH};
 use crate::command::{Deed, History, reshape};
-use crate::config::Config;
+use crate::config::{Config, Spot};
 use crate::gpu::{Gpu, Pane};
 use crate::grid::GridLayer;
 use crate::images::Loader;
@@ -152,12 +152,19 @@ fn scene_to_open(config: &mut Config) -> Result<PathBuf> {
         } else {
             given
         };
-        config.last_scene = Some(config.remember(&dir));
+        let remembered = config.remember(&dir);
+        // The camera belongs to the scene of the last run. Another scene
+        // from the shell starts at the middle of the world.
+        if config.last_scene.as_ref() != Some(&remembered) {
+            config.camera = None;
+        }
+        config.last_scene = Some(remembered);
         return Ok(dir);
     }
     let scene = config.last_scene.clone().unwrap_or_else(|| {
         let first = PathBuf::from(FIRST_SCENE);
         config.last_scene = Some(first.clone());
+        config.camera = None;
         first
     });
     Ok(config.scene_dir(&scene))
@@ -284,13 +291,18 @@ impl Running {
         scene: &Scene,
         scene_dir: PathBuf,
     ) -> Result<Self> {
-        let dm_window = Arc::new(
-            event_loop.create_window(
-                Window::default_attributes()
-                    .with_title(window_title(&scene_dir))
-                    .with_inner_size(DM_WINDOW_SIZE),
-            )?,
-        );
+        // The window comes back where the DM left it. A first run, and a
+        // Wayland session that tells a window nothing, take the default.
+        let mut attributes = Window::default_attributes()
+            .with_title(window_title(&scene_dir))
+            .with_inner_size(DM_WINDOW_SIZE);
+        if let Some(spot) = config.dm_window {
+            attributes = attributes
+                .with_inner_size(PhysicalSize::new(spot.width, spot.height))
+                .with_position(PhysicalPosition::new(spot.x, spot.y))
+                .with_maximized(spot.maximized);
+        }
+        let dm_window = Arc::new(event_loop.create_window(attributes)?);
         let displays: Vec<_> = event_loop.available_monitors().collect();
         let dm_display = display_of(&dm_window, &displays);
         let tv_display =
@@ -308,7 +320,7 @@ impl Running {
         let gpu = Gpu::new(&dm_window)?;
         let dm = gpu.pane(dm_window)?;
         let tv = gpu.pane(tv_window)?;
-        let ui = DmUi::new(&gpu, &dm);
+        let ui = DmUi::new(&gpu, &dm, config.tool, config.settings_tab);
         let pointer = PointerDisc::new(&gpu.device, tv.config.format);
         let map_layer = MapLayer::new(&gpu.device, dm.config.format);
         let grid_layer = GridLayer::new(&gpu.device, dm.config.format);
@@ -361,7 +373,7 @@ impl Running {
             overlay,
             live: None,
             loader,
-            camera: DM_CAMERA,
+            camera: config.camera.map_or(DM_CAMERA, Camera::usable),
         })
     }
 
@@ -687,7 +699,29 @@ impl Running {
         self.dm.window.set_maximized(true);
         self.tv.window.set_title("dmap TV");
         self.tv.window.set_decorations(false);
-        self.ui = DmUi::new(&self.gpu, &self.dm);
+        // The swap builds the interface again, and the DM keeps the tool
+        // and the tab they were working in.
+        let (tool, tab) = (self.ui.tool(), self.ui.settings_tab());
+        self.ui = DmUi::new(&self.gpu, &self.dm, tool, tab);
+    }
+
+    /// Where the DM window stands, or `None` when the desktop hides it.
+    ///
+    /// Wayland tells a window nothing about its own place. There the size
+    /// still comes back, and the place stays as the desktop puts it.
+    fn window_spot(&self) -> Option<Spot> {
+        let size = self.dm.window.inner_size();
+        if size.width == 0 || size.height == 0 || self.dm.window.fullscreen().is_some() {
+            return None;
+        }
+        let at = self.dm.window.outer_position().ok()?;
+        Some(Spot {
+            x: at.x,
+            y: at.y,
+            width: size.width,
+            height: size.height,
+            maximized: self.dm.window.is_maximized(),
+        })
     }
 
     /// Puts another scene on the canvas.
@@ -697,6 +731,9 @@ impl Running {
     /// new one must not draw the old one.
     fn open_scene(&mut self, dir: PathBuf, scene: &Scene, history: History) {
         self.scene_dir = dir;
+        // A place in one scene says nothing about another, so the camera
+        // starts in the middle of the world again.
+        self.camera = DM_CAMERA;
         self.scene = scene.clone();
         self.scene.tv_box = scene.tv_box.clamped();
         // Every scene brings the changes of its own folder.
@@ -748,6 +785,12 @@ impl Running {
         config.ui_scale = self.settings.ui_scale;
         config.paper_light.clone_from(&self.settings.paper_light);
         config.paper_dark.clone_from(&self.settings.paper_dark);
+        config.tool = self.ui.tool();
+        config.settings_tab = self.ui.settings_tab();
+        config.camera = Some(self.camera);
+        if let Some(spot) = self.window_spot() {
+            config.dm_window = Some(spot);
+        }
         scene.clone_from(&self.scene);
     }
 }
@@ -1068,6 +1111,15 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         if event == WindowEvent::CloseRequested {
+            // The window, the tool and the camera are what the DM leaves
+            // behind. Nothing asked for a save while they changed, so the
+            // way out is the place to write them.
+            if let Some(running) = self.running.as_mut() {
+                running.update(&mut self.config, &mut self.scene);
+                if let Err(error) = save_config(&self.config) {
+                    eprintln!("{error:#}");
+                }
+            }
             event_loop.exit();
             return;
         }

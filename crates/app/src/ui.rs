@@ -299,8 +299,9 @@ pub struct DmUi {
 }
 
 /// The tool the DM works with. The rail picks it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum Tool {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tool {
     /// Pick a map and move, turn, scale or flip it.
     #[default]
     Select,
@@ -701,7 +702,8 @@ enum Drag {
 
 #[hotpath::measure_all]
 impl DmUi {
-    pub fn new(gpu: &Gpu, pane: &Pane) -> Self {
+    /// Builds the DM interface, on the tool and the tab of the last run.
+    pub fn new(gpu: &Gpu, pane: &Pane, tool: Tool, tab: Tab) -> Self {
         let state = egui_winit::State::new(
             egui::Context::default(),
             egui::ViewportId::ROOT,
@@ -725,13 +727,16 @@ impl DmUi {
         Self {
             state,
             renderer,
-            tool: Tool::default(),
+            tool,
             select: Select::default(),
             draw: Draw::default(),
             table: Table::default(),
             scenes: Scenes::default(),
             tree: Tree::default(),
-            dialog: Dialog::default(),
+            dialog: Dialog {
+                tab,
+                ..Dialog::default()
+            },
             history_open: false,
             theme: theme::Mode::default(),
             language: text::DEFAULT.to_owned(),
@@ -902,6 +907,16 @@ impl DmUi {
         self.select.opened = None;
         self.select.opened_ink = None;
         self.table.opened = None;
+    }
+
+    /// The tool the rail marks, so a new run opens on it.
+    pub fn tool(&self) -> Tool {
+        self.tool
+    }
+
+    /// The tab the settings dialog marks, for the same reason.
+    pub fn settings_tab(&self) -> Tab {
+        self.dialog.tab
     }
 
     /// Draws the maps, then the canvas, then the UI on top of both.
@@ -2059,8 +2074,9 @@ impl Held {
 }
 
 /// A tab of the settings dialog. DESIGN.md 9.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum Tab {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tab {
     /// The TV, its size and the snap. DESIGN.md 9.1.
     #[default]
     Table,

@@ -30,7 +30,7 @@ pub struct Area {
 ///
 /// World units are inches. Screen units are window pixels with the origin at
 /// the top left and y down. The camera center sits in the middle of the view.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     /// World point in the middle of the view, in inches.
     pub center: (f64, f64),
@@ -39,6 +39,33 @@ pub struct Camera {
 }
 
 impl Camera {
+    /// The same camera, with a zoom the canvas can draw.
+    ///
+    /// A camera comes back from the config file, which a DM may write by
+    /// hand. A zoom of nothing draws a canvas of nothing.
+    pub fn usable(self) -> Self {
+        let zoom = if self.pixels_per_inch.is_finite() {
+            self.pixels_per_inch
+        } else {
+            DEFAULT_PIXELS_PER_INCH
+        };
+        Self {
+            center: (
+                if self.center.0.is_finite() {
+                    self.center.0
+                } else {
+                    0.0
+                },
+                if self.center.1.is_finite() {
+                    self.center.1
+                } else {
+                    0.0
+                },
+            ),
+            pixels_per_inch: zoom.clamp(MIN_PIXELS_PER_INCH, MAX_PIXELS_PER_INCH),
+        }
+    }
+
     /// Maps a window pixel to a world point for a view of `viewport` pixels.
     pub fn screen_to_world(&self, screen: (f64, f64), viewport: (u32, u32)) -> (f64, f64) {
         let (half_w, half_h) = (f64::from(viewport.0) / 2.0, f64::from(viewport.1) / 2.0);
@@ -134,6 +161,29 @@ mod tests {
 
     fn close(a: (f64, f64), b: (f64, f64)) -> bool {
         (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9
+    }
+
+    #[test]
+    fn a_camera_from_a_file_comes_back_usable() {
+        let broken = Camera {
+            center: (f64::NAN, 4.0),
+            pixels_per_inch: 0.0,
+        }
+        .usable();
+        assert!(close(broken.center, (0.0, 4.0)));
+        assert!((broken.pixels_per_inch - MIN_PIXELS_PER_INCH).abs() < 1e-9);
+        let far = Camera {
+            center: (1.0, 2.0),
+            pixels_per_inch: 10_000.0,
+        }
+        .usable();
+        assert!((far.pixels_per_inch - MAX_PIXELS_PER_INCH).abs() < 1e-9);
+        // A camera the program itself wrote comes back as it went in.
+        let kept = Camera {
+            center: (3.5, -2.0),
+            pixels_per_inch: 40.0,
+        };
+        assert_eq!(kept.usable(), kept);
     }
 
     #[test]
