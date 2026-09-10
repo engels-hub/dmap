@@ -318,9 +318,11 @@ The release archive keeps the same three files beside the program. This tab is t
 
 ### 9.8 History
 
-- Size 460 x 440 px.
-- Each step is a row 34 px high with a 1 px `rule` bottom border. The row holds one line 14 px at 12 px from the left.
-- The newest step stands at the top. The last row reads "Before the first change".
+- Size 520 x 460 px.
+- Each step is a row 46 px high with a 1 px `rule` bottom border, and 12 px of padding on each side.
+- A row holds two lines. The first line 14 px names what the DM did and the file or the group it happened to, such as "Move ivan.jpg". The time stands at the right end of that line, 13 px in `mute`, and reads "just now", "4 min ago", "2 h ago" or "3 days ago".
+- The second line 13 px in `mute` holds the numbers the step wrote: two spots in inches for a move, two angles for a turn, two sizes in percent, the two pixel counts of a grid size, or the two pairs of screens of a switch.
+- The newest step stands at the top. The last row reads "Before the first change" and carries no second line.
 - The step the scene stands on takes the `raised` background, a 3 px `accent` bar on its left edge, and `accent` bold text.
 - A step the DM took back draws in `mute`. It stays on the list, so a walk forward is one click.
 - A click on a row takes the scene to the state after that step.

@@ -10,7 +10,7 @@ use egui_winit::winit::{event::WindowEvent, monitor::MonitorHandle};
 
 use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::color;
-use crate::command::{Grow, History, SetAssets, SetName, SetShown, SetTvBox, Turn, reshape};
+use crate::command::{Grow, History, Note, SetAssets, SetName, SetShown, SetTvBox, Turn, reshape};
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::icon;
 use crate::icons::Icon;
@@ -110,9 +110,15 @@ const FOOTER: f32 = 48.0;
 
 /// The height of one step row in the history dialog, in points.
 ///
-/// DESIGN.md 9.8 gives a step the height of a scene row. A step holds one
-/// line and no control, so the row needs no more room than a name.
-const STEP_ROW: f32 = 34.0;
+/// DESIGN.md 9.8 gives a step two lines: what the DM did, then what the
+/// step wrote.
+const STEP_ROW: f32 = 46.0;
+
+/// Half the gap between the two lines of a step row, in points.
+const STEP_LINE: f32 = 3.0;
+
+/// The padding on each side of a step row, in points. DESIGN.md 9.8.
+const STEP_PAD: f32 = 12.0;
 
 /// The height of one scene row, in points. DESIGN.md 9.6.
 const SCENE_ROW: f32 = 40.0;
@@ -965,7 +971,7 @@ fn history_dialog(ui: &egui::Ui, open: &mut bool, frame: &mut Frame<'_>, tokens:
         ui.ctx(),
         "history",
         "History",
-        egui::vec2(460.0, 440.0),
+        egui::vec2(520.0, 460.0),
         tokens,
         |ui, rest| {
             let footer = egui::Rect::from_min_size(
@@ -988,13 +994,17 @@ fn history_dialog(ui: &egui::Ui, open: &mut bool, frame: &mut Frame<'_>, tokens:
                     ui.spacing_mut().item_spacing.y = 0.0;
                     // The newest change stands at the top, as the objects
                     // list puts the top of the pile first.
-                    for (index, label) in steps.iter().enumerate().rev() {
+                    for (index, note) in steps.iter().enumerate().rev() {
                         let step = index + 1;
-                        if step_row(ui, label, step == place, step > place, tokens) {
+                        if step_row(ui, note, step == place, step > place, tokens) {
                             go_to = Some(step);
                         }
                     }
-                    if step_row(ui, "Before the first change", place == 0, false, tokens) {
+                    let first = Note {
+                        what: "Before the first change".to_owned(),
+                        ..Note::default()
+                    };
+                    if step_row(ui, &first, place == 0, false, tokens) {
                         go_to = Some(0);
                     }
                 });
@@ -1025,10 +1035,14 @@ fn history_dialog(ui: &egui::Ui, open: &mut bool, frame: &mut Frame<'_>, tokens:
 
 /// One step on the history list. Returns `true` when the DM clicked it.
 ///
+/// The row holds two lines: what the DM did and what it happened to, then
+/// the numbers the step wrote. The time stands on the right of the first
+/// line. DESIGN.md 9.8.
+///
 /// The step the scene stands on takes the `accent` and the `raised`
 /// background, as a picked row does. A step the DM took back draws in
 /// `mute`, because it says what a walk forward would write again.
-fn step_row(ui: &mut egui::Ui, label: &str, here: bool, undone: bool, tokens: Tokens) -> bool {
+fn step_row(ui: &mut egui::Ui, note: &Note, here: bool, undone: bool, tokens: Tokens) -> bool {
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), STEP_ROW),
         egui::Sense::click(),
@@ -1051,12 +1065,36 @@ fn step_row(ui: &mut egui::Ui, label: &str, here: bool, undone: bool, tokens: To
     } else {
         tokens.ink
     };
-    ui.painter().text(
-        egui::pos2(rect.left() + 12.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
+    // The two lines sit around the middle of the row, so a row with no
+    // second line still reads as one block.
+    let painter = ui.painter_at(rect);
+    let left = rect.left() + STEP_PAD;
+    let middle = rect.center().y;
+    let headline = if note.subject.is_empty() {
+        note.what.clone()
+    } else {
+        format!("{} {}", note.what, note.subject)
+    };
+    painter.text(
+        egui::pos2(left, middle - STEP_LINE),
+        egui::Align2::LEFT_BOTTOM,
+        &headline,
         theme::font(theme::BODY, here),
         color,
+    );
+    painter.text(
+        egui::pos2(rect.right() - STEP_PAD, middle - STEP_LINE),
+        egui::Align2::RIGHT_BOTTOM,
+        &note.ago,
+        theme::font(theme::SMALL, false),
+        tokens.mute,
+    );
+    painter.text(
+        egui::pos2(left, middle + STEP_LINE),
+        egui::Align2::LEFT_TOP,
+        &note.detail,
+        theme::font(theme::SMALL, false),
+        tokens.mute,
     );
     response.clicked()
 }
@@ -1348,8 +1386,9 @@ fn act_on(frame: &mut Frame<'_>, select: &mut Select, tree: &mut Tree, asked: As
     let mut edited = false;
     if let Some(id) = asked.new_group {
         let new = Group::new(id, format!("Group {id}"));
+        let name = new.name.clone();
         let into = tree.active;
-        if let Some(change) = reshape(frame.scene, "New group", |scene| {
+        if let Some(change) = reshape(frame.scene, "New group", name, |scene| {
             crate::scene::push_into(scene, into, Node::Group(new));
         }) {
             frame.history.kept(change);
@@ -1361,7 +1400,8 @@ fn act_on(frame: &mut Frame<'_>, select: &mut Select, tree: &mut Tree, asked: As
     if let Some(id) = asked.ungroup {
         // What was in the group stands where it stood.
         let freed = crate::scene::assets_of(frame.scene, id);
-        if let Some(change) = reshape(frame.scene, "Ungroup", |scene| {
+        let name = crate::scene::name_of(frame.scene, id);
+        if let Some(change) = reshape(frame.scene, "Ungroup", name, |scene| {
             crate::scene::ungroup(scene, id);
         }) {
             frame.history.kept(change);
@@ -1370,21 +1410,33 @@ fn act_on(frame: &mut Frame<'_>, select: &mut Select, tree: &mut Tree, asked: As
         }
     }
     if let Some((node, target, into)) = asked.moved
-        && let Some(change) = reshape(frame.scene, "Move in the list", |scene| {
-            if into {
-                crate::scene::move_into(scene, node, target);
-            } else {
-                crate::scene::move_above(scene, node, target);
-            }
-        })
+        && let Some(change) = reshape(
+            frame.scene,
+            "Move in the list",
+            crate::scene::name_of(frame.scene, node),
+            |scene| {
+                if into {
+                    crate::scene::move_into(scene, node, target);
+                } else {
+                    crate::scene::move_above(scene, node, target);
+                }
+            },
+        )
     {
         frame.history.kept(change);
         edited = true;
     }
     if let Some((id, before, after)) = asked.shown {
-        frame
-            .history
-            .run(frame.scene, SetShown { id, before, after });
+        let subject = crate::scene::name_of(frame.scene, id);
+        frame.history.run(
+            frame.scene,
+            SetShown {
+                id,
+                subject,
+                before,
+                after,
+            },
+        );
         edited = true;
     }
     if let (Some(done), Some(naming)) = (asked.named, tree.renaming.clone()) {
@@ -2908,6 +2960,32 @@ fn box_properties(
     asked
 }
 
+/// The Group row of the map panel: which group holds this map.
+///
+/// Returns the group the DM picked, when they picked one.
+fn group_field(ui: &mut egui::Ui, id: NodeId, scene: &Scene) -> Option<NodeId> {
+    let names = crate::scene::group_names(scene);
+    let holder = crate::scene::parent_of(scene, id).map(|(group, _)| group);
+    let open = holder
+        .and_then(|group| names.iter().find(|(other, ..)| *other == group))
+        .map_or("", |(_, group_name, _)| group_name.as_str());
+    let field = widget::select_field(ui, open, ui.available_width());
+    let mut picked = None;
+    egui::Popup::menu(&field)
+        .gap(-1.0)
+        .width(ui.available_width())
+        .show(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for (group, group_name, depth) in &names {
+                let label = format!("{}{group_name}", "  ".repeat(*depth));
+                if widget::select_row(ui, &label, holder == Some(*group)).clicked() {
+                    picked = Some(*group);
+                }
+            }
+        });
+    picked
+}
+
 /// The properties of the selected map. DESIGN.md 8.1.
 ///
 /// The grid size decides the true size of the map: one grid cell is one
@@ -2920,33 +2998,20 @@ fn map_properties(
     frame: &mut Frame<'_>,
     tokens: Tokens,
 ) -> bool {
-    let names = crate::scene::group_names(frame.scene);
     let mut edited = false;
-    let mut move_to = None;
     // DESIGN.md 8.1 gives the file name a row of its own. The title of the
     // panel carries it now, so the row would say it twice.
     widget::row_label(ui, "Group");
-    let holder = crate::scene::parent_of(frame.scene, id).map(|(group, _)| group);
-    let open = holder
-        .and_then(|group| names.iter().find(|(other, ..)| *other == group))
-        .map_or("", |(_, group_name, _)| group_name.as_str());
-    let field = widget::select_field(ui, open, ui.available_width());
-    egui::Popup::menu(&field)
-        .gap(-1.0)
-        .width(ui.available_width())
-        .show(|ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            for (group, group_name, depth) in &names {
-                let label = format!("{}{group_name}", "  ".repeat(*depth));
-                if widget::select_row(ui, &label, holder == Some(*group)).clicked() {
-                    move_to = Some(*group);
-                }
-            }
-        });
+    let move_to = group_field(ui, id, frame.scene);
     if let Some(group) = move_to
-        && let Some(change) = reshape(frame.scene, "Another group", |scene| {
-            crate::scene::move_into(scene, id, group);
-        })
+        && let Some(change) = reshape(
+            frame.scene,
+            "Another group",
+            crate::scene::name_of(frame.scene, id),
+            |scene| {
+                crate::scene::move_into(scene, id, group);
+            },
+        )
     {
         frame.history.kept(change);
         edited = true;
@@ -3223,7 +3288,8 @@ fn selection_popup(
         let name = format!("Group {}", frame.scene.next_id());
         let chosen = select.chosen.clone();
         let mut made = None;
-        let change = reshape(frame.scene, "Group", |scene| {
+        let subject = name.clone();
+        let change = reshape(frame.scene, "Group", subject, |scene| {
             made = crate::scene::group_selection(scene, &chosen, name);
         });
         if let (Some(change), Some(id)) = (change, made) {
@@ -3647,7 +3713,11 @@ fn keys(ui: &egui::Ui, select: &mut Select, frame: &mut Frame<'_>) -> bool {
                 }
                 select.note.clear();
                 let toward_top = *key == egui::Key::PageUp;
-                if let Some(change) = reshape(frame.scene, "Order", |scene| {
+                let subject = held
+                    .first()
+                    .map(|id| crate::scene::name_of(frame.scene, *id))
+                    .unwrap_or_default();
+                if let Some(change) = reshape(frame.scene, "Order", subject, |scene| {
                     crate::scene::reorder_all(scene, &held, toward_top);
                 }) {
                     frame.history.kept(change);
@@ -3993,6 +4063,7 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             frame.history.hold(
                 frame.scene,
                 Grow {
+                    subject: held_names(frame.scene, &starts),
                     starts,
                     pivot,
                     factor,
@@ -4014,6 +4085,7 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             frame.history.hold(
                 frame.scene,
                 Turn {
+                    subject: held_names(frame.scene, &starts),
                     starts,
                     pivot,
                     angle: turned - base,
@@ -4021,6 +4093,15 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             );
             true
         }
+    }
+}
+
+/// What the history calls the assets of a drag: the file, or a count.
+fn held_names(scene: &Scene, starts: &[Placed]) -> String {
+    match starts {
+        [] => String::new(),
+        [one] => crate::scene::name_of(scene, one.id),
+        many => format!("{} maps", many.len()),
     }
 }
 

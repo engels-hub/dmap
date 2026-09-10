@@ -17,6 +17,7 @@
 // Rust guideline compliant 2026-02-21
 
 use std::collections::VecDeque;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +32,34 @@ use crate::tvbox::TvBox;
 /// session.
 const STEPS: usize = 100;
 
+/// What one step says on the history list. DESIGN.md 9.8.
+///
+/// A change fills the first three. The history fills `ago`, because a
+/// change does not know what the time is.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Note {
+    /// What the DM did, such as `Move` or `New group`.
+    pub what: String,
+    /// The file or the group it happened to.
+    pub subject: String,
+    /// The numbers the change wrote, such as the two spots of a move.
+    pub detail: String,
+    /// How long ago the DM made it, such as `4 min ago`.
+    pub ago: String,
+}
+
+impl Note {
+    /// A note with no time on it yet.
+    fn new(what: &str, subject: String, detail: String) -> Self {
+        Self {
+            what: what.to_owned(),
+            subject,
+            detail,
+            ago: String::new(),
+        }
+    }
+}
+
 /// One change to the scene, which the history writes and takes back.
 pub trait Command: std::fmt::Debug {
     /// Writes the change into `scene`.
@@ -39,8 +68,63 @@ pub trait Command: std::fmt::Debug {
     /// Puts `scene` back the way it stood before [`Command::apply`].
     fn revert(&self, scene: &mut Scene);
 
-    /// What the history dialog calls this change. DESIGN.md 9.6.
-    fn label(&self) -> String;
+    /// What this change says on the history list. DESIGN.md 9.8.
+    fn note(&self) -> Note;
+}
+
+/// The seconds since the epoch, for the time on a step.
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// How long ago a step was made, in words. DESIGN.md 9.8.
+///
+/// A step from a file that an older version of the program wrote carries
+/// no time, and reads as `earlier`.
+fn ago(at: u64, now: u64) -> String {
+    if at == 0 {
+        return "earlier".to_owned();
+    }
+    // A clock that went back leaves a step in the future. It happened, so
+    // it reads as the newest thing that happened.
+    let gap = now.saturating_sub(at);
+    // Under three quarters of a minute reads as no time at all, as it
+    // does in a chat window.
+    if gap < 45 {
+        return "just now".to_owned();
+    }
+    let minutes = (gap + 30) / 60;
+    if minutes < 90 {
+        return format!("{} min ago", minutes.max(1));
+    }
+    let hours = (gap + 1800) / 3600;
+    if hours < 24 {
+        return format!("{hours} h ago");
+    }
+    // A day and a half still reads as a day. The DM wants to know which
+    // session a step belongs to, not the hour of it.
+    if gap < 2 * 86400 {
+        return "a day ago".to_owned();
+    }
+    format!("{} days ago", gap / 86400)
+}
+
+/// The name of a spot on the canvas, in inches.
+fn spot(at: (f64, f64)) -> String {
+    format!("{:.1}, {:.1}", at.0, at.1)
+}
+
+/// Which screens a pair of switches says yes to.
+fn screens(shown: Shown) -> &'static str {
+    match (shown.dm, shown.tv) {
+        (true, true) => "both screens",
+        (true, false) => "the DM screen",
+        (false, true) => "the TV",
+        (false, false) => "no screen",
+    }
 }
 
 /// Whether two numbers of the scene stand apart.
@@ -51,12 +135,29 @@ fn differs(was: f64, now: f64) -> bool {
     (was - now).abs() > f64::EPSILON
 }
 
-/// How a step names the assets it touched: one map, or a count of them.
-fn maps(count: usize) -> String {
+/// How a step names the assets it touched: the file, or a count of them.
+fn maps(assets: &[Asset]) -> String {
+    match assets {
+        [] => "a map".to_owned(),
+        [one] => file_name(one),
+        many => format!("{} maps", many.len()),
+    }
+}
+
+/// The file name of a map, without the folders above it.
+fn file_name(asset: &Asset) -> String {
+    asset.path.file_name().map_or_else(
+        || asset.path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
+/// How a step names the group lists it rewrote.
+fn lists(count: usize) -> String {
     if count == 1 {
-        "a map".to_owned()
+        "one list".to_owned()
     } else {
-        format!("{count} maps")
+        format!("{count} lists")
     }
 }
 
@@ -78,8 +179,16 @@ impl Command for SetTvBox {
         scene.tv_box = self.before;
     }
 
-    fn label(&self) -> String {
-        "The TV box".to_owned()
+    fn note(&self) -> Note {
+        Note::new(
+            "The TV box",
+            "the players' window".to_owned(),
+            format!(
+                "{} in wide at {}",
+                format_args!("{:.1}", self.after.width),
+                spot(self.after.center)
+            ),
+        )
     }
 }
 
@@ -104,29 +213,48 @@ impl Command for SetAssets {
         write_assets(scene, &self.before);
     }
 
-    fn label(&self) -> String {
-        let count = maps(self.after.len());
+    fn note(&self) -> Note {
+        let subject = maps(&self.after);
         let Some((was, now)) = self
             .before
             .iter()
             .zip(&self.after)
             .find(|(was, now)| was != now)
         else {
-            return count;
+            return Note::new("Change", subject, String::new());
         };
-        if was.center != now.center {
-            format!("Move {count}")
+        let (what, detail) = if was.center != now.center {
+            (
+                "Move",
+                format!("{} to {} in", spot(was.center), spot(now.center)),
+            )
         } else if differs(was.rotation, now.rotation) {
-            format!("Turn {count}")
+            (
+                "Turn",
+                format!(
+                    "{:.0}\u{b0} to {:.0}\u{b0}",
+                    was.rotation.to_degrees(),
+                    now.rotation.to_degrees()
+                ),
+            )
         } else if differs(was.scale, now.scale) {
-            format!("Size {count}")
-        } else if was.flip_x != now.flip_x || was.flip_y != now.flip_y {
-            format!("Flip {count}")
+            (
+                "Size",
+                format!("{:.0} % to {:.0} %", was.scale * 100.0, now.scale * 100.0),
+            )
+        } else if was.flip_x != now.flip_x {
+            ("Flip", "left to right".to_owned())
+        } else if was.flip_y != now.flip_y {
+            ("Flip", "top to bottom".to_owned())
         } else if differs(was.grid_px, now.grid_px) {
-            format!("The grid size of {count}")
+            (
+                "The grid size",
+                format!("{:.0} px to {:.0} px per cell", was.grid_px, now.grid_px),
+            )
         } else {
-            count
-        }
+            ("Change", String::new())
+        };
+        Note::new(what, subject, detail)
     }
 }
 
@@ -144,6 +272,8 @@ fn write_assets(scene: &mut Scene, assets: &[Asset]) {
 /// values back and the scene takes no rounding from the way out.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Grow {
+    /// The files the drag holds, for the history list.
+    pub subject: String,
     /// Where each asset stood, at what size and at what turn.
     pub starts: Vec<Placed>,
     /// The point the set grows around, in inches.
@@ -161,14 +291,21 @@ impl Command for Grow {
         write_placed(scene, &self.starts);
     }
 
-    fn label(&self) -> String {
-        format!("Size {}", maps(self.starts.len()))
+    fn note(&self) -> Note {
+        let was = self.starts.first().map_or(1.0, |first| first.scale);
+        Note::new(
+            "Size",
+            self.subject.clone(),
+            format!("{:.0} % to {:.0} %", was * 100.0, was * self.factor * 100.0),
+        )
     }
 }
 
 /// A set of assets turned around one point, from a drag on the turn handle.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Turn {
+    /// The files the drag holds, for the history list.
+    pub subject: String,
     /// Where each asset stood, at what size and at what turn.
     pub starts: Vec<Placed>,
     /// The point the set turns around, in inches.
@@ -186,8 +323,17 @@ impl Command for Turn {
         write_placed(scene, &self.starts);
     }
 
-    fn label(&self) -> String {
-        format!("Turn {}", maps(self.starts.len()))
+    fn note(&self) -> Note {
+        let was = self.starts.first().map_or(0.0, |first| first.rotation);
+        Note::new(
+            "Turn",
+            self.subject.clone(),
+            format!(
+                "{:.0}\u{b0} to {:.0}\u{b0}",
+                was.to_degrees(),
+                (was + self.angle).to_degrees()
+            ),
+        )
     }
 }
 
@@ -225,11 +371,8 @@ impl Command for SetName {
         }
     }
 
-    fn label(&self) -> String {
-        if self.after.is_empty() {
-            return "Rename a group".to_owned();
-        }
-        format!("Rename to {}", self.after)
+    fn note(&self) -> Note {
+        Note::new("Rename", self.before.clone(), format!("to {}", self.after))
     }
 }
 
@@ -238,6 +381,8 @@ impl Command for SetName {
 pub struct SetShown {
     /// The node whose switches the DM pressed.
     pub id: NodeId,
+    /// What that node is called, for the history list.
+    pub subject: String,
     /// The switches as they stood.
     pub before: Shown,
     /// The switches as the DM wants them.
@@ -257,8 +402,12 @@ impl Command for SetShown {
         }
     }
 
-    fn label(&self) -> String {
-        "Show or hide".to_owned()
+    fn note(&self) -> Note {
+        Note::new(
+            "Show",
+            self.subject.clone(),
+            format!("{} to {}", screens(self.before), screens(self.after)),
+        )
     }
 }
 
@@ -271,6 +420,8 @@ impl Command for SetShown {
 pub struct Restructure {
     /// What the DM did, for the history dialog.
     pub what: String,
+    /// The file or the group it happened to.
+    pub subject: String,
     /// The children each group carried, by group.
     pub before: Vec<(NodeId, Vec<Node>)>,
     /// The children each group carries after the change.
@@ -286,8 +437,12 @@ impl Command for Restructure {
         write_children(scene, &self.before);
     }
 
-    fn label(&self) -> String {
-        self.what.clone()
+    fn note(&self) -> Note {
+        Note::new(
+            &self.what,
+            self.subject.clone(),
+            format!("{} in the tree", lists(self.after.len())),
+        )
     }
 }
 
@@ -304,13 +459,15 @@ fn write_children(scene: &mut Scene, lists: &[(NodeId, Vec<Node>)]) {
 /// The scene helpers move nodes around in place, and a tool reaches them
 /// through this function: it keeps the tree, runs `change`, and reads the
 /// groups the change rewrote out of the two trees. A `change` that moved
-/// nothing gives `None`. The name `what` goes to the history dialog.
+/// nothing gives `None`. The words `what` and `subject` go to the history
+/// dialog, which reads "New group" over "Cave".
 ///
 /// The change is in the scene already when this returns, so the result
 /// goes to [`History::kept`], not to [`History::run`].
 pub fn reshape(
     scene: &mut Scene,
-    what: &'static str,
+    what: &str,
+    subject: String,
     change: impl FnOnce(&mut Scene),
 ) -> Option<Restructure> {
     let was = scene.root.clone();
@@ -320,6 +477,7 @@ pub fn reshape(
     collect_lists(&was, &scene.root, &mut before, &mut after);
     (!after.is_empty()).then_some(Restructure {
         what: what.to_owned(),
+        subject,
         before,
         after,
     })
@@ -415,15 +573,15 @@ impl Command for Change {
         }
     }
 
-    fn label(&self) -> String {
+    fn note(&self) -> Note {
         match self {
-            Self::TvBox(change) => change.label(),
-            Self::Assets(change) => change.label(),
-            Self::Grow(change) => change.label(),
-            Self::Turn(change) => change.label(),
-            Self::Name(change) => change.label(),
-            Self::Shown(change) => change.label(),
-            Self::Restructure(change) => change.label(),
+            Self::TvBox(change) => change.note(),
+            Self::Assets(change) => change.note(),
+            Self::Grow(change) => change.note(),
+            Self::Turn(change) => change.note(),
+            Self::Name(change) => change.note(),
+            Self::Shown(change) => change.note(),
+            Self::Restructure(change) => change.note(),
         }
     }
 }
@@ -470,6 +628,17 @@ impl From<Restructure> for Change {
     }
 }
 
+/// One step: the change the DM made, and when they made it.
+#[derive(Debug, Serialize, Deserialize)]
+struct Step {
+    /// What the step writes and takes back.
+    change: Change,
+    /// The seconds since the epoch. A file from an older version of the
+    /// program carries none, and the step reads as `earlier`.
+    #[serde(default)]
+    at: u64,
+}
+
 /// The stack as `history.json` gives it back.
 #[derive(Debug, Default, Deserialize)]
 struct Read {
@@ -478,14 +647,14 @@ struct Read {
     place: usize,
     /// Every step, oldest first.
     #[serde(default)]
-    steps: Vec<Change>,
+    steps: Vec<Step>,
 }
 
 /// The same, on the way out, so no step is cloned to be written.
 #[derive(Debug, Serialize)]
 struct Written<'a> {
     place: usize,
-    steps: Vec<&'a Change>,
+    steps: Vec<&'a Step>,
 }
 
 /// The changes the DM made, and the ones they took back.
@@ -497,11 +666,11 @@ struct Written<'a> {
 #[derive(Debug, Default)]
 pub struct History {
     /// What the DM did, oldest first.
-    done: VecDeque<Change>,
+    done: VecDeque<Step>,
     /// What the DM took back, the last one last.
-    undone: Vec<Change>,
+    undone: Vec<Step>,
     /// The change under the DM's hand, which is not a step yet.
-    open: Option<Change>,
+    open: Option<Step>,
 }
 
 impl History {
@@ -514,7 +683,9 @@ impl History {
         let change = change.into();
         change.apply(scene);
         self.undone.clear();
-        self.open = Some(change);
+        // The time of a drag is the time it ends, because every frame of
+        // it writes this again.
+        self.open = Some(Step { change, at: now() });
     }
 
     /// Closes the change [`History::hold`] wrote, once the drag ends.
@@ -545,7 +716,10 @@ impl History {
     pub fn kept(&mut self, change: impl Into<Change>) {
         self.settle();
         self.undone.clear();
-        self.open = Some(change.into());
+        self.open = Some(Step {
+            change: change.into(),
+            at: now(),
+        });
         self.settle();
     }
 
@@ -556,32 +730,36 @@ impl History {
 
     /// Takes the last change back. Returns `true` when it did.
     pub fn undo(&mut self, scene: &mut Scene) -> bool {
-        let Some(change) = self.done.pop_back() else {
+        let Some(step) = self.done.pop_back() else {
             return false;
         };
-        change.revert(scene);
-        self.undone.push(change);
+        step.change.revert(scene);
+        self.undone.push(step);
         true
     }
 
     /// Writes the last change the DM took back. Returns `true` when it did.
     pub fn redo(&mut self, scene: &mut Scene) -> bool {
-        let Some(change) = self.undone.pop() else {
+        let Some(step) = self.undone.pop() else {
             return false;
         };
-        change.apply(scene);
-        self.done.push_back(change);
+        step.change.apply(scene);
+        self.done.push_back(step);
         true
     }
 
-    /// Every step on the stack, oldest first. DESIGN.md 9.6.
+    /// What every step says, oldest first. DESIGN.md 9.8.
     ///
     /// The steps past [`History::place`] are the ones the DM took back.
-    pub fn steps(&self) -> Vec<String> {
+    pub fn steps(&self) -> Vec<Note> {
+        let now = now();
         self.done
             .iter()
             .chain(self.undone.iter().rev())
-            .map(Command::label)
+            .map(|step| Note {
+                ago: ago(step.at, now),
+                ..step.change.note()
+            })
             .collect()
     }
 
@@ -631,7 +809,7 @@ impl History {
         let file: Read = serde_json::from_str(json)?;
         let mut steps = file.steps;
         let place = file.place.min(steps.len());
-        let taken_back: Vec<Change> = steps.split_off(place).into_iter().rev().collect();
+        let taken_back: Vec<Step> = steps.split_off(place).into_iter().rev().collect();
         Ok(Self {
             done: steps.into(),
             undone: taken_back,
@@ -741,6 +919,7 @@ mod tests {
             &mut scene,
             SetShown {
                 id: 7,
+                subject: "Group 7".to_owned(),
                 before: Shown::default(),
                 after: Shown {
                     dm: true,
@@ -790,6 +969,7 @@ mod tests {
         history.run(
             &mut scene,
             Turn {
+                subject: "two maps".to_owned(),
                 starts: starts.clone(),
                 pivot: (2.0, 0.0),
                 angle: 0.4,
@@ -799,6 +979,7 @@ mod tests {
         history.run(
             &mut scene,
             Grow {
+                subject: "two maps".to_owned(),
                 starts: turned,
                 pivot: (2.0, 0.0),
                 factor: 1.5,
@@ -814,7 +995,7 @@ mod tests {
     fn a_delete_in_the_root_keeps_only_the_root_list() {
         let mut scene = scene();
         let start = scene.clone();
-        let change = reshape(&mut scene, "Delete", |scene| {
+        let change = reshape(&mut scene, "Delete", "the map".to_owned(), |scene| {
             crate::scene::take_node(scene, 2);
         })
         .unwrap();
@@ -831,7 +1012,7 @@ mod tests {
         let mut scene = scene();
         scene.root.children.push(Node::Asset(asset(4, (0.0, 6.0))));
         let start = scene.clone();
-        let change = reshape(&mut scene, "Move", |scene| {
+        let change = reshape(&mut scene, "Move", "the map".to_owned(), |scene| {
             crate::scene::move_into(scene, 4, 7);
         })
         .unwrap();
@@ -851,7 +1032,7 @@ mod tests {
             group.children.push(Node::Asset(asset(5, (9.0, 3.0))));
         }
         let start = scene.clone();
-        let change = reshape(&mut scene, "Order", |scene| {
+        let change = reshape(&mut scene, "Order", "the map".to_owned(), |scene| {
             crate::scene::reorder_all(scene, &[3], true);
         })
         .unwrap();
@@ -868,7 +1049,7 @@ mod tests {
         let mut scene = scene();
         // The group stands on top of the root already.
         assert!(
-            reshape(&mut scene, "Move", |scene| {
+            reshape(&mut scene, "Move", "the map".to_owned(), |scene| {
                 crate::scene::move_into(scene, 7, ROOT_ID);
             })
             .is_none()
@@ -894,12 +1075,49 @@ mod tests {
                 after: "Cave".to_owned(),
             },
         );
-        assert_eq!(history.steps(), vec!["Move a map", "Rename to Cave"]);
+        let told: Vec<(String, String, String)> = history
+            .steps()
+            .into_iter()
+            .map(|note| (note.what, note.subject, note.detail))
+            .collect();
+        assert_eq!(
+            told,
+            vec![
+                (
+                    "Move".to_owned(),
+                    "map.png".to_owned(),
+                    "0.0, 0.0 to 1.0, 0.0 in".to_owned()
+                ),
+                (
+                    "Rename".to_owned(),
+                    "Group 7".to_owned(),
+                    "to Cave".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(history.steps()[0].ago, "just now");
         assert_eq!(history.place(), 2);
         assert!(history.undo(&mut scene));
         // The step the DM took back stays on the list, behind the place.
-        assert_eq!(history.steps(), vec!["Move a map", "Rename to Cave"]);
+        assert_eq!(history.steps().len(), 2);
         assert_eq!(history.place(), 1);
+    }
+
+    #[test]
+    fn a_step_says_how_long_ago_the_dm_made_it() {
+        let now = 1_000_000;
+        assert_eq!(super::ago(0, now), "earlier");
+        assert_eq!(super::ago(now, now), "just now");
+        assert_eq!(super::ago(now - 44, now), "just now");
+        assert_eq!(super::ago(now - 45, now), "1 min ago");
+        assert_eq!(super::ago(now - 600, now), "10 min ago");
+        assert_eq!(super::ago(now - 5400, now), "2 h ago");
+        assert_eq!(super::ago(now - 8 * 3600, now), "8 h ago");
+        assert_eq!(super::ago(now - 86_400, now), "a day ago");
+        assert_eq!(super::ago(now - 40 * 3600, now), "a day ago");
+        assert_eq!(super::ago(now - 3 * 86_400, now), "3 days ago");
+        // A clock that went back leaves a step in the future.
+        assert_eq!(super::ago(now + 60, now), "just now");
     }
 
     #[test]
@@ -947,7 +1165,7 @@ mod tests {
                 after: "Cave".to_owned(),
             },
         );
-        let change = reshape(&mut scene, "Delete", |scene| {
+        let change = reshape(&mut scene, "Delete", "the map".to_owned(), |scene| {
             crate::scene::take_node(scene, 2);
         })
         .unwrap();
@@ -960,6 +1178,7 @@ mod tests {
 
         let mut back = History::from_json(&written).unwrap();
         assert_eq!(back.steps(), history.steps());
+        assert_eq!(back.steps()[2].what, "Delete");
         assert_eq!(back.place(), 2);
         assert!(back.redo(&mut scene));
         assert!(back.walk_to(&mut scene, 0));
@@ -991,6 +1210,7 @@ mod tests {
         let before = scene.root.children.clone();
         let change = Restructure {
             what: "Delete".to_owned(),
+            subject: "the map".to_owned(),
             before: vec![(ROOT_ID, before.clone())],
             after: vec![(ROOT_ID, Vec::new())],
         };

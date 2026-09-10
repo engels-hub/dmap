@@ -413,9 +413,10 @@ impl Running {
             self.active_group = scene::ROOT_ID;
         }
         let id = self.scene.next_id();
+        let name = stored.display().to_string();
         let asset = Asset::new(id, stored, self.camera.center);
         let into = self.active_group;
-        let Some(change) = reshape(&mut self.scene, "Add a map", |scene| {
+        let Some(change) = reshape(&mut self.scene, "Add a map", name, |scene| {
             push_into(scene, into, Node::Asset(asset));
         }) else {
             return false;
