@@ -460,6 +460,37 @@ pub fn slider(
 }
 
 /// How wide `text` runs in `font`.
+/// The swatch that picks the color of a stroke. DESIGN.md 8.3.
+///
+/// It offers a blend and no more. `egui` writes an additive color as one
+/// with no alpha at all, and the ink pipeline blends on alpha, so an
+/// additive color would draw nothing at all and read as a broken swatch.
+/// The alpha stays above zero for the same reason: a stroke the DM cannot
+/// see is a stroke they cannot find on the canvas. Issue #12.
+///
+/// Returns `true` when the DM changed the color.
+pub fn color_swatch(ui: &mut Ui, color: &mut [u8; 4]) -> bool {
+    let mut picked = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
+    let response = egui::color_picker::color_edit_button_srgba(
+        ui,
+        &mut picked,
+        egui::color_picker::Alpha::OnlyBlend,
+    );
+    if !response.changed() {
+        return false;
+    }
+    let mut taken = picked.to_srgba_unmultiplied();
+    taken[3] = taken[3].max(MIN_ALPHA);
+    *color = taken;
+    true
+}
+
+/// The faintest a stroke may draw, out of 255.
+///
+/// Ten is a wash the DM can still see well enough to pick the stroke up
+/// again. Nothing is not a color.
+const MIN_ALPHA: u8 = 10;
+
 /// How wide a button of these words stands, in points.
 ///
 /// A panel that has to know whether two buttons fit beside one another

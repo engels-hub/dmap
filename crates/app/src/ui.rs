@@ -3428,15 +3428,7 @@ fn draw_properties(ui: &mut egui::Ui, settings: &mut Settings, tokens: Tokens) {
         tokens,
     );
     widget::row_label(ui, text::panel_draw_color());
-    let mut color = egui::Color32::from_rgba_unmultiplied(
-        settings.ink_color[0],
-        settings.ink_color[1],
-        settings.ink_color[2],
-        settings.ink_color[3],
-    );
-    if ui.color_edit_button_srgba(&mut color).changed() {
-        settings.ink_color = color.to_srgba_unmultiplied();
-    }
+    widget::color_swatch(ui, &mut settings.ink_color);
     if settings.ink_nib == Nib::Ruler {
         widget::row_label(ui, text::ruler_rule());
         let field = widget::select_field(ui, settings.ink_rule.name(), ui.available_width());
@@ -4004,14 +3996,7 @@ fn stroke_properties(
     let mut after = mark.clone();
     let mut changed = false;
     widget::row_label(ui, text::panel_draw_color());
-    let mut color = egui::Color32::from_rgba_unmultiplied(
-        mark.color[0],
-        mark.color[1],
-        mark.color[2],
-        mark.color[3],
-    );
-    if ui.color_edit_button_srgba(&mut color).changed() {
-        after.color = color.to_srgba_unmultiplied();
+    if widget::color_swatch(ui, &mut after.color) {
         changed = true;
     }
     widget::row_label(ui, text::panel_draw_width());

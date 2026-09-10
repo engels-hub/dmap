@@ -160,7 +160,7 @@ Two rules hold for every control:
 | Segmented control | Segments 28 px high, 10 px horizontal padding, 1 px `rule` border, borders overlap by 1 px. The selected segment has `raised` background, `accent` text and a 3 px `accent` bar on its bottom edge. |
 | Checkbox | 18 px square, 1 px border (`ink` when checked, `rule` when not), `field` background, `check` glyph 14 px in `accent`. Label 14 px to the right, gap 8 px. A label too long for its row wraps under itself. |
 | Slider | Track 2 px `rule`, filled part `ink`, knob 14 px square with 1 px `ink` border and `field` background. Value text in `mute` to the right. |
-| Color swatch | 28 px square, 1 px `rule` border, the hex value 14 px to the right. A click opens the color popover. |
+| Color swatch | 28 px square, 1 px `rule` border, the hex value 14 px to the right. A click opens the color popover. The popover gives a hue, a shade and an alpha. It gives no additive mode, because the canvas blends on alpha only. The alpha stays above zero, so a stroke is always visible. |
 | Button | Height 28 px, 10 px horizontal padding, 1 px `ink` border, `field` background, 14 px text. A button in a panel is 26 px high. A button in a row is 24 px high. No button goes under 24 px. |
 | Key chip | Height 22 px, 8 px horizontal padding, 1 px `rule` border, `field` background, 14 px text. |
 | Search field | As text input, with a `search` glyph 16 px on the left and an 8 px gap. |
