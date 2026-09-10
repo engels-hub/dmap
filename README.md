@@ -80,6 +80,8 @@ The program copies an image you add into the scene folder. The same image twice 
 
 Pick the TV display in the Settings dialog. The program keeps the choice in the config file.
 
+**Windows (wayland compat)** in the same dialog decides how the TV window reaches that display. It starts on: the two windows swap roles, because a Wayland compositor lets no program place its own window. Turn it off and the program moves the DM window off the TV display instead, which an X11 or a Windows desktop allows.
+
 The window has a light theme and a dark theme. The light one is the default. Pick the other one under **Theme** in the Settings dialog, and the program keeps that choice too.
 
 **Language** in the same dialog holds every language the program carries. The window takes a new one at once, with no restart, and the program keeps the choice. A first run takes the language of your system when a file matches it, and English when none does.

@@ -263,12 +263,12 @@ The footer holds Group and New group, and a helper line that names the picked no
 
 1. Display: select with the display name and its resolution.
 2. Size: segmented control (Diagonal, Pixels per inch, Width), then one input with its unit, then a helper line with the computed pixels per inch and the size of the table area at true size.
-3. Snap to true size: input in percent, helper text "either side of 100 %".
-4. Windows: checkbox "Swap the two windows instead of moving the DM window".
+3. Sticks to 100 %: input in percent, helper text "either side of 100 %".
+4. Windows (wayland compat): checkbox "Swap window roles instead of moving". It starts on, because a Wayland compositor lets no program place its own window.
 5. Check: checkbox "Show a 1 inch grid and a 6 inch ruler on the TV".
 6. Theme: segmented control (Light, Dark). See section 2.
 7. Language: select with the name of each language in its own words.
-8. Interface scale: slider with the percent to its right. Helper: "How big the toolbar, the panels and the dialogs draw. The maps keep their size". See section 3.1.
+8. Interface scale: slider with the percent to its right. Helper: "Changes size of the UI. Maps keep their size". See section 3.1.
 
 ### 9.2 Settings, Grid tab
 

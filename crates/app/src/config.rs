@@ -66,7 +66,7 @@ impl Default for Config {
             scenes_dir: default_scenes_dir(&home()),
             last_scene: None,
             tv_display: TvPlacement::default(),
-            swap_windows: false,
+            swap_windows: true,
             snap_percent: DEFAULT_SNAP_PERCENT,
             theme: crate::theme::Mode::default(),
             language: first_language(),
