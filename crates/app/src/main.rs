@@ -14,15 +14,20 @@
 
 mod camera;
 mod color;
+mod command;
 mod config;
 mod gpu;
 mod grid;
 mod icon;
 mod icons;
 mod images;
+mod ink;
 mod maps;
+mod overlay;
 mod pointer;
 mod scene;
+mod stroke;
+mod text;
 mod theme;
 mod transform;
 mod tv;
@@ -44,11 +49,14 @@ use egui_winit::winit::{
 };
 
 use crate::camera::{Camera, DEFAULT_PIXELS_PER_INCH};
+use crate::command::{Deed, History, reshape};
 use crate::config::Config;
 use crate::gpu::{Gpu, Pane};
 use crate::grid::GridLayer;
 use crate::images::Loader;
+use crate::ink::InkLayer;
 use crate::maps::{MapLayer, relative_path};
+use crate::overlay::Overlay;
 use crate::pointer::PointerDisc;
 use crate::scene::copy_into_scene;
 use crate::scene::{Asset, Audience, Node, Scene, draw_order, push_into};
@@ -65,6 +73,12 @@ const TV_FALLBACK_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 540.0);
 /// The file that holds one scene, inside the scene's own folder.
 const SCENE_FILE: &str = "scene.json";
 
+/// The name of the file that holds the changes, beside the scene file.
+///
+/// It sits in the scene folder, so a scene that moves to another machine
+/// takes its history along, and a scene that goes takes it with it.
+const HISTORY_FILE: &str = "history.json";
+
 /// The scene a first run opens.
 const FIRST_SCENE: &str = "New scene";
 
@@ -79,6 +93,7 @@ fn main() -> Result<()> {
     let scene_dir = scene_to_open(&mut config)?;
     std::fs::create_dir_all(&scene_dir)
         .with_context(|| format!("{}: cannot make the scene folder", scene_dir.display()))?;
+    text::use_language(&config.language);
     let scene = load_scene(&scene_dir)?;
     // The config remembers this scene for the next run. The scene file is
     // written only when it is missing, so a scene on a read-only stick
@@ -160,6 +175,30 @@ fn load_scene(dir: &Path) -> Result<Scene> {
     }
 }
 
+/// Reads the history of a scene, or starts an empty one.
+///
+/// A file that will not parse costs the DM the steps in it and nothing
+/// more, so this says what went wrong and hands back an empty stack. The
+/// scene itself opens either way.
+fn load_history(dir: &Path) -> History {
+    let path = dir.join(HISTORY_FILE);
+    let json = match std::fs::read_to_string(&path) {
+        Ok(json) => json,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return History::default(),
+        Err(error) => {
+            eprintln!("{}: cannot read the history: {error}", path.display());
+            return History::default();
+        }
+    };
+    match History::from_json(&json) {
+        Ok(history) => history,
+        Err(error) => {
+            eprintln!("{}: broken history: {error}", path.display());
+            History::default()
+        }
+    }
+}
+
 /// What one event left for the program to do.
 #[derive(Debug, Default)]
 struct Outcome {
@@ -213,8 +252,27 @@ struct Running {
     active_group: scene::NodeId,
     /// The tree the DM works on.
     scene: Scene,
+    /// Every image file the loader was asked for, for this scene.
+    ///
+    /// A change can put an asset back in the tree whose file the loader
+    /// never saw, such as a redo of an add that the DM took back before
+    /// the program closed. Without this the map would draw nothing, take
+    /// no click and show no handles.
+    asked: std::collections::HashSet<PathBuf>,
+    /// Every change the DM made to that tree, for undo and redo.
+    ///
+    /// The stack belongs to the open scene. A save writes it to
+    /// `history.json` in the scene folder and never cuts it, so the DM
+    /// undoes past a save, and past the end of the program. Another scene
+    /// on the canvas brings the stack of its own folder.
+    history: History,
     map_layer: MapLayer,
     grid_layer: GridLayer,
+    ink_layer: InkLayer,
+    /// The `egui` of the TV window, for the labels of a measure.
+    overlay: Overlay,
+    /// The stroke the DM is drawing, which is in no scene yet.
+    live: Option<crate::stroke::Stroke>,
     loader: Loader,
     camera: Camera,
 }
@@ -254,6 +312,8 @@ impl Running {
         let pointer = PointerDisc::new(&gpu.device, tv.config.format);
         let map_layer = MapLayer::new(&gpu.device, dm.config.format);
         let grid_layer = GridLayer::new(&gpu.device, dm.config.format);
+        let ink_layer = InkLayer::new(&gpu.device, dm.config.format);
+        let overlay = Overlay::new(&gpu, &tv);
         let wake_window = Arc::clone(&dm.window);
         let loader = Loader::spawn(gpu.device.limits().max_texture_dimension_2d, move || {
             wake_window.request_redraw();
@@ -261,6 +321,7 @@ impl Running {
         for asset in scene::assets(scene) {
             loader.request(scene_dir.join(&asset.path));
         }
+        let history = load_history(&scene_dir);
         Ok(Self {
             gpu,
             dm,
@@ -273,6 +334,12 @@ impl Running {
                 swap_windows: config.swap_windows,
                 snap_percent: clamp_snap_percent(config.snap_percent),
                 theme: config.theme,
+                language: config.language.clone(),
+                ink_color: config.ink_color,
+                ink_width: config.ink_width,
+                ink_nib: config.ink_nib,
+                ink_rule: config.ink_rule,
+                ink_snap: config.ink_snap,
                 ui_scale: crate::theme::clamp_scale(config.ui_scale),
             },
             placed: false,
@@ -284,8 +351,13 @@ impl Running {
             scene_error: String::new(),
             active_group: scene::ROOT_ID,
             scene: scene.clone(),
+            asked: std::collections::HashSet::new(),
+            history,
             map_layer,
             grid_layer,
+            ink_layer,
+            overlay,
+            live: None,
             loader,
             camera: DM_CAMERA,
         })
@@ -361,7 +433,7 @@ impl Running {
         Ok(())
     }
 
-    /// Draws one TV frame: the maps the players see, the grid and the pointer.
+    /// Draws one TV frame: the maps, the grid, the strokes and the pointer.
     ///
     /// Returns `false` when the surface gave no frame and nothing was shown.
     ///
@@ -373,26 +445,35 @@ impl Running {
         let viewport = (pane.config.width, pane.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
         let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
-        let canvas = self.settings.theme.tokens().canvas;
         let tv_camera = self.scene.tv_box.camera(viewport);
         // The TV draws what it shows, and every map at full strength.
         let shown: Vec<(&Asset, f32)> = draw_order(&self.scene, Audience::Tv)
             .into_iter()
             .map(|asset| (asset, maps::FULL_STRENGTH))
             .collect();
+        // The strokes draw over every map and over the grid, and what the
+        // DM has under their hand draws with them.
+        let mut ink = scene::ink_order(&self.scene, Audience::Tv);
+        if let Some(live) = self.live.as_ref() {
+            ink.push(live);
+        }
         let map_layer = &mut self.map_layer;
         let grid_layer = &self.grid_layer;
+        let ink_layer = &mut self.ink_layer;
         let line = self.settings.theme.tokens().grid_line();
         let width = pane.window.scale_factor() as f32;
-        self.gpu.clear(pane, color::linear_token(canvas), |pass| {
-            map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
-            // DESIGN.md 5.1: one grid covers the canvas and it lies over
-            // every map, on both screens.
-            grid_layer.draw(queue, pass, &tv_camera, viewport, line, width);
-            if let Some(center) = tv_pointer {
-                pointer.draw(queue, pass, center, viewport);
-            }
-        })
+        let mode = self.settings.theme;
+        self.overlay
+            .render(&self.gpu, pane, &ink, &tv_camera, mode, |pass| {
+                map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
+                // DESIGN.md 5.1: one grid covers the canvas and it lies over
+                // every map, on both screens.
+                grid_layer.draw(queue, pass, &tv_camera, viewport, line, width);
+                ink_layer.draw(device, queue, pass, &ink, &tv_camera, viewport);
+                if let Some(center) = tv_pointer {
+                    pointer.draw(queue, pass, center, viewport);
+                }
+            })
     }
 
     /// Adds a map file at the middle of the DM view.
@@ -406,21 +487,29 @@ impl Running {
                 return false;
             }
         };
-        self.loader.request(self.scene_dir.join(&stored));
         // A new asset joins the group the DM works in. That group may
         // have gone since the DM marked it, and the root is always there.
         if !scene::has_group(&self.scene, self.active_group) {
             self.active_group = scene::ROOT_ID;
         }
         let id = self.scene.next_id();
+        let name = stored.display().to_string();
         let asset = Asset::new(id, stored, self.camera.center);
-        push_into(&mut self.scene, self.active_group, Node::Asset(asset))
+        let into = self.active_group;
+        let Some(change) = reshape(&mut self.scene, Deed::AddMap, name, |scene| {
+            push_into(scene, into, Node::Asset(asset));
+        }) else {
+            return false;
+        };
+        self.history.kept(change);
+        self.request_images();
+        true
     }
 
     /// Asks for an image file and adds it. Returns `true` when a file was added.
     fn pick_map_file(&mut self) -> bool {
         let picked = rfd::FileDialog::new()
-            .add_filter("Images", &["png", "jpg", "jpeg"])
+            .add_filter(text::dialog_file_images(), &["png", "jpg", "jpeg"])
             .set_directory(&self.scene_dir)
             .pick_file();
         picked.is_some_and(|file| self.add_map(&file))
@@ -458,6 +547,7 @@ impl Running {
                 displays: &self.displays,
                 settings: &mut self.settings,
                 scene: &mut self.scene,
+                history: &mut self.history,
                 camera: &mut self.camera,
                 scene_dir: &self.scene_dir,
                 list_scenes: &|| config::scene_list(&self.scenes_dir),
@@ -467,6 +557,11 @@ impl Running {
                 size_of: &|path| map_layer.size_of(path),
             },
         );
+        // A change may have put an asset back in the tree, such as a redo
+        // of an add. It is settled by now, because a drag adds nothing.
+        if output.save {
+            self.request_images();
+        }
         let viewport = (self.dm.config.width, self.dm.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
         // DESIGN.md 5.6: a map the TV does not show draws faint here, so
@@ -482,8 +577,17 @@ impl Running {
                 (asset, strength)
             })
             .collect();
+        // What the DM is drawing right now is in no scene, so it travels
+        // beside the scene until the hand lets go.
+        let drawing = self.live != output.live;
+        self.live.clone_from(&output.live);
+        let mut ink = scene::ink_order(&self.scene, Audience::Dm);
+        if let Some(live) = self.live.as_ref() {
+            ink.push(live);
+        }
         let (map_layer, camera) = (&mut self.map_layer, &self.camera);
         let grid_layer = &self.grid_layer;
+        let ink_layer = &mut self.ink_layer;
         let tokens = self.settings.theme.tokens();
         let line = tokens.grid_line();
         let width = self.dm.window.scale_factor() as f32;
@@ -495,9 +599,10 @@ impl Running {
             |pass| {
                 map_layer.draw(device, queue, pass, &shown, camera, viewport);
                 grid_layer.draw(queue, pass, camera, viewport, line, width);
+                ink_layer.draw(device, queue, pass, &ink, camera, viewport);
             },
         )?;
-        if output.edited {
+        if output.edited || drawing {
             self.tv_dirty = true;
         }
         self.active_group = output.active_group;
@@ -568,10 +673,12 @@ impl Running {
     /// The images of the old scene leave the GPU. A scene names its images
     /// by the file beside it, so two scenes can hold a `grid.png` and the
     /// new one must not draw the old one.
-    fn open_scene(&mut self, dir: PathBuf, scene: &Scene) {
+    fn open_scene(&mut self, dir: PathBuf, scene: &Scene, history: History) {
         self.scene_dir = dir;
         self.scene = scene.clone();
         self.scene.tv_box = scene.tv_box.clamped();
+        // Every scene brings the changes of its own folder.
+        self.history = history;
         self.map_layer.clear();
         self.reload_images();
         self.dm.window.set_title(&window_title(&self.scene_dir));
@@ -583,9 +690,24 @@ impl Running {
     ///
     /// A scene that moves takes its images with it, so what is in flight
     /// carries the old folder and never arrives.
-    fn reload_images(&self) {
-        for asset in scene::assets(&self.scene) {
-            self.loader.request(self.scene_dir.join(&asset.path));
+    fn reload_images(&mut self) {
+        self.asked.clear();
+        self.request_images();
+    }
+
+    /// Asks the loader for each image the scene holds and has not asked for.
+    ///
+    /// A file is asked for once. The loader keeps no list of its own, and
+    /// a file that will not decode would be read again on every frame.
+    fn request_images(&mut self) {
+        let files: Vec<PathBuf> = scene::assets(&self.scene)
+            .iter()
+            .map(|asset| asset.path.clone())
+            .collect();
+        for file in files {
+            if self.asked.insert(file.clone()) {
+                self.loader.request(self.scene_dir.join(&file));
+            }
         }
     }
 
@@ -595,6 +717,12 @@ impl Running {
         config.swap_windows = self.settings.swap_windows;
         config.snap_percent = self.settings.snap_percent;
         config.theme = self.settings.theme;
+        config.language.clone_from(&self.settings.language);
+        config.ink_color = self.settings.ink_color;
+        config.ink_width = self.settings.ink_width;
+        config.ink_nib = self.settings.ink_nib;
+        config.ink_rule = self.settings.ink_rule;
+        config.ink_snap = self.settings.ink_snap;
         config.ui_scale = self.settings.ui_scale;
         scene.clone_from(&self.scene);
     }
@@ -696,9 +824,30 @@ fn reveal(dir: &Path) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error when a folder cannot be made or a file cannot be written.
-fn save(config: &Config, scene: &Scene, scene_dir: &Path) -> Result<()> {
+fn save(config: &Config, scene: &Scene, history: &mut History, scene_dir: &Path) -> Result<()> {
     save_scene(scene, scene_dir)?;
+    save_history(history, scene_dir)?;
     save_config(config)
+}
+
+/// Writes the changes beside the scene file.
+///
+/// A stack with nothing new to say writes nothing. The file holds every
+/// step, and a step that reshaped the tree holds branches of it, so the
+/// file grows with the scene and a write of it is not free.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be written.
+fn save_history(history: &mut History, scene_dir: &Path) -> Result<()> {
+    if !history.unwritten() {
+        return Ok(());
+    }
+    let file = scene_dir.join(HISTORY_FILE);
+    std::fs::write(&file, history.to_json())
+        .with_context(|| format!("{}: cannot save the history", file.display()))?;
+    history.wrote();
+    Ok(())
 }
 
 /// Writes the scene file beside its images.
@@ -749,7 +898,12 @@ impl App {
             running.update(&mut self.config, &mut self.scene);
             // A write that fails leaves the session alone. The DM keeps
             // working, and the message says what went wrong.
-            if let Err(error) = save(&self.config, &self.scene, &self.scene_dir) {
+            if let Err(error) = save(
+                &self.config,
+                &self.scene,
+                &mut running.history,
+                &self.scene_dir,
+            ) {
                 eprintln!("{error:#}");
                 running.scene_error = format!("{error:#}");
             }
@@ -821,7 +975,12 @@ impl App {
                 self.config.last_scene = Some(self.config.remember(&self.scene_dir));
             }
         }
-        save(&self.config, &self.scene, &self.scene_dir)
+        save(
+            &self.config,
+            &self.scene,
+            &mut running.history,
+            &self.scene_dir,
+        )
     }
 
     /// Saves the open scene, then puts another one on the canvas.
@@ -831,7 +990,12 @@ impl App {
     /// Returns an error when a file cannot be written or read.
     fn open_scene(&mut self, running: &mut Running, name: &str) -> Result<()> {
         running.update(&mut self.config, &mut self.scene);
-        save(&self.config, &self.scene, &self.scene_dir)?;
+        save(
+            &self.config,
+            &self.scene,
+            &mut running.history,
+            &self.scene_dir,
+        )?;
         self.load_scene(running, name)
     }
 
@@ -846,9 +1010,10 @@ impl App {
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("{}: cannot make the scene folder", dir.display()))?;
         self.scene = load_scene(&dir)?;
+        let history = load_history(&dir);
         self.scene_dir.clone_from(&dir);
         self.config.last_scene = Some(self.config.remember(&dir));
-        running.open_scene(dir, &self.scene);
+        running.open_scene(dir, &self.scene, history);
         Ok(())
     }
 }

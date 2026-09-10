@@ -55,37 +55,6 @@ impl Gpu {
             config,
         })
     }
-
-    /// Clears the whole pane to `color`, then lets `draw` add to the pass.
-    ///
-    /// Returns `false` when the surface gave no frame and nothing was shown.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the surface fails validation.
-    pub fn clear(
-        &self,
-        pane: &mut Pane,
-        color: wgpu::Color,
-        draw: impl FnOnce(&mut wgpu::RenderPass<'static>),
-    ) -> Result<bool> {
-        let Some(frame) = pane.acquire(&self.device)? else {
-            return Ok(false);
-        };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        {
-            let mut pass = begin_clear_pass(&mut encoder, &view, color);
-            draw(&mut pass);
-        };
-        self.queue.submit([encoder.finish()]);
-        self.queue.present(frame);
-        Ok(true)
-    }
 }
 
 /// One window and the wgpu surface that draws into it.

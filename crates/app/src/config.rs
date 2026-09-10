@@ -50,8 +50,36 @@ pub struct Config {
     pub snap_percent: f64,
     /// The theme the DM window draws. DESIGN.md 2.
     pub theme: crate::theme::Mode,
+    /// The language the window speaks, by the name of its file.
+    ///
+    /// A first run takes the language of the system, and English when the
+    /// program carries no file for it.
+    #[serde(default = "first_language")]
+    pub language: String,
     /// What every size of DESIGN.md is multiplied by. DESIGN.md 3.1.
     pub ui_scale: f64,
+    /// The color the Draw view paints with, as red, green, blue, alpha.
+    ///
+    /// The DM picks a color and a width once, and every stroke after that
+    /// takes them. Issue #12.
+    #[serde(default = "default_ink_color")]
+    pub ink_color: [u8; 4],
+    /// How thick a stroke draws, in inches.
+    #[serde(default = "default_ink_width")]
+    pub ink_width: f64,
+    /// Which of the six squares of the Draw panel the DM last used.
+    #[serde(default)]
+    pub ink_nib: crate::ui::Nib,
+    /// How a ruler counts its length. Issue #12.
+    #[serde(default)]
+    pub ink_rule: crate::stroke::Rule,
+    /// Whether a shape starts on a crossing of the grid.
+    ///
+    /// A spell lands on a cell, so this starts on. `Shift` holds it off
+    /// for one drag, and the ruler holds it off with `Alt`, which leaves
+    /// `Shift` free to keep the measure. Issue #12.
+    #[serde(default = "yes")]
+    pub ink_snap: bool,
 }
 
 impl Default for Config {
@@ -60,12 +88,53 @@ impl Default for Config {
             scenes_dir: default_scenes_dir(&home()),
             last_scene: None,
             tv_display: TvPlacement::default(),
-            swap_windows: false,
+            swap_windows: true,
             snap_percent: DEFAULT_SNAP_PERCENT,
             theme: crate::theme::Mode::default(),
+            language: first_language(),
             ui_scale: crate::theme::DEFAULT_SCALE,
+            ink_color: default_ink_color(),
+            ink_width: default_ink_width(),
+            ink_nib: crate::ui::Nib::default(),
+            ink_rule: crate::stroke::Rule::default(),
+            ink_snap: yes(),
         }
     }
+}
+
+/// A setting that starts on.
+fn yes() -> bool {
+    true
+}
+
+/// The color a first run draws with: the accent red of DESIGN.md 2.
+fn default_ink_color() -> [u8; 4] {
+    [0xC4, 0x3E, 0x1C, 0xFF]
+}
+
+/// How thick a stroke draws on a first run, in inches.
+///
+/// A tenth of an inch is a fifth of a grid cell at true size: a mark that
+/// reads across the table without covering the map under it.
+fn default_ink_width() -> f64 {
+    0.1
+}
+
+/// The language a first run takes: the system's, or English.
+///
+/// The desktop puts the locale in the environment, such as `ru_RU.UTF-8`.
+/// Windows leaves those unset, and a DM there picks the language in
+/// Settings once. Issue #53.
+fn first_language() -> String {
+    for name in ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"] {
+        let Ok(locale) = std::env::var(name) else {
+            continue;
+        };
+        if let Some(code) = crate::text::system_language(&locale) {
+            return code.to_owned();
+        }
+    }
+    crate::text::DEFAULT.to_owned()
 }
 
 impl Config {
@@ -278,7 +347,13 @@ mod tests {
             swap_windows: true,
             snap_percent: 12.0,
             theme: crate::theme::Mode::Dark,
+            language: "ru".to_owned(),
             ui_scale: 1.25,
+            ink_color: [1, 2, 3, 255],
+            ink_width: 0.25,
+            ink_nib: crate::ui::Nib::Ellipse,
+            ink_rule: crate::stroke::Rule::Fifth,
+            ink_snap: false,
         };
         assert_eq!(Config::from_json(&config.to_json()).unwrap(), config);
     }

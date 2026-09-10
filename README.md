@@ -48,21 +48,25 @@ The first build takes some minutes. The DM window opens on your display. If a se
 
 ### Where your work lives
 
-A scene is a folder. The folder holds one `scene.json` and the map images beside it. Nothing in it points outside the folder. Copy a scene to a USB stick or to another machine, and it opens there.
+A scene is a folder. The folder holds one `scene.json`, one `history.json` and the map images beside them. Nothing in it points outside the folder. Copy a scene to a USB stick or to another machine, and it opens there.
 
 ```text
 ~/dmap/scenes/
   The Crypt/
     scene.json      the maps, where they sit, and the TV box
+    history.json    the changes you can take back
     crypt.png       the images themselves
   Sosnovka/
     scene.json
+    history.json
     village.jpg
 ```
 
 The program keeps its own file in `~/.config/dmap/config.json`. It holds the folder your scenes live in and the scene you had open last. It also holds the settings of this table: the TV display, swap mode and the snap window. A scene carries none of those, so your TV does not travel with a scene you give away.
 
-Both files hold plain JSON. Read them, and edit them by hand if you like.
+These files hold plain JSON. Read them, and edit them by hand if you like.
+
+Caution: a change you make to `scene.json` by hand leaves `history.json` behind. The steps in it go back to a scene that no longer stands there. Delete `history.json` after such an edit. A scene with no history file opens with an empty stack.
 
 Start the program with no argument and it opens the scene you had open last. Give it a scene folder to open that one:
 
@@ -76,7 +80,15 @@ The program copies an image you add into the scene folder. The same image twice 
 
 Pick the TV display in the Settings dialog. The program keeps the choice in the config file.
 
+**Windows (wayland compat)** in the same dialog decides how the TV window reaches that display. It starts on: the two windows swap roles, because a Wayland compositor lets no program place its own window. Turn it off and the program moves the DM window off the TV display instead, which an X11 or a Windows desktop allows.
+
 The window has a light theme and a dark theme. The light one is the default. Pick the other one under **Theme** in the Settings dialog, and the program keeps that choice too.
+
+**Language** in the same dialog holds every language the program carries. The window takes a new one at once, with no restart, and the program keeps the choice. A first run takes the language of your system when a file matches it, and English when none does.
+
+To add a language, write one file. Copy `crates/app/assets/lang/en.json`, name the copy for your language, such as `ru.json`, and translate the right-hand side of each line. A key you leave out falls back to English, so a part of a translation is a translation. The program says in its log which language it took and which keys fell back. Send the file as a pull request, and the next build carries it.
+
+A place for a number or a name stands in braces, such as `{count}`. Put it where your language wants it. The line `"panel.picked.title": "{count} picked"` reads `"Выбрано: {count}"` in Russian, and both are right.
 
 **Interface scale** in the same dialog sets how big the toolbar, the panels and the dialogs draw. The range is 75 % to 175 %, in steps of 5 %. The maps keep their size, and one grid cell stays one inch, so a change here never moves what the players see.
 
@@ -91,8 +103,16 @@ The canvas takes its controls from Figma.
 | Zoom the DM view | `Ctrl` with the wheel, `Ctrl` with `+` or `-`, or a pinch on a touchpad |
 | Back to the zoom a project opens with | `Ctrl` with `0` |
 | Put the whole TV box on the screen | `T` |
+| Take the last change back | `Ctrl` with `Z` |
+| Make the change again | `Ctrl` and `Shift` with `Z`, or `Ctrl` with `Y` |
 
 The DM view is the game master's own. The TV never moves with it.
+
+`Ctrl` with `Z` takes back the last change to the scene. Every change counts: a drag, a key, a field in a panel, a switch in the list, and the TV box. One drag is one step, however many frames it covers. The stack holds a hundred steps. It lives in `history.json` beside the scene, so you close the program and take back yesterday's work tomorrow. Another scene on the canvas brings the stack of its own folder.
+
+A field that holds the keyboard keeps an undo of its own. There `Ctrl` with `Z` works on the text you type.
+
+The **History** button in the bottom right corner opens the list of your changes, the newest first. A click on a step takes the scene to the state after that step. The steps you took back stay on the list, in grey, so one click walks forward again. The last row, "Before the first change", takes the scene to where the stack begins.
 
 Pick a view in the toolbar at the bottom of the window. The toolbar comes in two boxes. The left one holds the views, and one of them is always on. The right one holds Scenes, Add map and Settings, which open something at once and never stay on.
 
@@ -115,6 +135,27 @@ Pick a view in the toolbar at the bottom of the window. The toolbar comes in two
 | Move it up or down the stack | `Page Up` or `Page Down`. Nodes that sit in one group move together |
 | Set the pixels in one grid cell | Type the number in the panel, or press Measure a cell and click two corners of one cell |
 | Give up a measure | `Escape` |
+
+**Draw** marks the map, and lays an area of effect over it. Everything you draw sits in inches on the canvas, so it stays where you put it when a map moves under it.
+
+| Action | Control |
+|---|---|
+| Pick a pen, a shape, the eraser or the ruler | The squares at the top of the Draw panel |
+| Draw | Drag on the canvas |
+| Take a bite out of a stroke | Drag the eraser over it. What is left of a shape is a free line, and the pieces join a group |
+| Rub out an effect or a kept measure | Drag the eraser anywhere over it. It goes whole |
+| Measure a distance | Drag the ruler. The label gives cells and feet |
+| Bend the measure | The second button, while you drag |
+| Keep the measure | `Shift` as you let go. Without it the line goes |
+| Give up the measure | `Escape` |
+| Choose how a diagonal counts | Measure, in the panel: Euclidean, D&D 5e, Pathfinder or Manhattan |
+| Start a shape off the grid | Hold `Shift`, or turn "Start on the grid" off in the panel |
+| Change a stroke you drew | Pick it in the Select view or in the Objects list. Its panel holds the color, the width and the size |
+| Lay a burst | Drag from its middle to its edge |
+| Lay a cone | Drag from its point out to where it ends. It ends as wide as it is long |
+| Lay a beam | Drag for the length and let go, then drag again for the width |
+
+The color, the width, the square you last used and the way you count a diagonal are yours: the program keeps them and the next stroke takes them.
 
 **Table** works on the TV box, the part of the canvas the TV shows.
 

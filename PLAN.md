@@ -116,7 +116,8 @@ Wall      { a, b, kind: Wall | Door(open/closed) | Invisible, blocks_light, bloc
 ```
 
 - Each change is a `Command` with `apply` and `revert` on an undo stack. The tools make commands. The UI never changes the scene directly. This is also the extension point for scripts.
-- The scene is plain data with `serde`. One scene is one folder. The folder holds `scene.json` and the images beside it. Every path in the file names a file in that folder, so the whole folder moves to another machine.
+- The scene is plain data with `serde`. One scene is one folder. The folder holds `scene.json`, `history.json` and the images beside them. Every path in the file names a file in that folder, so the whole folder moves to another machine.
+- The undo stack goes into `history.json`: every step, oldest first, and how many of them stand written. A step holds the values it wrote and the values that stood there, so the file is enough to walk the scene in both directions. The file has no line breaks, because a step that reshapes the tree carries branches of it.
 - `~/.config/dmap/config.json` holds the folder the scenes live in and the scene of the last run. It also holds the settings of the table: the TV display, swap mode and the snap window. A scene holds none of those.
 - A uniform grid is the spatial index. It holds walls and objects. The program uses it for hit tests, view culling (§8.1) and the light rays. Each object keeps its world AABB. The command that moves the object updates the AABB.
 
@@ -168,6 +169,7 @@ Extension point: `trait RenderPass { fn prepare(&mut self, scene, view); fn rend
   - F: flip.
   - R: turn 90°.
   - Arrows: move the TV box one cell.
+  - Ctrl with Z: undo. Ctrl and Shift with Z: redo.
   - `T`: show the TV box.
   - Tab: hide all DM overlays.
 

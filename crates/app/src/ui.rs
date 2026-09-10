@@ -10,10 +10,16 @@ use egui_winit::winit::{event::WindowEvent, monitor::MonitorHandle};
 
 use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::color;
+use crate::command::{
+    Deed, Grow, History, Note, Restructure, SetAssets, SetName, SetShown, SetStrokes, SetTvBox,
+    Turn, reshape,
+};
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::icon;
 use crate::icons::Icon;
-use crate::scene::{Group, Node, NodeId, Placed, ROOT_ID, Scene};
+use crate::scene::{Asset, Group, Node, NodeId, Placed, ROOT_ID, Scene, Shown};
+use crate::stroke::{Ink, Rule, Stroke};
+use crate::text;
 use crate::theme::{self, Tokens};
 use crate::transform::{
     MAX_GRID_PX, MIN_GRID_PX, corner_offset, edge_midpoint, grid_px_from_measure, hit_test,
@@ -107,11 +113,73 @@ const ROW_GAP: f32 = 16.0;
 /// The height of the footer of a dialog, in points. DESIGN.md 9.
 const FOOTER: f32 = 48.0;
 
+/// The height of one step row in the history dialog, in points.
+///
+/// DESIGN.md 9.8 gives a step two lines: what the DM did, then what the
+/// step wrote.
+const STEP_ROW: f32 = 46.0;
+
+/// Half the gap between the two lines of a step row, in points.
+const STEP_LINE: f32 = 3.0;
+
+/// The padding on each side of a step row, in points. DESIGN.md 9.8.
+const STEP_PAD: f32 = 12.0;
+
 /// The height of one scene row, in points. DESIGN.md 9.6.
 const SCENE_ROW: f32 = 40.0;
 
 /// The width of the scenes folder input, in points. DESIGN.md 9.6.
 const PATH_WIDTH: f32 = 360.0;
+
+/// How far the eraser reaches from the pointer, in inches.
+///
+/// A fifth of an inch is a fifth of a grid cell: wide enough to rub a
+/// line out with one pass, narrow enough to take a bite out of one.
+const ERASER_REACH: f64 = 0.2;
+
+/// How many feet a grid cell stands for. PLAN.md 1.
+const FEET_PER_CELL: f64 = 5.0;
+
+/// The gap between a ruler label and the point it belongs to, in points.
+const LABEL_GAP: f32 = 6.0;
+
+/// The padding inside a ruler label, in points.
+const LABEL_PAD: f32 = 4.0;
+
+/// The side of one square in the row of nibs, in points. DESIGN.md 8.3.
+const NIB_SQUARE: f32 = 28.0;
+
+/// How wide the width slider draws in the Draw panel, in points.
+const PANEL_SLIDER: f32 = 150.0;
+
+/// The least a shape may reach before it counts as one, in inches.
+///
+/// A press and a release on one spot is a click, not a drag, and the
+/// hand moves a little between the two. Issue #12.
+const MIN_SHAPE: f64 = 0.2;
+
+/// How far from a stroke a press still takes it, in inches.
+///
+/// A thin line is hard to hit exactly, so the press reaches a tenth of a
+/// cell past the edge of it.
+const PICK_REACH: f64 = 0.1;
+
+/// The shortest and the longest an area of effect may reach, in cells.
+const MIN_REACH: f64 = 0.5;
+const MAX_REACH: f64 = 200.0;
+
+/// The thinnest and the thickest a stroke may draw, in inches.
+///
+/// A fiftieth of an inch is a hair at true size, and half an inch covers
+/// a tenth of a grid cell. Wider than that is a fill, not a mark.
+const MIN_INK_WIDTH: f64 = 0.02;
+const MAX_INK_WIDTH: f64 = 0.5;
+
+/// How far the pointer moves before a pen keeps another point, in inches.
+///
+/// A hundredth of an inch is under a pixel at the zoom a table works at,
+/// so the line reads as smooth and holds a tenth of the points.
+const PEN_STEP: f64 = 0.01;
 
 /// Size of a corner handle in points.
 const HANDLE_SIZE: f32 = 8.0;
@@ -178,6 +246,20 @@ const ZOOM_IN_EQUALS: egui::KeyboardShortcut =
 const ZOOM_OUT: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Minus);
 
+/// Takes the last change to the scene back.
+const UNDO: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
+
+/// Writes the last change the DM took back again.
+const REDO: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
+    egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+    egui::Key::Z,
+);
+
+/// The same, for a DM who learned redo in a Windows program.
+const REDO_Y: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
+
 /// Back to the zoom a new project opens with.
 const ZOOM_RESET: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Num0);
@@ -192,13 +274,18 @@ pub struct DmUi {
     renderer: egui_wgpu::Renderer,
     tool: Tool,
     select: Select,
+    draw: Draw,
     table: Table,
     scenes: Scenes,
     tree: Tree,
     /// The settings dialog and the tab it shows.
     dialog: Dialog,
+    /// Whether the history dialog stands. DESIGN.md 9.8.
+    history_open: bool,
     /// The theme the context carries, so a change installs once.
     theme: theme::Mode,
+    /// The language the catalog holds, for the same reason.
+    language: String,
     /// The interface scale the context carries, for the same reason.
     ui_scale: f64,
     /// The DM asked to see the whole TV box. The next frame acts on it.
@@ -216,8 +303,102 @@ enum Tool {
     /// Pick a map and move, turn, scale or flip it.
     #[default]
     Select,
+    /// Draw on the canvas with a pen, a shape, an eraser or a ruler.
+    Draw,
     /// Drag the box that decides what the TV shows.
     Table,
+}
+
+/// What the Draw view does with a drag. DESIGN.md 8.3.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Nib {
+    /// A free line that follows the pointer.
+    #[default]
+    Pen,
+    /// A straight line from the press to the pointer.
+    Line,
+    /// A box between the press and the pointer.
+    Rect,
+    /// The ellipse that fills that box.
+    Ellipse,
+    /// Takes a bite out of every stroke it passes over.
+    Eraser,
+    /// Measures a distance, and keeps it when the DM holds Shift.
+    Ruler,
+    /// A round area of effect, dragged from its middle to its edge.
+    Burst,
+    /// A cone of effect, dragged from its point to where it ends.
+    Cone,
+    /// A straight run of effect, one cell wide.
+    Beam,
+}
+
+impl Nib {
+    /// The kind of stroke this nib leaves behind, if it leaves one.
+    fn ink(self) -> Option<Ink> {
+        match self {
+            Self::Pen => Some(Ink::Pen),
+            Self::Line => Some(Ink::Line),
+            Self::Rect => Some(Ink::Rect),
+            Self::Ellipse => Some(Ink::Ellipse),
+            Self::Ruler => Some(Ink::Measure),
+            Self::Burst => Some(Ink::Burst),
+            Self::Cone => Some(Ink::Cone),
+            Self::Beam => Some(Ink::Beam),
+            Self::Eraser => None,
+        }
+    }
+
+    /// What the panel and the history call this nib.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Eraser => text::stroke_eraser(),
+            Self::Ruler => text::stroke_ruler(),
+            _ => self.ink().map_or_else(text::stroke_pen, Ink::name),
+        }
+    }
+
+    /// The glyph of its square in the Draw panel.
+    fn glyph(self) -> Icon {
+        match self {
+            Self::Eraser => Icon::Eraser,
+            Self::Ruler => Icon::Ruler,
+            _ => self.ink().map_or(Icon::Pencil, Ink::glyph),
+        }
+    }
+}
+
+/// The Draw view's state between frames.
+#[derive(Debug, Default)]
+struct Draw {
+    /// Whether the DM is on the second drag, the one that sets the width.
+    ///
+    /// A beam takes two drags: one for how far it runs, one for how wide.
+    /// Neither drag asks for a button and a move at the same time.
+    /// Issue #12.
+    spanning: bool,
+    /// Whether that second drag has begun.
+    pulled: bool,
+    /// The stroke under the DM's hand, which is in no scene yet.
+    live: Option<Stroke>,
+    /// Where the eraser stood last frame, so a fast drag bites nothing
+    /// between one frame and the next.
+    last: Option<(f64, f64)>,
+    /// The tree as it stood when the eraser went down.
+    ///
+    /// The eraser writes the scene while it moves, so the DM watches the
+    /// line go. The whole drag becomes one step out of this.
+    before: Option<Vec<Node>>,
+}
+
+impl Draw {
+    /// Whether the DM has something under their hand.
+    fn busy(&self) -> bool {
+        self.live.is_some() || self.before.is_some()
+    }
 }
 
 impl std::fmt::Debug for DmUi {
@@ -238,6 +419,18 @@ pub struct Settings {
     pub snap_percent: f64,
     /// The theme the window draws. DESIGN.md 2.
     pub theme: theme::Mode,
+    /// The language the window speaks, by the name of its file.
+    pub language: String,
+    /// The color the Draw view paints with. Issue #12.
+    pub ink_color: [u8; 4],
+    /// How thick a stroke draws, in inches.
+    pub ink_width: f64,
+    /// Which of the six squares the Draw panel has on.
+    pub ink_nib: Nib,
+    /// How a ruler counts its length.
+    pub ink_rule: Rule,
+    /// Whether a shape starts on a crossing of the grid.
+    pub ink_snap: bool,
     /// What every size of DESIGN.md is multiplied by. DESIGN.md 3.1.
     pub ui_scale: f64,
 }
@@ -259,6 +452,9 @@ pub struct Frame<'a> {
     pub settings: &'a mut Settings,
     /// The tree the DM works on.
     pub scene: &'a mut Scene,
+    /// Every change the DM made to that tree. No tool writes the scene
+    /// without it.
+    pub history: &'a mut History,
     pub camera: &'a mut Camera,
     /// The part of the canvas the TV shows.
     /// Pixel size of the TV window. It gives the box its shape.
@@ -292,6 +488,16 @@ struct Select {
     note: String,
     drag: Option<Drag>,
     measure: Option<Measure>,
+    /// The stroke as it stood when the DM took hold of a field.
+    ///
+    /// A drag of a number runs over many frames, and every one of them
+    /// goes back to this one state, so the whole drag is one step.
+    opened_ink: Option<Stroke>,
+    /// The map as it stood when the DM took hold of a field in the panel.
+    ///
+    /// A drag of a number runs over many frames, and every one of them
+    /// goes back to this one state, so the whole drag is one step.
+    opened: Option<Asset>,
 }
 
 /// What the DM asked the scenes dialog to do.
@@ -325,6 +531,8 @@ struct Scenes {
 #[derive(Debug, Default)]
 struct Table {
     drag: Option<BoxDrag>,
+    /// The box as it stood when the DM took hold of it.
+    opened: Option<TvBox>,
 }
 
 /// Maps between window points and world inches for one frame.
@@ -450,9 +658,9 @@ enum BoxDrag {
 /// A drag in progress, all positions in world inches.
 #[derive(Debug, Clone)]
 enum Drag {
-    /// Every asset the DM holds, and where each one stood.
+    /// Every asset the DM holds, as each one stood.
     Move {
-        starts: Vec<(NodeId, (f64, f64))>,
+        was: Vec<Asset>,
         start_cursor: (f64, f64),
     },
     /// A rectangle over the canvas that picks what it covers.
@@ -499,15 +707,43 @@ impl DmUi {
             renderer,
             tool: Tool::default(),
             select: Select::default(),
+            draw: Draw::default(),
             table: Table::default(),
             scenes: Scenes::default(),
             tree: Tree::default(),
             dialog: Dialog::default(),
+            history_open: false,
             theme: theme::Mode::default(),
+            language: text::DEFAULT.to_owned(),
             ui_scale: theme::DEFAULT_SCALE,
             frame_box: false,
             zoom_goes_to: None,
             dirty: false,
+        }
+    }
+
+    /// Takes the theme, the language and the scale the DM asked for.
+    ///
+    /// Each one costs something to install, so it is installed once and
+    /// not on every frame that reads it.
+    fn install(&mut self, ctx: &egui::Context, settings: &Settings) {
+        if self.theme != settings.theme {
+            theme::install(ctx, settings.theme);
+            self.theme = settings.theme;
+        }
+        // The window takes a language the moment the DM picks it. Every
+        // word comes from the catalog while the frame draws, so no panel
+        // has to be built again.
+        if self.language != settings.language {
+            text::use_language(&settings.language);
+            self.language.clone_from(&settings.language);
+        }
+        // egui multiplies the scale into `pixels_per_point`, so the chrome
+        // grows and the canvas math, which reads that value, stays true.
+        let scale = theme::clamp_scale(settings.ui_scale);
+        if (self.ui_scale - scale).abs() > f64::EPSILON {
+            ctx.set_zoom_factor(scale as f32);
+            self.ui_scale = scale;
         }
     }
 
@@ -525,26 +761,18 @@ impl DmUi {
         let raw_input = self.state.take_egui_input(&pane.window);
         let ctx = self.state.egui_ctx().clone();
         let viewport = (pane.config.width, pane.config.height);
-        if self.theme != frame.settings.theme {
-            theme::install(&ctx, frame.settings.theme);
-            self.theme = frame.settings.theme;
-        }
-        // egui multiplies the scale into `pixels_per_point`, so the chrome
-        // grows and the canvas math, which reads that value, stays true.
-        let scale = theme::clamp_scale(frame.settings.ui_scale);
-        if (self.ui_scale - scale).abs() > f64::EPSILON {
-            ctx.set_zoom_factor(scale as f32);
-            self.ui_scale = scale;
-        }
+        self.install(&ctx, frame.settings);
         let mut add_map = false;
         let mut edited = false;
         let mut scene = None;
         let select = &mut self.select;
+        let draw = &mut self.draw;
         let table = &mut self.table;
         let tool = &mut self.tool;
         let scenes = &mut self.scenes;
         let tree = &mut self.tree;
         let dialog = &mut self.dialog;
+        let history_open = &mut self.history_open;
         let frame_box = &mut self.frame_box;
         let zoom_goes_to = &mut self.zoom_goes_to;
         let selected_before = select.chosen.clone();
@@ -556,21 +784,32 @@ impl DmUi {
             // floats over it. So the canvas takes the whole rect, and the
             // panels come after it and draw on top.
             let rect = ui.ctx().content_rect();
-            let over = popup_open || scenes.open || dialog.open;
+            let over = popup_open || scenes.open || dialog.open || *history_open;
             if !over {
                 frame_tv_box(ui, &mut frame, rect, viewport, *frame_box);
                 // The ask lives one frame, because the panel that raised it
                 // draws after the camera reads it.
                 *frame_box = false;
+                // Undo works in every view, and before the tools, so a
+                // tool never writes over what it put back this frame.
+                let dragging = select.drag.is_some() || table.drag.is_some() || draw.busy();
+                edited |= undo_keys(ui, &mut frame, dragging);
                 edited |= match *tool {
                     Tool::Select => canvas(ui, select, &mut frame, viewport, zoom_goes_to, tokens),
+                    Tool::Draw => draw_tool(ui, draw, &mut frame, viewport, zoom_goes_to),
                     Tool::Table => {
                         table_tool(ui, table, &mut frame, viewport, zoom_goes_to, tokens)
                     }
                 };
+                say_lengths(ui, &frame, draw.live.as_ref(), viewport, tokens);
             }
-            edited |= objects_panel(ui.ctx(), frame.scene, select, tree, tokens);
-            edited |= properties_panel(ui.ctx(), &mut frame, select, *tool, frame_box, tokens);
+            edited |= objects_panel(ui.ctx(), &mut frame, select, tree, tokens);
+            let mut views = Views { select, table };
+            edited |= properties_panel(ui.ctx(), &mut frame, &mut views, *tool, frame_box, tokens);
+            if history_button(ui, tokens) {
+                *history_open = !*history_open;
+            }
+            edited |= history_dialog(ui, history_open, &mut frame, tokens);
             match toolbar(ui, *tool, tokens) {
                 Some(Press::View(view)) => *tool = view,
                 Some(Press::Scenes) => scenes.open = !scenes.open,
@@ -602,13 +841,20 @@ impl DmUi {
             // properties of a new selection need one more frame to show.
             || self.select.chosen != selected_before;
 
+        self.settle_history(&ctx, frame.history);
         // Save once a drag is over, not on every frame of it.
         self.dirty |= edited;
-        let save = self.dirty && self.select.drag.is_none() && self.table.drag.is_none();
+        // A rub of the eraser writes the scene on every frame it cuts,
+        // unless the save waits for the hand to come off it.
+        let save = self.dirty
+            && self.select.drag.is_none()
+            && self.table.drag.is_none()
+            && !self.draw.busy();
         if save {
             self.dirty = false;
         }
         UiOutput {
+            live: self.draw.live.clone(),
             add_map,
             edited,
             save,
@@ -623,6 +869,21 @@ impl DmUi {
         }
     }
 
+    /// Closes a step of the history that nobody holds any more.
+    ///
+    /// A drag of the canvas closes its own step when the button goes up, so
+    /// this catches the fields of a panel and the keys.
+    fn settle_history(&mut self, ctx: &egui::Context, history: &mut History) {
+        let dragging = self.select.drag.is_some() || self.table.drag.is_some() || self.draw.busy();
+        if dragging || ctx.egui_is_using_pointer() || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        history.settle();
+        self.select.opened = None;
+        self.select.opened_ink = None;
+        self.table.opened = None;
+    }
+
     /// Draws the canvas through `draw_canvas`, then the UI on top of it.
     pub fn render(
         &mut self,
@@ -632,24 +893,51 @@ impl DmUi {
         canvas: egui::Color32,
         draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
     ) -> Result<()> {
+        render_pane(gpu, pane, &mut self.renderer, paint, canvas, draw_canvas)?;
+        Ok(())
+    }
+}
+
+/// Draws one window: the canvas first, then what `egui` painted over it.
+///
+/// Both windows go through here. The TV runs an `egui` of its own for the
+/// overlays it shows, and it draws them the same way the DM window draws
+/// its panels. See [`crate::overlay`].
+///
+/// Returns `false` when the surface gave no frame and nothing was shown.
+///
+/// # Errors
+///
+/// Returns an error when the surface fails validation.
+pub fn render_pane(
+    gpu: &Gpu,
+    pane: &mut Pane,
+    renderer: &mut egui_wgpu::Renderer,
+    paint: Paint,
+    canvas: egui::Color32,
+    draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
+) -> Result<bool> {
+    {
         let Paint {
             jobs,
             mut textures_delta,
             pixels_per_point,
             repaint,
         } = paint;
+        let renderer = &mut *renderer;
         let screen = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [pane.config.width, pane.config.height],
             pixels_per_point,
         };
         for (id, deltas) in &textures_delta.set {
             for delta in deltas {
-                self.renderer
-                    .update_texture(&gpu.device, &gpu.queue, *id, delta);
+                renderer.update_texture(&gpu.device, &gpu.queue, *id, delta);
             }
         }
 
-        if let Some(frame) = pane.acquire(&gpu.device)? {
+        let frame = pane.acquire(&gpu.device)?;
+        let shown = frame.is_some();
+        if let Some(frame) = frame {
             let view = frame
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
@@ -657,12 +945,11 @@ impl DmUi {
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             let buffers =
-                self.renderer
-                    .update_buffers(&gpu.device, &gpu.queue, &mut encoder, &jobs, &screen);
+                renderer.update_buffers(&gpu.device, &gpu.queue, &mut encoder, &jobs, &screen);
             {
                 let mut pass = begin_clear_pass(&mut encoder, &view, color::linear_token(canvas));
                 draw_canvas(&mut pass);
-                self.renderer.render(&mut pass, &jobs, &screen);
+                renderer.render(&mut pass, &jobs, &screen);
             };
             gpu.queue
                 .submit(buffers.into_iter().chain([encoder.finish()]));
@@ -670,19 +957,23 @@ impl DmUi {
         }
 
         for id in &textures_delta.free {
-            self.renderer.free_texture(id);
+            renderer.free_texture(id);
         }
         textures_delta.clear();
         if repaint {
             pane.window.request_redraw();
         }
-        Ok(())
+        Ok(shown)
     }
 }
 
 /// What one UI frame decided.
 #[derive(Debug)]
 pub struct UiOutput {
+    /// The stroke under the DM's hand, which is in no scene yet.
+    ///
+    /// Both windows draw it, so the players watch a line as it is drawn.
+    pub live: Option<Stroke>,
     /// The DM pressed Add map.
     pub add_map: bool,
     /// A map changed this frame; the TV should redraw.
@@ -699,10 +990,14 @@ pub struct UiOutput {
 
 /// The tessellated UI of one frame, ready to draw.
 pub struct Paint {
-    jobs: Vec<egui::ClippedPrimitive>,
-    textures_delta: egui::TexturesDelta,
-    pixels_per_point: f32,
-    repaint: bool,
+    /// What `egui` tessellated for this frame.
+    pub jobs: Vec<egui::ClippedPrimitive>,
+    /// The textures `egui` wants written before the frame draws.
+    pub textures_delta: egui::TexturesDelta,
+    /// How many surface pixels one `egui` point takes.
+    pub pixels_per_point: f32,
+    /// Whether `egui` asked for another frame at once.
+    pub repaint: bool,
 }
 
 impl std::fmt::Debug for Paint {
@@ -731,13 +1026,22 @@ enum Press {
 /// what the program cannot do.
 fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
     let views = [
-        (Press::View(Tool::Select), "Select", Icon::MousePointer),
-        (Press::View(Tool::Table), "Table", Icon::Monitor),
+        (
+            Press::View(Tool::Select),
+            text::tool_select(),
+            Icon::MousePointer,
+        ),
+        (Press::View(Tool::Draw), text::tool_draw(), Icon::Pencil),
+        (Press::View(Tool::Table), text::tool_table(), Icon::Monitor),
     ];
     let actions = [
-        (Press::Scenes, "Scenes", Icon::Layers),
-        (Press::AddMap, "Add map", Icon::Plus),
-        (Press::Settings, "Settings", Icon::SlidersHorizontal),
+        (Press::Scenes, text::tool_scenes(), Icon::Layers),
+        (Press::AddMap, text::tool_add_map(), Icon::Plus),
+        (
+            Press::Settings,
+            text::tool_settings(),
+            Icon::SlidersHorizontal,
+        ),
     ];
     let font = theme::font(theme::SMALL, false);
     let width_of = |label: &str| {
@@ -835,6 +1139,197 @@ fn painter_dashes(ui: &egui::Ui, line: &[egui::Pos2; 2], color: egui::Color32) {
         SEGMENT_DASH,
         SEGMENT_DASH,
     ));
+}
+
+/// The History button in the corner of the window. DESIGN.md 5.7.
+///
+/// It takes the shape of a toolbar entry, because it does the same kind of
+/// work. It stands on its own in the corner, away from the views, because
+/// it belongs to no view: the history holds every change the DM made.
+///
+/// Returns `true` when the DM pressed it.
+fn history_button(ui: &egui::Ui, tokens: Tokens) -> bool {
+    let label = text::tool_history();
+    let font = theme::font(theme::SMALL, false);
+    let text = ui.ctx().fonts_mut(|fonts| {
+        fonts
+            .layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    });
+    let width = (text + 2.0 * TOOL_PAD).max(TOOL_WIDTH).ceil();
+    let screen = ui.ctx().content_rect();
+    let left_top = egui::pos2(
+        screen.right() - MARGIN - width,
+        screen.bottom() - MARGIN - TOOL_HEIGHT,
+    );
+    let mut pressed = false;
+    egui::Area::new(egui::Id::new("history button"))
+        .order(egui::Order::Middle)
+        .fixed_pos(left_top)
+        .show(ui.ctx(), |ui| {
+            let (whole, _) =
+                ui.allocate_exact_size(egui::vec2(width, TOOL_HEIGHT), egui::Sense::hover());
+            widget::shadow_box(ui, whole, tokens);
+            pressed = tool_entry(
+                ui,
+                whole,
+                whole.shrink(1.0),
+                label,
+                Icon::Undo,
+                false,
+                tokens,
+            )
+            .clicked();
+        });
+    pressed
+}
+
+/// Every change the DM made, newest first. DESIGN.md 9.8.
+///
+/// A click on a step takes the scene to the state after that step. The
+/// steps the DM took back stay on the list in `mute`, so a walk forward
+/// is a click as well. Returns `true` when the scene moved.
+fn history_dialog(ui: &egui::Ui, open: &mut bool, frame: &mut Frame<'_>, tokens: Tokens) -> bool {
+    if !*open {
+        return false;
+    }
+    // A step the DM is still making is no step yet, and the walk would
+    // write over it.
+    frame.history.settle();
+    let steps = frame.history.steps();
+    let place = frame.history.place();
+    let mut go_to = None;
+    let close = dialog_frame(
+        ui.ctx(),
+        "history",
+        text::dialog_history_title(),
+        egui::vec2(520.0, 460.0),
+        tokens,
+        |ui, rest| {
+            let footer = egui::Rect::from_min_size(
+                egui::pos2(rest.left(), rest.bottom() - FOOTER),
+                egui::vec2(rest.width(), FOOTER),
+            );
+            let body = egui::Rect::from_min_max(
+                egui::pos2(rest.left() + 20.0, rest.top() + 18.0),
+                egui::pos2(rest.right() - 20.0, footer.top() - 18.0),
+            );
+            let mut body_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(body)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            body_ui.set_clip_rect(body);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(&mut body_ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    // The newest change stands at the top, as the objects
+                    // list puts the top of the pile first.
+                    for (index, note) in steps.iter().enumerate().rev() {
+                        let step = index + 1;
+                        if step_row(ui, note, step == place, step > place, tokens) {
+                            go_to = Some(step);
+                        }
+                    }
+                    let first = Note {
+                        what: text::dialog_history_start().to_owned(),
+                        ..Note::default()
+                    };
+                    if step_row(ui, &first, place == 0, false, tokens) {
+                        go_to = Some(0);
+                    }
+                });
+            let mut foot = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(footer.shrink2(egui::vec2(20.0, 0.0)))
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            widget::rule_bottom(
+                ui,
+                egui::Rect::from_min_size(
+                    egui::pos2(footer.left(), footer.top()),
+                    egui::vec2(footer.width(), 0.0),
+                ),
+                tokens,
+            );
+            widget::helper(&mut foot, text::dialog_history_helper());
+        },
+    );
+    if close {
+        *open = false;
+    }
+    match go_to {
+        Some(step) => frame.history.walk_to(frame.scene, step),
+        None => false,
+    }
+}
+
+/// One step on the history list. Returns `true` when the DM clicked it.
+///
+/// The row holds two lines: what the DM did and what it happened to, then
+/// the numbers the step wrote. The time stands on the right of the first
+/// line. DESIGN.md 9.8.
+///
+/// The step the scene stands on takes the `accent` and the `raised`
+/// background, as a picked row does. A step the DM took back draws in
+/// `mute`, because it says what a walk forward would write again.
+fn step_row(ui: &mut egui::Ui, note: &Note, here: bool, undone: bool, tokens: Tokens) -> bool {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), STEP_ROW),
+        egui::Sense::click(),
+    );
+    if here {
+        ui.painter().rect_filled(rect, 0, tokens.raised);
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(rect.left_top(), egui::vec2(widget::BAR, rect.height())),
+            0,
+            tokens.accent,
+        );
+    } else if response.hovered() {
+        ui.painter().rect_filled(rect, 0, tokens.field);
+    }
+    widget::rule_bottom(ui, rect, tokens);
+    let color = if here {
+        tokens.accent
+    } else if undone {
+        tokens.mute
+    } else {
+        tokens.ink
+    };
+    // The two lines sit around the middle of the row, so a row with no
+    // second line still reads as one block.
+    let painter = ui.painter_at(rect);
+    let left = rect.left() + STEP_PAD;
+    let middle = rect.center().y;
+    let headline = if note.subject.is_empty() {
+        note.what.clone()
+    } else {
+        text::history_row(&note.what, &note.subject)
+    };
+    painter.text(
+        egui::pos2(left, middle - STEP_LINE),
+        egui::Align2::LEFT_BOTTOM,
+        &headline,
+        theme::font(theme::BODY, here),
+        color,
+    );
+    painter.text(
+        egui::pos2(rect.right() - STEP_PAD, middle - STEP_LINE),
+        egui::Align2::RIGHT_BOTTOM,
+        &note.ago,
+        theme::font(theme::SMALL, false),
+        tokens.mute,
+    );
+    painter.text(
+        egui::pos2(left, middle + STEP_LINE),
+        egui::Align2::LEFT_TOP,
+        &note.detail,
+        theme::font(theme::SMALL, false),
+        tokens.mute,
+    );
+    response.clicked()
 }
 
 /// One entry of the toolbar: the glyph over its label. DESIGN.md 5.2.
@@ -1013,11 +1508,12 @@ fn panel(
 /// Returns `true` when the DM changed the scene.
 fn objects_panel(
     ctx: &egui::Context,
-    scene: &mut Scene,
+    frame: &mut Frame<'_>,
     select: &mut Select,
     tree: &mut Tree,
     tokens: Tokens,
 ) -> bool {
+    let scene = &mut *frame.scene;
     // A group the DM marked can go, by Ungroup or by a hand-edited file.
     // The root is always there to take a new asset.
     if !crate::scene::has_group(scene, tree.active) {
@@ -1046,11 +1542,11 @@ fn objects_panel(
     let tall = screen.height() - 2.0 * MARGIN - TOOL_HEIGHT - MARGIN;
     let rect = egui::Rect::from_min_size(egui::pos2(MARGIN, MARGIN), egui::vec2(tree.width, tall));
     let mut edited = false;
-    let mut moved = None;
+    let mut asked = Asked::default();
     panel(
         ctx,
         "objects",
-        "Objects",
+        text::panel_objects_title(),
         Place {
             left_top: rect.min,
             width: tree.width,
@@ -1065,13 +1561,13 @@ fn objects_panel(
                 tree.scope = up;
                 tree.open.insert(up);
             }
-            let footer = 2.0 * Height::Panel.points() + 3.0 * PANEL_PAD;
+            let footer = footer_height(ui, &select.note);
             let list = ui.available_height() - footer;
             egui::ScrollArea::vertical()
                 .max_height(list.max(ROW_HEIGHT))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    edited |= scoped_rows(ui, scene, select, tree, &mut moved, tokens);
+                    scoped_rows(ui, scene, select, tree, &mut asked, tokens);
                 });
             // DESIGN.md 7.1: a rule runs the whole width above the footer, so
             // it reaches past the padding of the body.
@@ -1083,32 +1579,34 @@ fn objects_panel(
                 ),
                 tokens,
             );
-            ui.horizontal(|ui| {
+            // A language whose words run long takes a second row instead
+            // of losing the end of one. `footer_height` reads the same
+            // widths, so the list above leaves the room for it.
+            ui.horizontal_wrapped(|ui| {
                 // The DM can only take apart the one group they hold.
                 let group = select.only().filter(|id| *id != ROOT_ID).filter(|id| {
                     crate::scene::find(scene, *id)
                         .and_then(Node::group)
                         .is_some()
                 });
-                if widget::button(ui, "New group", Some(Icon::Plus), Height::Panel).clicked() {
-                    let id = scene.next_id();
-                    let new = Group::new(id, format!("Group {id}"));
-                    crate::scene::push_into(scene, tree.active, Node::Group(new));
-                    tree.open.insert(id);
-                    tree.active = id;
-                    edited = true;
+                if widget::button(
+                    ui,
+                    text::panel_objects_new_group(),
+                    Some(Icon::Plus),
+                    Height::Panel,
+                )
+                .clicked()
+                {
+                    asked.new_group = Some(scene.next_id());
                 }
-                let ungroup = widget::button(ui, "Ungroup", None, Height::Panel);
+                let ungroup =
+                    widget::button(ui, text::panel_objects_ungroup(), None, Height::Panel);
                 if group.is_some() && ungroup.clicked() {
-                    // What was in it stands where it stood.
-                    let id = group.unwrap_or(ROOT_ID);
-                    let freed = crate::scene::assets_of(scene, id);
-                    edited |= crate::scene::ungroup(scene, id);
-                    select.chosen = freed;
+                    asked.ungroup = group;
                 }
             });
             if select.note.is_empty() {
-                widget::helper(ui, "A new asset joins the marked group.");
+                widget::helper(ui, text::panel_objects_helper());
             } else {
                 ui.label(
                     egui::RichText::new(&select.note)
@@ -1118,14 +1616,112 @@ fn objects_panel(
             }
         },
     );
-    if let Some((node, target, into)) = moved {
-        edited |= if into {
-            crate::scene::move_into(scene, node, target)
-        } else {
-            crate::scene::move_above(scene, node, target)
-        };
-    }
+    edited |= act_on(frame, select, tree, asked);
     edited |= drag_panel_edge(ctx, rect, &mut tree.width, tokens);
+    edited
+}
+
+/// How much room the foot of the objects list needs, in points.
+///
+/// The two buttons take one row when they fit beside one another and two
+/// when they do not. The line under them holds the note, or the helper
+/// when there is no note, and wraps to the width of the panel.
+fn footer_height(ui: &egui::Ui, note: &str) -> f32 {
+    let width = ui.available_width();
+    let buttons = widget::button_width(ui, text::panel_objects_new_group(), Some(Icon::Plus))
+        + ui.spacing().item_spacing.x
+        + widget::button_width(ui, text::panel_objects_ungroup(), None);
+    let rows = if buttons <= width { 1.0 } else { 2.0 };
+    let words = if note.is_empty() {
+        text::panel_objects_helper()
+    } else {
+        note
+    };
+    // Each row of buttons carries the gap under it, and the words below
+    // them take as many lines as they need.
+    let step = Height::Panel.points() + ui.spacing().item_spacing.y;
+    rows * step + widget::helper_height(ui, words, width) + 3.0 * PANEL_PAD
+}
+
+/// Turns what the objects list asked for into changes. DESIGN.md 8.4.
+///
+/// The rows hold the tree while they draw, so nothing there can reach the
+/// history. This runs once the borrow is over. Returns `true` when the
+/// scene changed.
+fn act_on(frame: &mut Frame<'_>, select: &mut Select, tree: &mut Tree, asked: Asked) -> bool {
+    let mut edited = false;
+    if let Some(id) = asked.new_group {
+        let new = Group::new(id, text::panel_objects_group_name(id));
+        let name = new.name.clone();
+        let into = tree.active;
+        if let Some(change) = reshape(frame.scene, Deed::NewGroup, name, |scene| {
+            crate::scene::push_into(scene, into, Node::Group(new));
+        }) {
+            frame.history.kept(change);
+            tree.open.insert(id);
+            tree.active = id;
+            edited = true;
+        }
+    }
+    if let Some(id) = asked.ungroup {
+        // What was in the group stands where it stood.
+        let freed = crate::scene::assets_of(frame.scene, id);
+        let name = crate::scene::name_of(frame.scene, id);
+        if let Some(change) = reshape(frame.scene, Deed::Ungroup, name, |scene| {
+            crate::scene::ungroup(scene, id);
+        }) {
+            frame.history.kept(change);
+            select.chosen = freed;
+            edited = true;
+        }
+    }
+    if let Some((node, target, into)) = asked.moved
+        && let Some(change) = reshape(
+            frame.scene,
+            Deed::MoveInList,
+            crate::scene::name_of(frame.scene, node),
+            |scene| {
+                if into {
+                    crate::scene::move_into(scene, node, target);
+                } else {
+                    crate::scene::move_above(scene, node, target);
+                }
+            },
+        )
+    {
+        frame.history.kept(change);
+        edited = true;
+    }
+    if let Some((id, before, after)) = asked.shown {
+        let subject = crate::scene::name_of(frame.scene, id);
+        frame.history.run(
+            frame.scene,
+            SetShown {
+                id,
+                subject,
+                before,
+                after,
+            },
+        );
+        edited = true;
+    }
+    if let (Some(done), Some(naming)) = (asked.named, tree.renaming.clone()) {
+        if naming.before != naming.draft {
+            frame.history.hold(
+                frame.scene,
+                SetName {
+                    id: naming.id,
+                    before: naming.before,
+                    after: naming.draft,
+                },
+            );
+            edited = true;
+        }
+        if done {
+            frame.history.settle();
+            tree.renaming = None;
+        }
+    }
     edited
 }
 
@@ -1138,17 +1734,20 @@ fn scoped_rows(
     scene: &mut Scene,
     select: &mut Select,
     tree: &mut Tree,
-    moved: &mut Option<(NodeId, NodeId, bool)>,
+    asked: &mut Asked,
     tokens: Tokens,
-) -> bool {
+) {
     ui.spacing_mut().item_spacing.y = 0.0;
     let scope = tree.scope;
     let open = tree.open.contains(&scope);
     let picked = scope != ROOT_ID && select.holds(scope);
+    let naming = tree
+        .renaming
+        .clone()
+        .filter(|naming| naming.id == scope && scope != ROOT_ID);
     let Some(group) = crate::scene::group_mut(scene, scope) else {
-        return false;
+        return;
     };
-    let mut edited = false;
     let row = tree_row(
         ui,
         RowLook {
@@ -1160,22 +1759,26 @@ fn scoped_rows(
             tokens,
         },
     );
-    if tree.renaming == Some(scope) && scope != ROOT_ID {
-        let (changed, done) = rename_field(ui, row.name, &mut group.name, tokens);
-        edited |= changed;
-        if done {
-            tree.renaming = None;
-        }
+    if let Some(mut naming) = naming {
+        let (_, done) = rename_field(ui, row.name, &mut naming.draft, tokens);
+        tree.renaming = Some(naming);
+        asked.named = Some(done);
     } else {
         row_name(ui, row.name, &group.name, picked, tokens);
     }
     if row.body.double_clicked() && scope != ROOT_ID {
-        tree.renaming = Some(scope);
+        tree.renaming = Some(Renaming {
+            id: scope,
+            before: group.name.clone(),
+            draft: group.name.clone(),
+        });
     }
     // DESIGN.md 8.4: the root is always visible and carries no switches. A
     // group the DM went into carries its own.
-    if scope != ROOT_ID {
-        edited |= switches(ui, row.switches, &mut group.shown, tokens);
+    if scope != ROOT_ID
+        && let Some(after) = switches(ui, row.switches, group.shown, tokens)
+    {
+        asked.shown = Some((scope, group.shown, after));
     }
     if row.twist.is_some_and(|twist| twist.clicked()) {
         flip(&mut tree.open, scope);
@@ -1187,9 +1790,8 @@ fn scoped_rows(
         }
     }
     if open {
-        edited |= tree_rows(ui, &mut group.children, select, tree, 1, moved, tokens);
+        tree_rows(ui, &mut group.children, select, tree, 1, asked, tokens);
     }
-    edited
 }
 
 /// The path over the objects list. DESIGN.md 8.4.
@@ -1330,20 +1932,27 @@ fn drag_panel_edge(ctx: &egui::Context, rect: egui::Rect, width: &mut f32, token
 fn properties_panel(
     ctx: &egui::Context,
     frame: &mut Frame<'_>,
-    select: &mut Select,
+    views: &mut Views<'_>,
     tool: Tool,
     frame_box: &mut bool,
     tokens: Tokens,
 ) -> bool {
+    let Views { select, table } = views;
     let screen = ctx.content_rect();
     let held = match tool {
         Tool::Table => Held::TvBox,
+        Tool::Draw => Held::Draw,
         Tool::Select => match select
             .only()
             .map(|id| (id, crate::scene::find(frame.scene, id)))
         {
             Some((id, Some(Node::Asset(asset)))) => {
                 Held::Map(id, asset.path.to_string_lossy().into_owned())
+            }
+            // A stroke opens a panel of its own, so the DM changes what
+            // they drew after they drew it. Issue #12.
+            Some((id, Some(Node::Stroke(stroke)))) => {
+                Held::Stroke(id, stroke.ink.name().to_owned())
             }
             // A group has no panel. Its name and its two switches sit on
             // its row, and it carries no size and no turn of its own, so a
@@ -1353,6 +1962,7 @@ fn properties_panel(
     };
     let left_top = egui::pos2(screen.right() - MARGIN - PANEL_WIDTH, MARGIN);
     let mut edited = false;
+    let mut box_asked = None;
     panel(
         ctx,
         "properties",
@@ -1368,11 +1978,18 @@ fn properties_panel(
                 // Another tool does not run the measure, so the panel must
                 // not leave a measure armed behind it.
                 select.measure = None;
-                edited = box_properties(ui, &mut frame.scene.tv_box, frame_box, tokens);
+                box_asked = box_properties(ui, frame.scene.tv_box, frame_box, tokens);
             }
-            Held::Map(id, _) => edited = map_properties(ui, *id, select, frame.scene, tokens),
+            Held::Draw => draw_properties(ui, frame.settings, tokens),
+            Held::Map(id, _) => edited = map_properties(ui, *id, select, frame, tokens),
+            Held::Stroke(id, _) => edited = stroke_properties(ui, *id, select, frame),
         },
     );
+    if let Some(after) = box_asked {
+        let before = *table.opened.get_or_insert(frame.scene.tv_box);
+        frame.history.hold(frame.scene, SetTvBox { before, after });
+        edited = true;
+    }
     edited
 }
 
@@ -1381,6 +1998,10 @@ fn properties_panel(
 enum Held {
     /// The box that decides what the TV shows. DESIGN.md 8.2.
     TvBox,
+    /// The pen, the shapes, the eraser and the ruler. DESIGN.md 8.3.
+    Draw,
+    /// One stroke the DM drew, by name, with what it is called.
+    Stroke(NodeId, String),
     /// One map, by id, with the name of its file. DESIGN.md 8.1.
     Map(NodeId, String),
 }
@@ -1389,8 +2010,9 @@ impl Held {
     /// The title the panel takes.
     fn title(&self) -> &str {
         match self {
-            Self::TvBox => "TV box",
-            Self::Map(_, name) => name,
+            Self::TvBox => text::panel_box_title(),
+            Self::Draw => text::panel_draw_title(),
+            Self::Stroke(_, name) | Self::Map(_, name) => name,
         }
     }
 }
@@ -1415,11 +2037,11 @@ impl Tab {
     /// The name and the glyph of the navigation entry.
     fn entry(self) -> (&'static str, Icon) {
         match self {
-            Self::Table => ("Table", Icon::Monitor),
-            Self::Grid => ("Grid", Icon::Grid3x3),
-            Self::Light => ("Light", Icon::Sun),
-            Self::Shortcuts => ("Shortcuts", Icon::Keyboard),
-            Self::About => ("About", Icon::Info),
+            Self::Table => (text::dialog_settings_tab_table(), Icon::Monitor),
+            Self::Grid => (text::dialog_settings_tab_grid(), Icon::Grid3x3),
+            Self::Light => (text::dialog_settings_tab_light(), Icon::Sun),
+            Self::Shortcuts => (text::dialog_settings_tab_shortcuts(), Icon::Keyboard),
+            Self::About => (text::dialog_settings_tab_about(), Icon::Info),
         }
     }
 }
@@ -1522,7 +2144,8 @@ fn settings_dialog(
         return false;
     }
     let mut edited = false;
-    let close = dialog_frame(ctx, "settings", "Settings", DIALOG, tokens, |ui, rest| {
+    let title = text::dialog_settings_title();
+    let close = dialog_frame(ctx, "settings", title, DIALOG, tokens, |ui, rest| {
         let nav = egui::Rect::from_min_size(rest.left_top(), egui::vec2(DIALOG_NAV, rest.height()));
         dialog_nav(ui, nav, &mut dialog.tab, tokens);
         let body = egui::Rect::from_min_max(
@@ -1545,20 +2168,14 @@ fn settings_dialog(
                         edited = table_tab(body_ui, frame, &mut dialog.scale_drag, tokens);
                     }
                     Tab::Grid => {
-                        not_built(body_ui, "The grid settings arrive with the hex grid (#15).");
+                        not_built(body_ui, text::dialog_settings_grid_soon());
                     }
                     Tab::Light => {
-                        not_built(
-                            body_ui,
-                            "The light settings arrive with the darkness slider (#20).",
-                        );
+                        not_built(body_ui, text::dialog_settings_light_soon());
                     }
                     Tab::About => about_tab(body_ui, &mut dialog.license, tokens),
                     Tab::Shortcuts => {
-                        not_built(
-                            body_ui,
-                            "The key list arrives with the shortcuts story (#36).",
-                        );
+                        not_built(body_ui, text::dialog_settings_shortcuts_soon());
                     }
                 }
             });
@@ -1632,17 +2249,27 @@ fn dialog_nav(ui: &egui::Ui, rect: egui::Rect, tab: &mut Tab, tokens: Tokens) {
 fn dialog_row(ui: &mut egui::Ui, label: &str, controls: impl FnOnce(&mut egui::Ui)) {
     let tokens = theme::of(ui.ctx());
     ui.horizontal_top(|ui| {
-        let (rect, _) = ui.allocate_exact_size(
+        // DESIGN.md 9 gives the label a column 140 points wide. A language
+        // whose word does not fit that column wraps inside it and the row
+        // grows, so a label never runs into the control beside it.
+        ui.allocate_ui_with_layout(
             egui::vec2(LABEL_COLUMN, widget::CONTROL),
-            egui::Sense::hover(),
-        );
-        ui.painter().text(
-            // DESIGN.md 9: the label sits 6 points below the top of the row.
-            egui::pos2(rect.left(), rect.top() + 6.0),
-            egui::Align2::LEFT_TOP,
-            label,
-            theme::font(theme::BODY, false),
-            tokens.ink,
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                // The column keeps its width whatever the label needs, so
+                // the controls of every row line up.
+                ui.set_min_width(LABEL_COLUMN);
+                // DESIGN.md 9: the label sits 6 points below the top.
+                ui.add_space(6.0);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(label)
+                            .font(theme::font(theme::BODY, false))
+                            .color(tokens.ink),
+                    )
+                    .wrap(),
+                );
+            },
         );
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
@@ -1665,11 +2292,11 @@ fn table_tab(
         let size = display.size();
         display_label(display.name().as_deref(), size.width, size.height)
     };
-    dialog_row(ui, "Display", |ui| {
+    dialog_row(ui, text::dialog_settings_display(), |ui| {
         let shown = frame
             .settings
             .tv_display
-            .map_or_else(|| "Window".to_owned(), &label);
+            .map_or_else(|| text::dialog_settings_display_window().to_owned(), &label);
         let field = widget::select_field(ui, &shown, widget::SELECT_WIDTH);
         let popup = egui::Popup::menu(&field)
             .gap(-1.0)
@@ -1677,7 +2304,9 @@ fn table_tab(
         popup.show(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             let picked = frame.settings.tv_display;
-            if widget::select_row(ui, "Window", picked.is_none()).clicked() {
+            if widget::select_row(ui, text::dialog_settings_display_window(), picked.is_none())
+                .clicked()
+            {
                 frame.settings.tv_display = None;
                 edited = true;
             }
@@ -1689,34 +2318,34 @@ fn table_tab(
             }
         });
     });
-    dialog_row(ui, "Size", |ui| {
-        widget::helper(
-            ui,
-            "The TV diagonal, its pixels per inch and its width arrive with story #6.",
-        );
+    dialog_row(ui, text::dialog_settings_size(), |ui| {
+        widget::helper(ui, text::dialog_settings_size_helper());
     });
-    dialog_row(ui, "Snap to true size", |ui| {
+    dialog_row(ui, text::dialog_settings_snap(), |ui| {
         let mut percent = frame.settings.snap_percent;
-        if widget::input(ui, &mut percent, "%", 90.0, 0.0..=MAX_SNAP_PERCENT, 0.1).changed() {
+        if widget::input(
+            ui,
+            &mut percent,
+            text::unit_percent(),
+            90.0,
+            0.0..=MAX_SNAP_PERCENT,
+            0.1,
+        )
+        .changed()
+        {
             frame.settings.snap_percent = percent;
             edited = true;
         }
-        widget::helper(ui, "either side of 100 %");
+        widget::helper(ui, text::dialog_settings_snap_helper());
     });
-    dialog_row(ui, "Windows", |ui| {
+    dialog_row(ui, text::dialog_settings_windows(), |ui| {
         let mut swap = frame.settings.swap_windows;
-        if widget::checkbox(
-            ui,
-            &mut swap,
-            "Swap the two windows instead of moving the DM window",
-        )
-        .clicked()
-        {
+        if widget::checkbox(ui, &mut swap, text::dialog_settings_swap()).clicked() {
             frame.settings.swap_windows = swap;
             edited = true;
         }
     });
-    dialog_row(ui, "Theme", |ui| {
+    dialog_row(ui, text::dialog_settings_theme(), |ui| {
         // DESIGN.md 2 gives two themes and no place to pick one, so the
         // choice sits here, beside the other settings about the screens.
         let mut mode = frame.settings.theme;
@@ -1730,9 +2359,12 @@ fn table_tab(
         }
         let _ = tokens;
     });
-    dialog_row(ui, "Interface scale", |ui| {
+    dialog_row(ui, text::dialog_settings_language(), |ui| {
+        edited |= language_field(ui, &mut frame.settings.language);
+    });
+    dialog_row(ui, text::dialog_settings_scale(), |ui| {
         let mut scale = scale_drag.unwrap_or(frame.settings.ui_scale);
-        let percent = format!("{} %", (scale * 100.0).round());
+        let percent = text::dialog_settings_scale_value((scale * 100.0).round());
         let response = widget::slider(
             ui,
             &mut scale,
@@ -1752,12 +2384,34 @@ fn table_tab(
             frame.settings.ui_scale = picked;
             edited = true;
         }
-        widget::helper(
-            ui,
-            "How big the toolbar, the panels and the dialogs draw. The maps keep their size.",
-        );
+        widget::helper(ui, text::dialog_settings_scale_helper());
     });
     edited
+}
+
+/// The Language row of the Table tab. DESIGN.md 9.1.
+///
+/// Every language the program carries names itself in its own words, so a
+/// DM finds their own without reading English first. Returns `true` when
+/// the DM picked another one.
+fn language_field(ui: &mut egui::Ui, picked: &mut String) -> bool {
+    let shown = text::language(picked).map_or(text::DEFAULT, |language| language.name);
+    let field = widget::select_field(ui, shown, widget::SELECT_WIDTH);
+    let mut changed = false;
+    egui::Popup::menu(&field)
+        .gap(-1.0)
+        .width(widget::SELECT_WIDTH)
+        .show(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for language in text::LANGUAGES {
+                let here = language.code == picked;
+                if widget::select_row(ui, language.name, here).clicked() {
+                    language.code.clone_into(picked);
+                    changed = true;
+                }
+            }
+        });
+    changed
 }
 
 /// What dmap carries, and the terms it comes under. DESIGN.md 9.5.
@@ -1768,6 +2422,8 @@ enum License {
     Program,
     /// Atkinson Hyperlegible, which DESIGN.md 3 gives the window.
     Font,
+    /// Fira Sans, which holds the letters Atkinson lacks. DESIGN.md 3.
+    Fallback,
     /// The Lucide glyphs of DESIGN.md 4.
     Icons,
 }
@@ -1777,6 +2433,9 @@ const GPL: &str = include_str!("../../../LICENSE");
 
 /// The text of the SIL Open Font License, which the font comes under.
 const OFL: &str = include_str!("../assets/fonts/LICENSE-OFL.txt");
+
+/// The same license again, as the second font carries its own copy.
+const OFL_FALLBACK: &str = include_str!("../assets/fonts/LICENSE-OFL-FiraSans.txt");
 
 /// The text of the ISC license, which the glyphs come under.
 const ISC: &str = include_str!("../assets/icons/LICENSE-ISC.txt");
@@ -1799,6 +2458,11 @@ impl License {
                 "SIL Open Font License 1.1",
                 "https://github.com/googlefonts/atkinson-hyperlegible",
             ),
+            Self::Fallback => (
+                "Fira Sans",
+                "SIL Open Font License 1.1",
+                "https://github.com/mozilla/Fira",
+            ),
             Self::Icons => (
                 "Lucide",
                 "ISC License",
@@ -1812,6 +2476,7 @@ impl License {
         match self {
             Self::Program => GPL,
             Self::Font => OFL,
+            Self::Fallback => OFL_FALLBACK,
             Self::Icons => ISC,
         }
     }
@@ -1828,14 +2493,21 @@ fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
     // lines sit closer together than the `ROW_GAP` of DESIGN.md 9. The
     // whole of it has to fit over the license text.
     ui.spacing_mut().item_spacing.y = 6.0;
-    widget::row_label(ui, &format!("dmap {}", env!("CARGO_PKG_VERSION")));
-    widget::helper(ui, "Map display for a tabletop RPG table with a TV.");
-    for one in [License::Program, License::Font, License::Icons] {
+    widget::row_label(ui, &text::dialog_about_version(env!("CARGO_PKG_VERSION")));
+    widget::helper(ui, text::dialog_about_tagline());
+    for one in [
+        License::Program,
+        License::Font,
+        License::Fallback,
+        License::Icons,
+    ] {
         let (name, terms, url) = one.about();
-        ui.horizontal(|ui| {
-            widget::row_label(ui, &format!("{name}, under the {terms}."));
+        // A language whose words run long takes the link to the next
+        // line instead of past the edge of the dialog.
+        ui.horizontal_wrapped(|ui| {
+            widget::row_label(ui, &text::dialog_about_licensed(name, terms));
             ui.hyperlink_to(
-                egui::RichText::new("Source")
+                egui::RichText::new(text::dialog_about_source())
                     .font(theme::font(theme::SMALL, false))
                     .color(tokens.accent),
                 url,
@@ -1843,7 +2515,7 @@ fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
         });
     }
     ui.add_space(4.0);
-    widget::row_label(ui, "Built by");
+    widget::row_label(ui, text::dialog_about_built_by());
     let names: Vec<&str> = CONTRIBUTORS
         .lines()
         .map(str::trim)
@@ -1851,20 +2523,23 @@ fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
         .collect();
     widget::helper(ui, &names.join(", "));
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        widget::helper(ui, "dmap is free software, and it is not finished.");
+    ui.horizontal_wrapped(|ui| {
+        widget::helper(ui, text::dialog_about_free());
         ui.hyperlink_to(
-            egui::RichText::new("Bring a bug, a story or a patch")
+            egui::RichText::new(text::dialog_about_bring())
                 .font(theme::font(theme::SMALL, false))
                 .color(tokens.accent),
             ISSUES,
         );
     });
     ui.add_space(4.0);
+    // Every one of these is a name, and a name reads the same in every
+    // language, so no key stands behind them.
     let choices = [
         (License::Program, "dmap"),
-        (License::Font, "Font"),
-        (License::Icons, "Glyphs"),
+        (License::Font, "Atkinson"),
+        (License::Fallback, "Fira"),
+        (License::Icons, "Lucide"),
     ];
     widget::segmented(ui, picked, &choices);
     // The text takes the room that is left, so the tab needs no scroll of
@@ -1884,8 +2559,8 @@ fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
 }
 
 /// One line that says a tab waits for its story. DESIGN.md 9.
-fn not_built(ui: &mut egui::Ui, text: &str) {
-    widget::helper(ui, text);
+fn not_built(ui: &mut egui::Ui, line: &str) {
+    widget::helper(ui, line);
 }
 
 /// The scenes dialog of DESIGN.md 9.6.
@@ -1905,7 +2580,7 @@ fn scenes_dialog(
     let close = dialog_frame(
         ui.ctx(),
         "scenes",
-        "Scenes",
+        text::dialog_scenes_title(),
         egui::vec2(660.0, 440.0),
         tokens,
         |ui, rest| {
@@ -1925,7 +2600,7 @@ fn scenes_dialog(
             body_ui.set_clip_rect(body);
             body_ui.spacing_mut().item_spacing.y = 10.0;
             body_ui.horizontal(|ui| {
-                widget::row_label(ui, "Scenes folder");
+                widget::row_label(ui, text::dialog_scenes_folder());
                 let path = frame.scenes_dir.display().to_string();
                 let (rect, response) = ui.allocate_exact_size(
                     egui::vec2(PATH_WIDTH, widget::CONTROL),
@@ -1940,7 +2615,7 @@ fn scenes_dialog(
                 );
                 row_name(ui, rect.shrink2(egui::vec2(8.0, 0.0)), &path, false, tokens);
                 let _ = response;
-                if widget::button(ui, "Change", None, Height::Full).clicked() {
+                if widget::button(ui, text::dialog_scenes_change(), None, Height::Full).clicked() {
                     command = Some(SceneCommand::ScenesFolder);
                 }
             });
@@ -1976,7 +2651,14 @@ fn scenes_dialog(
                 ),
                 tokens,
             );
-            if widget::button(&mut foot, "New scene", Some(Icon::Plus), Height::Full).clicked() {
+            if widget::button(
+                &mut foot,
+                text::dialog_scenes_new(),
+                Some(Icon::Plus),
+                Height::Full,
+            )
+            .clicked()
+            {
                 command = Some(SceneCommand::New);
             }
         },
@@ -2018,14 +2700,21 @@ fn scene_row(
     );
     if scenes.deleting.as_deref() == Some(name) {
         row.label(
-            egui::RichText::new(format!("Delete {name} and its maps?"))
+            egui::RichText::new(text::dialog_scenes_delete_ask(name))
                 .font(theme::font(theme::BODY, false))
                 .color(tokens.accent),
         );
-        if widget::button(&mut row, "Delete", Some(Icon::Trash), Height::Row).clicked() {
+        if widget::button(
+            &mut row,
+            text::dialog_scenes_delete(),
+            Some(Icon::Trash),
+            Height::Row,
+        )
+        .clicked()
+        {
             *command = Some(SceneCommand::Delete(name.to_owned()));
         }
-        if widget::button(&mut row, "Keep", None, Height::Row).clicked() {
+        if widget::button(&mut row, text::dialog_scenes_keep(), None, Height::Row).clicked() {
             scenes.deleting = None;
         }
         return;
@@ -2038,13 +2727,14 @@ fn scene_row(
         );
         let done = field.lost_focus() && row.input(|i| i.key_pressed(egui::Key::Enter));
         field.request_focus();
-        if done || widget::button(&mut row, "Save", None, Height::Row).clicked() {
+        if done || widget::button(&mut row, text::dialog_scenes_save(), None, Height::Row).clicked()
+        {
             *command = Some(SceneCommand::Rename {
                 from: from.clone(),
                 to: typed.clone(),
             });
         }
-        if widget::button(&mut row, "Cancel", None, Height::Row).clicked() {
+        if widget::button(&mut row, text::dialog_scenes_cancel(), None, Height::Row).clicked() {
             scenes.renaming = None;
         }
         return;
@@ -2064,22 +2754,22 @@ fn scene_row(
             .color(color),
     );
     row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |row| {
-        if widget::button(row, "Delete", None, Height::Row).clicked() {
+        if widget::button(row, text::dialog_scenes_delete(), None, Height::Row).clicked() {
             scenes.deleting = Some(name.to_owned());
         }
-        if widget::button(row, "Folder", None, Height::Row).clicked() {
+        if widget::button(row, text::dialog_scenes_reveal(), None, Height::Row).clicked() {
             *command = Some(SceneCommand::Reveal(name.to_owned()));
         }
-        if widget::button(row, "Rename", None, Height::Row).clicked() {
+        if widget::button(row, text::dialog_scenes_rename(), None, Height::Row).clicked() {
             scenes.renaming = Some((name.to_owned(), name.to_owned()));
         }
         if open {
             row.label(
-                egui::RichText::new("Open now")
+                egui::RichText::new(text::dialog_scenes_open_now())
                     .font(theme::font(theme::BODY, false))
                     .color(tokens.mute),
             );
-        } else if widget::button(row, "Open", None, Height::Row).clicked() {
+        } else if widget::button(row, text::dialog_scenes_open(), None, Height::Row).clicked() {
             *command = Some(SceneCommand::Open(name.to_owned()));
         }
     });
@@ -2097,12 +2787,45 @@ struct Tree {
     /// How wide the panel stands, in points. DESIGN.md 8.4.
     width: f32,
     /// The group whose name the DM is writing, from a double click.
-    renaming: Option<NodeId>,
+    renaming: Option<Renaming>,
     /// The group the list shows. Its children are the rows under it.
     ///
     /// DESIGN.md 8.4: the list never shows the whole tree from the root,
     /// so the indent of a deep scene has no room to run away.
     scope: NodeId,
+}
+
+/// What the objects list asks for, to act on once the tree is free.
+///
+/// A row reads and writes the tree through one borrow, so nothing in it
+/// can reach the history. Each row leaves its ask here instead, and the
+/// panel turns it into a change when the borrow is over.
+#[derive(Debug, Default, Clone, Copy)]
+struct Asked {
+    /// A node to move: the node, where it goes, and whether it goes inside.
+    moved: Option<(NodeId, NodeId, bool)>,
+    /// New switches for one node: the node, what it had, what it takes.
+    shown: Option<(NodeId, Shown, Shown)>,
+    /// The DM typed a name this frame. `true` when they finished.
+    named: Option<bool>,
+    /// The name of a new group the DM asked for.
+    new_group: Option<NodeId>,
+    /// A group the DM asked to take apart.
+    ungroup: Option<NodeId>,
+}
+
+/// A group name the DM is typing.
+///
+/// The draft lives here, not in the scene, so every keystroke reaches the
+/// tree as one change the DM can take back whole.
+#[derive(Debug, Clone)]
+struct Renaming {
+    /// The group that takes the name.
+    id: NodeId,
+    /// The name the group carried before the first keystroke.
+    before: String,
+    /// The name as it stands now.
+    draft: String,
 }
 
 impl Default for Tree {
@@ -2117,7 +2840,7 @@ impl Default for Tree {
         }
     }
 }
-/// The rows under one group. Returns `true` when the DM changed one.
+/// The rows under one group. What the DM pressed lands in `asked`.
 ///
 /// DESIGN.md 8.4 gives every row the same shape: a twist, the glyph that
 /// says what the row is, the name, then the two switches.
@@ -2127,10 +2850,9 @@ fn tree_rows(
     select: &mut Select,
     tree: &mut Tree,
     depth: usize,
-    moved: &mut Option<(NodeId, NodeId, bool)>,
+    asked: &mut Asked,
     tokens: Tokens,
-) -> bool {
-    let mut edited = false;
+) {
     // The list reads from the top down, and the last node draws over the
     // rest, so the last node comes first.
     for node in nodes.iter_mut().rev() {
@@ -2172,20 +2894,23 @@ fn tree_rows(
                 if row.body.drag_started() {
                     egui::DragAndDrop::set_payload(ui.ctx(), id);
                 }
-                edited |= switches(ui, row.switches, &mut group.shown, tokens);
-                dropped_on(ui, &row.whole, id, true, moved, tokens);
+                if let Some(after) = switches(ui, row.switches, group.shown, tokens) {
+                    asked.shown = Some((id, group.shown, after));
+                }
+                dropped_on(ui, &row.whole, id, true, &mut asked.moved, tokens);
                 if open {
-                    edited |= tree_rows(
+                    tree_rows(
                         ui,
                         &mut group.children,
                         select,
                         tree,
                         depth + 1,
-                        moved,
+                        asked,
                         tokens,
                     );
                 }
             }
+            Node::Stroke(stroke) => stroke_row(ui, stroke, select, depth, asked, tokens),
             Node::Asset(asset) => {
                 let id = asset.id;
                 let picked = select.holds(id);
@@ -2208,12 +2933,48 @@ fn tree_rows(
                 }
                 let name = asset.path.to_string_lossy().into_owned();
                 row_name(ui, row.name, &name, picked, tokens);
-                edited |= switches(ui, row.switches, &mut asset.shown, tokens);
-                dropped_on(ui, &row.whole, id, false, moved, tokens);
+                if let Some(after) = switches(ui, row.switches, asset.shown, tokens) {
+                    asked.shown = Some((id, asset.shown, after));
+                }
+                dropped_on(ui, &row.whole, id, false, &mut asked.moved, tokens);
             }
         }
     }
-    edited
+}
+
+/// One row of the objects list for a stroke. DESIGN.md 8.4.
+fn stroke_row(
+    ui: &mut egui::Ui,
+    stroke: &Stroke,
+    select: &mut Select,
+    depth: usize,
+    asked: &mut Asked,
+    tokens: Tokens,
+) {
+    let id = stroke.id;
+    let picked = select.holds(id);
+    let row = tree_row(
+        ui,
+        RowLook {
+            depth,
+            picked,
+            twist: None,
+            glyph: stroke.ink.glyph(),
+            accent_glyph: false,
+            tokens,
+        },
+    );
+    if row.body.clicked() {
+        select.take(id, ui.input(|i| i.modifiers.ctrl));
+    }
+    if row.body.drag_started() {
+        egui::DragAndDrop::set_payload(ui.ctx(), id);
+    }
+    row_name(ui, row.name, stroke.ink.name(), picked, tokens);
+    if let Some(after) = switches(ui, row.switches, stroke.shown, tokens) {
+        asked.shown = Some((id, stroke.shown, after));
+    }
+    dropped_on(ui, &row.whole, id, false, &mut asked.moved, tokens);
 }
 
 /// What one row of the objects list looks like. DESIGN.md 8.4.
@@ -2467,16 +3228,13 @@ fn rename_field(
 }
 
 /// The two switches on a row: the DM screen, then the TV. DESIGN.md 8.4.
-fn switches(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    shown: &mut crate::scene::Shown,
-    tokens: Tokens,
-) -> bool {
-    let mut edited = false;
+///
+/// Returns the pair the DM asked for, when they pressed one of the two.
+fn switches(ui: &mut egui::Ui, rect: egui::Rect, shown: Shown, tokens: Tokens) -> Option<Shown> {
+    let mut asked = None;
     for (index, (on, glyph, off_glyph)) in [
-        (&mut shown.dm, Icon::Eye, Icon::EyeOff),
-        (&mut shown.tv, Icon::Monitor, Icon::MonitorOff),
+        (shown.dm, Icon::Eye, Icon::EyeOff),
+        (shown.tv, Icon::Monitor, Icon::MonitorOff),
     ]
     .into_iter()
     .enumerate()
@@ -2491,10 +3249,15 @@ fn switches(
             egui::Sense::click(),
         );
         if response.clicked() {
-            *on = !*on;
-            edited = true;
+            let mut after = shown;
+            if index == 0 {
+                after.dm = !shown.dm;
+            } else {
+                after.tv = !shown.tv;
+            }
+            asked = Some(after);
         }
-        let (glyph, color) = if *on {
+        let (glyph, color) = if on {
             (glyph, tokens.ink)
         } else {
             (off_glyph, tokens.mute)
@@ -2507,7 +3270,7 @@ fn switches(
             color,
         );
     }
-    edited
+    asked
 }
 
 /// Marks where a row on its way through the tree would land.
@@ -2550,33 +3313,790 @@ fn flip(open: &mut std::collections::HashSet<NodeId>, id: NodeId) {
 /// `frame_box` comes back `true` when the DM asked to see the whole box.
 fn box_properties(
     ui: &mut egui::Ui,
-    tv_box: &mut TvBox,
+    tv_box: TvBox,
     frame_box: &mut bool,
     tokens: Tokens,
-) -> bool {
+) -> Option<TvBox> {
     let _ = tokens;
     let mut percent = tv_box.zoom(TV_WIDTH_INCHES) * 100.0;
-    let mut edited = false;
-    widget::row_label(ui, "Zoom");
+    let mut asked = None;
+    widget::row_label(ui, text::panel_box_zoom());
     if widget::input(
         ui,
         &mut percent,
-        "%",
+        text::unit_percent(),
         100.0,
         MIN_ZOOM_PERCENT..=MAX_ZOOM_PERCENT,
         0.1,
     )
     .changed()
     {
-        tv_box.width = clamp_width(TV_WIDTH_INCHES / (percent / 100.0));
-        edited = true;
+        let mut after = tv_box;
+        after.width = clamp_width(TV_WIDTH_INCHES / (percent / 100.0));
+        asked = Some(after);
     }
-    widget::helper(ui, "100 % is true size on the TV");
-    widget::row_label(ui, "Move");
-    widget::helper(ui, "The arrow keys move the box one cell");
-    widget::row_label(ui, "Frame");
-    *frame_box = widget::button(ui, "Show the whole box", None, Height::Panel).clicked();
-    edited
+    widget::helper(ui, text::panel_box_zoom_helper());
+    widget::row_label(ui, text::panel_box_move());
+    widget::helper(ui, text::panel_box_move_helper());
+    widget::row_label(ui, text::panel_box_frame());
+    *frame_box = widget::button(ui, text::panel_box_frame_button(), None, Height::Panel).clicked();
+    asked
+}
+
+/// The Group row of the map panel: which group holds this map.
+///
+/// Returns the group the DM picked, when they picked one.
+fn group_field(ui: &mut egui::Ui, id: NodeId, scene: &Scene) -> Option<NodeId> {
+    let names = crate::scene::group_names(scene);
+    let holder = crate::scene::parent_of(scene, id).map(|(group, _)| group);
+    let open = holder
+        .and_then(|group| names.iter().find(|(other, ..)| *other == group))
+        .map_or("", |(_, group_name, _)| group_name.as_str());
+    let field = widget::select_field(ui, open, ui.available_width());
+    let mut picked = None;
+    egui::Popup::menu(&field)
+        .gap(-1.0)
+        .width(ui.available_width())
+        .show(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for (group, group_name, depth) in &names {
+                let label = format!("{}{group_name}", "  ".repeat(*depth));
+                if widget::select_row(ui, &label, holder == Some(*group)).clicked() {
+                    picked = Some(*group);
+                }
+            }
+        });
+    picked
+}
+
+/// The state of the views the panel draws for.
+///
+/// The Draw view keeps its choices in the settings, so it brings nothing
+/// of its own here.
+#[derive(Debug)]
+struct Views<'a> {
+    select: &'a mut Select,
+    table: &'a mut Table,
+}
+
+/// Writes what every measure and every area of effect says about itself.
+///
+/// It draws in each view, because a shape the DM laid over the map keeps
+/// its number whatever they do next. The TV says the same over its own
+/// canvas, from the same code. Issue #12.
+fn say_lengths(
+    ui: &egui::Ui,
+    frame: &Frame<'_>,
+    live: Option<&Stroke>,
+    viewport: (u32, u32),
+    tokens: Tokens,
+) {
+    let mut ink = crate::scene::ink_order(frame.scene, crate::scene::Audience::Dm);
+    if let Some(live) = live {
+        ink.push(live);
+    }
+    let painter = ui.ctx().layer_painter(egui::LayerId::background());
+    let ppp = f64::from(ui.ctx().pixels_per_point());
+    measure_overlay(
+        &painter,
+        &ink,
+        frame.camera,
+        viewport,
+        ppp,
+        tokens,
+        theme::SMALL,
+    );
+}
+
+/// The Draw panel: the six squares, the color and the width. DESIGN.md 8.3.
+fn draw_properties(ui: &mut egui::Ui, settings: &mut Settings, tokens: Tokens) {
+    nib_row(
+        ui,
+        &mut settings.ink_nib,
+        &[
+            Nib::Pen,
+            Nib::Line,
+            Nib::Rect,
+            Nib::Ellipse,
+            Nib::Eraser,
+            Nib::Ruler,
+        ],
+        tokens,
+    );
+    // The areas of effect take a row of their own. They lie over the map
+    // instead of marking it, and a row of nine squares outgrows the panel.
+    widget::row_label(ui, text::panel_draw_effects());
+    nib_row(
+        ui,
+        &mut settings.ink_nib,
+        &[Nib::Burst, Nib::Cone, Nib::Beam],
+        tokens,
+    );
+    widget::row_label(ui, text::panel_draw_color());
+    widget::color_swatch(ui, &mut settings.ink_color);
+    if settings.ink_nib == Nib::Ruler {
+        widget::row_label(ui, text::ruler_rule());
+        let field = widget::select_field(ui, settings.ink_rule.name(), ui.available_width());
+        egui::Popup::menu(&field)
+            .gap(-1.0)
+            .width(ui.available_width())
+            .show(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for rule in Rule::all() {
+                    if widget::select_row(ui, rule.name(), rule == settings.ink_rule).clicked() {
+                        settings.ink_rule = rule;
+                    }
+                }
+            });
+    }
+    let mut snap = settings.ink_snap;
+    if widget::checkbox(ui, &mut snap, text::panel_draw_snap()).clicked() {
+        settings.ink_snap = snap;
+    }
+    widget::row_label(ui, text::panel_draw_width());
+    let mut width = settings.ink_width;
+    let shown = text::panel_draw_width_value(format_args!("{width:.2}"));
+    if widget::slider(
+        ui,
+        &mut width,
+        MIN_INK_WIDTH..=MAX_INK_WIDTH,
+        PANEL_SLIDER,
+        &shown,
+    )
+    .is_pointer_button_down_on()
+    {
+        settings.ink_width = width;
+    }
+}
+
+/// The row of six squares that says what a drag draws. DESIGN.md 8.3.
+fn nib_row(ui: &mut egui::Ui, nib: &mut Nib, nibs: &[Nib], tokens: Tokens) {
+    // One border holds the whole row and a dashed line stands between
+    // each pair, as the views do in the toolbar. DESIGN.md 8.3 and 5.2.
+    let width = NIB_SQUARE * nibs.len() as f32;
+    let (whole, _) = ui.allocate_exact_size(egui::vec2(width, NIB_SQUARE), egui::Sense::hover());
+    let inside = whole.shrink(1.0);
+    for (place, one) in nibs.iter().copied().enumerate() {
+        let square = egui::Rect::from_min_size(
+            egui::pos2(whole.left() + place as f32 * NIB_SQUARE, whole.top()),
+            egui::Vec2::splat(NIB_SQUARE),
+        )
+        .intersect(inside);
+        // The name of the nib, not its place, or the same square in two
+        // rows would take the same id.
+        let response = ui.interact(square, ui.id().with(("nib", one)), egui::Sense::click());
+        let on = *nib == one;
+        if on {
+            ui.painter().rect_filled(square, 0, tokens.raised);
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(
+                    square.left_top(),
+                    egui::vec2(square.width(), widget::BAR),
+                ),
+                0,
+                tokens.accent,
+            );
+        } else if response.hovered() {
+            ui.painter().rect_filled(square, 0, tokens.field);
+        }
+        let response = response.on_hover_text(one.name());
+        icon::paint(
+            ui.painter(),
+            one.glyph(),
+            square.center(),
+            widget::SMALL_ICON,
+            if on { tokens.accent } else { tokens.ink },
+        );
+        if response.clicked() {
+            *nib = one;
+        }
+        // The dash tells one square from the next without cutting the row
+        // into six controls. DESIGN.md 5.2.
+        if place + 1 < nibs.len() {
+            let edge = whole.left() + (place + 1) as f32 * NIB_SQUARE;
+            let line = [
+                egui::pos2(edge, inside.top()),
+                egui::pos2(edge, inside.bottom()),
+            ];
+            painter_dashes(ui, &line, tokens.rule);
+        }
+    }
+    ui.painter().rect(
+        whole,
+        0,
+        egui::Color32::TRANSPARENT,
+        egui::Stroke::new(1.0, tokens.rule),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// The Draw view on the canvas: the pen and the shapes. DESIGN.md 8.3.
+///
+/// Returns `true` when the scene changed.
+fn draw_tool(
+    ui: &mut egui::Ui,
+    draw: &mut Draw,
+    frame: &mut Frame<'_>,
+    viewport: (u32, u32),
+    zoom_goes_to: &mut Option<bool>,
+) -> bool {
+    let (_, view, pointer) = canvas_area(ui, frame.camera, viewport, false, zoom_goes_to);
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    let at = pointer.pos.map(|pos| view.to_world(pos));
+    let nib = frame.settings.ink_nib;
+    // A DM who picks another square in the middle of a gesture leaves the
+    // last one behind. Without this the stroke stands under their hand for
+    // ever: it draws on both screens, and the history waits on a hand that
+    // has let go. Issue #12.
+    if draw
+        .live
+        .as_ref()
+        .is_some_and(|live| nib.ink() != Some(live.ink))
+    {
+        draw.live = None;
+        draw.spanning = false;
+        draw.pulled = false;
+    }
+    let Some(ink) = nib.ink() else {
+        return erase(draw, frame, at, pointer);
+    };
+    // A shape starts on a crossing of the grid, because a spell lands on
+    // a cell. `Shift` holds that off for one drag. The ruler takes `Alt`
+    // instead, because `Shift` there keeps the measure. Issue #12.
+    let off = ui.input(|i| {
+        if ink == Ink::Measure {
+            i.modifiers.alt
+        } else {
+            i.modifiers.shift
+        }
+    });
+    let snap = frame.settings.ink_snap != off && ink != Ink::Pen;
+    // A measure lands on the grid at both ends. Every other shape starts
+    // on it and reaches wherever the DM pulls.
+    let at = at.map(|at| {
+        if snap && ink == Ink::Measure {
+            on_grid(at)
+        } else {
+            at
+        }
+    });
+    if ink == Ink::Measure {
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            draw.live = None;
+            return false;
+        }
+        // The second button bends the ruler where the pointer stands.
+        if let (true, Some(at), Some(live)) = (
+            ui.input(|i| i.pointer.secondary_pressed()),
+            at,
+            draw.live.as_mut(),
+        ) {
+            live.points.push(at);
+        }
+    }
+    // The second drag of a beam says how wide it runs. The width follows
+    // the pointer until the DM takes hold of it, and the beam goes into
+    // the scene when they let go, so neither drag ever asks for a button
+    // and a move at the same time. Issue #12.
+    if draw.spanning {
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            draw.spanning = false;
+            draw.pulled = false;
+            draw.live = None;
+            return false;
+        }
+        if let (Some(at), Some(live)) = (at, draw.live.as_mut()) {
+            live.span = span_of(live, at);
+        }
+        if pointer.down() {
+            draw.pulled = true;
+            return false;
+        }
+        if draw.pulled {
+            draw.spanning = false;
+            draw.pulled = false;
+            return keep(draw.live.take(), frame);
+        }
+        return false;
+    }
+    if let (true, true, Some(at)) = (pointer.pressed(), pointer.hovered, at) {
+        frame.history.settle();
+        draw.live = Some(Stroke {
+            // The name comes at the end, in `join_scene`, because a map
+            // the DM adds while they draw would take the same one.
+            id: ROOT_ID,
+            shown: crate::scene::Shown::default(),
+            ink,
+            points: vec![if snap { on_grid(at) } else { at }],
+            color: frame.settings.ink_color,
+            width: frame.settings.ink_width,
+            span: 0.0,
+            rule: frame.settings.ink_rule,
+        });
+    }
+    if let (true, Some(at), Some(live)) = (pointer.down(), at, draw.live.as_mut()) {
+        grow(live, at);
+        return false;
+    }
+    // A cone and a beam are not done: the hand lets go, and the next
+    // drag says how wide they are.
+    if draw.live.as_ref().is_some_and(|live| live.ink.spans()) {
+        draw.spanning = true;
+        return false;
+    }
+    let live = draw.live.take();
+    // A measure is gone when the DM lets go, unless they held Shift.
+    if live.as_ref().is_some_and(|live| live.ink == Ink::Measure)
+        && !ui.input(|i| i.modifiers.shift)
+    {
+        return false;
+    }
+    keep(live, frame)
+}
+
+/// Puts the stroke the DM finished into the scene. Issue #12.
+///
+/// A press that never moved leaves a dot for the pen and nothing for a
+/// shape, which would have no size at all.
+fn keep(live: Option<Stroke>, frame: &mut Frame<'_>) -> bool {
+    let Some(live) = live else {
+        return false;
+    };
+    if live.ink != Ink::Pen {
+        // A twitch of the hand between the press and the release is not a
+        // shape. A shape has to reach at least a little way.
+        let (Some(from), Some(to)) = (live.points.first(), live.points.last()) else {
+            return false;
+        };
+        if (to.0 - from.0).hypot(to.1 - from.1) < MIN_SHAPE {
+            return false;
+        }
+    }
+    let Some(change) = join_scene(frame.scene, live) else {
+        return false;
+    };
+    frame.history.kept(change);
+    true
+}
+
+/// Puts a finished stroke in the group the Draw view fills, as one change.
+///
+/// The group is made inside the change and not before it, or the first
+/// stroke of a scene would leave the group behind when the DM takes that
+/// stroke back. The stroke takes its name here as well, so a map added
+/// while the DM drew cannot have taken the same one. Issue #12.
+fn join_scene(scene: &mut Scene, live: Stroke) -> Option<Restructure> {
+    let name = live.ink.name().to_owned();
+    reshape(scene, Deed::Draw, name, |scene| {
+        let into = crate::scene::ink_group(scene, text::panel_objects_drawings().to_owned());
+        let mut live = live;
+        live.id = scene.next_id();
+        crate::scene::push_into(scene, into, Node::Stroke(live));
+    })
+}
+
+/// How wide the pointer makes a cone or a beam, in cells.
+///
+/// The width is twice the distance from the pointer to the line the
+/// shape runs along, so the shape grows to either side as the DM pulls
+/// away from it.
+fn span_of(live: &Stroke, at: (f64, f64)) -> f64 {
+    let (Some(from), Some(to)) = (live.points.first(), live.points.last()) else {
+        return 0.0;
+    };
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    let length = dx.hypot(dy);
+    if length <= f64::EPSILON {
+        return 0.0;
+    }
+    // The distance from a point to the line, by the cross product.
+    let away = ((at.0 - from.0) * dy - (at.1 - from.1) * dx).abs() / length;
+    2.0 * away
+}
+
+/// Draws the labels of every measure the screen shows. Issue #12.
+///
+/// A kept measure carries its length as the live one does, so the DM and
+/// the players read the same numbers off the same line.
+pub fn measure_overlay(
+    painter: &egui::Painter,
+    strokes: &[&Stroke],
+    camera: &Camera,
+    viewport: (u32, u32),
+    ppp: f64,
+    tokens: Tokens,
+    size: f32,
+) {
+    let view = View {
+        camera: *camera,
+        viewport,
+        ppp,
+    };
+    for stroke in strokes {
+        if stroke.ink == Ink::Measure {
+            measure_labels(painter, stroke, &view, tokens, size);
+        } else if let (Some(reach), Some(last)) =
+            (stroke.ink.reach(&stroke.points), stroke.points.last())
+        {
+            let says = if stroke.span > 0.0 {
+                // The width says cells alone. The length beside it
+                // already carries the feet.
+                let across = text::ruler_cells(format_args!("{:.1}", stroke.span));
+                text::ruler_span(length(reach), across)
+            } else {
+                length(reach)
+            };
+            label(painter, view.to_screen(*last), &says, tokens, true, size);
+        }
+    }
+}
+
+/// Draws the labels of a measure, one for each leg and one for the whole.
+///
+/// The label sits beside the middle of its leg, and the total stands at
+/// the end, where the pointer is. Issue #12.
+fn measure_labels(painter: &egui::Painter, live: &Stroke, view: &View, tokens: Tokens, size: f32) {
+    let mut whole = 0.0;
+    for pair in live.points.windows(2) {
+        let leg = live.rule.cells(pair[0], pair[1]);
+        whole += leg;
+        let middle = (
+            f64::midpoint(pair[0].0, pair[1].0),
+            f64::midpoint(pair[0].1, pair[1].1),
+        );
+        label(
+            painter,
+            view.to_screen(middle),
+            &length(leg),
+            tokens,
+            false,
+            size,
+        );
+    }
+    if live.points.len() > 2
+        && let Some(last) = live.points.last()
+    {
+        label(
+            painter,
+            view.to_screen(*last),
+            &length(whole),
+            tokens,
+            true,
+            size,
+        );
+    }
+}
+
+/// One label of the ruler, in a box that reads over any map.
+fn label(
+    painter: &egui::Painter,
+    at: egui::Pos2,
+    text: &str,
+    tokens: Tokens,
+    whole: bool,
+    size: f32,
+) {
+    let font = theme::font(size, whole);
+    let galley = painter.layout_no_wrap(text.to_owned(), font, tokens.ink);
+    let box_rect = egui::Rect::from_min_size(
+        at + egui::vec2(LABEL_GAP, -galley.size().y - LABEL_GAP),
+        galley.size() + egui::Vec2::splat(2.0 * LABEL_PAD),
+    );
+    painter.rect(
+        box_rect,
+        0,
+        tokens.surface,
+        egui::Stroke::new(1.0, tokens.ink),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(
+        box_rect.min + egui::Vec2::splat(LABEL_PAD),
+        galley,
+        tokens.ink,
+    );
+}
+
+/// How far a leg runs, in cells and in feet. Issue #12.
+fn length(cells: f64) -> String {
+    text::ruler_length(
+        format_args!("{cells:.1}"),
+        format_args!("{:.0}", cells * FEET_PER_CELL),
+    )
+}
+
+/// The nearest crossing of the grid, in inches.
+fn on_grid(at: (f64, f64)) -> (f64, f64) {
+    (at.0.round(), at.1.round())
+}
+
+/// Takes a bite out of every stroke the eraser passes over.
+///
+/// The scene changes while the eraser moves, so the DM watches the line
+/// go. The whole drag becomes one step when the hand lets go.
+fn erase(draw: &mut Draw, frame: &mut Frame<'_>, at: Option<(f64, f64)>, pointer: Pointer) -> bool {
+    if let (true, true, Some(at)) = (pointer.pressed(), pointer.hovered, at) {
+        frame.history.settle();
+        draw.before = Some(frame.scene.root.children.clone());
+        draw.last = Some(at);
+    }
+    if let (true, Some(at), true) = (pointer.down(), at, draw.before.is_some()) {
+        // The pointer jumps from frame to frame, and a stroke between two
+        // of those places would come through a drag untouched. So the
+        // eraser bites its way along the path it took.
+        let from = draw.last.unwrap_or(at);
+        draw.last = Some(at);
+        let far = (at.0 - from.0).hypot(at.1 - from.1);
+        let steps = (far / ERASER_REACH).ceil().max(1.0);
+        let mut cut_one = false;
+        for step in 0..=(steps as usize) {
+            let part = step as f64 / steps;
+            let here = (
+                from.0 + (at.0 - from.0) * part,
+                from.1 + (at.1 - from.1) * part,
+            );
+            cut_one |= bite(frame.scene, here, ERASER_REACH);
+        }
+        return cut_one;
+    }
+    draw.last = None;
+    let Some(before) = draw.before.take() else {
+        return false;
+    };
+    if before == frame.scene.root.children {
+        return false;
+    }
+    frame.history.kept(Restructure {
+        what: Deed::Erase,
+        subject: text::stroke_eraser().to_owned(),
+        before: vec![(ROOT_ID, before)],
+        after: vec![(ROOT_ID, frame.scene.root.children.clone())],
+    });
+    true
+}
+
+/// Cuts every stroke a disc reaches. Returns `true` when one gave way.
+///
+/// An area of effect and a kept measure come away whole: a piece of
+/// either one says nothing. Paint comes off in parts, and the parts of
+/// one stroke join a group of their own, so the objects list holds them
+/// together and the DM moves or hides them as one. Issue #12.
+fn bite(scene: &mut Scene, at: (f64, f64), radius: f64) -> bool {
+    let hit: Vec<NodeId> = crate::scene::ink_order(scene, crate::scene::Audience::Dm)
+        .into_iter()
+        .filter(|stroke| stroke.touches(at, radius))
+        .map(|stroke| stroke.id)
+        .collect();
+    let mut cut_one = false;
+    for id in hit {
+        let Some((parent, place)) = crate::scene::parent_of(scene, id) else {
+            continue;
+        };
+        let Some(Node::Stroke(stroke)) = crate::scene::take_node(scene, id) else {
+            continue;
+        };
+        cut_one = true;
+        if stroke.ink.whole() {
+            // It is gone, and nothing goes back in its place.
+            continue;
+        }
+        let runs = crate::stroke::cut(&stroke.polyline(), at, radius + stroke.width / 2.0);
+        let Some(runs) = runs else {
+            // The disc reached the stroke and cut nothing out of it, so
+            // the stroke goes back where it was.
+            put_back(scene, parent, place, Node::Stroke(stroke));
+            continue;
+        };
+        // A stroke that came apart before is already in a group of its
+        // own, and the new pieces stay in it. Only the first cut makes
+        // one, or a long rub would build a tower of groups.
+        let holder = if runs.len() > 1 && !pieces_group(scene, parent) {
+            let id = scene.next_id();
+            let mut group = Group::new(id, text::panel_objects_pieces().to_owned());
+            group.shown = stroke.shown;
+            put_back(scene, parent, place, Node::Group(group));
+            id
+        } else {
+            parent
+        };
+        for (step, run) in runs.into_iter().enumerate() {
+            let id = scene.next_id();
+            let piece = Stroke {
+                id,
+                // What is left of a shape is a free line: a box with a
+                // bite out of it is no longer a box.
+                ink: Ink::Pen,
+                points: run,
+                ..stroke.clone()
+            };
+            let place = if holder == parent { place + step } else { step };
+            put_back(scene, holder, place, Node::Stroke(piece));
+        }
+    }
+    cut_one
+}
+
+/// Puts a node back into a group, at the place it had or at the end.
+fn put_back(scene: &mut Scene, parent: NodeId, place: usize, node: Node) {
+    if let Some(group) = crate::scene::group_mut(scene, parent) {
+        let place = place.min(group.children.len());
+        group.children.insert(place, node);
+    }
+}
+
+/// Whether this group already holds the pieces of a stroke.
+///
+/// The group the Draw view fills is not one of those, and neither is the
+/// root, so the first cut inside either one makes a group.
+fn pieces_group(scene: &Scene, id: NodeId) -> bool {
+    id != ROOT_ID
+        && crate::scene::find(scene, id)
+            .and_then(Node::group)
+            .is_some_and(|group| !group.ink)
+}
+
+/// Takes the stroke under the DM's hand to where the pointer stands.
+fn grow(live: &mut Stroke, at: (f64, f64)) {
+    if live.ink == Ink::Pen {
+        // A point that lands on the one before it says nothing, and a pen
+        // drags out thousands of them.
+        let far = live
+            .points
+            .last()
+            .is_none_or(|last| (last.0 - at.0).hypot(last.1 - at.1) > PEN_STEP);
+        if far {
+            live.points.push(at);
+        }
+        return;
+    }
+    if live.ink == Ink::Measure {
+        // Every waypoint stays. The last point follows the pointer.
+        if live.points.len() < 2 {
+            live.points.push(at);
+        } else if let Some(last) = live.points.last_mut() {
+            *last = at;
+        }
+        return;
+    }
+    // A shape stands between the press and the pointer.
+    live.points.truncate(1);
+    live.points.push(at);
+}
+
+/// The panel of one stroke: what it is drawn in, and how far it reaches.
+///
+/// The DM changes what they drew after they drew it, and every field
+/// goes through the history as one step. Issue #12.
+fn stroke_properties(
+    ui: &mut egui::Ui,
+    id: NodeId,
+    select: &mut Select,
+    frame: &mut Frame<'_>,
+) -> bool {
+    let Some(mark) = crate::scene::find(frame.scene, id)
+        .and_then(Node::stroke)
+        .cloned()
+    else {
+        return false;
+    };
+    let mut after = mark.clone();
+    let mut changed = false;
+    widget::row_label(ui, text::panel_draw_color());
+    if widget::color_swatch(ui, &mut after.color) {
+        changed = true;
+    }
+    widget::row_label(ui, text::panel_draw_width());
+    let mut width = mark.width;
+    let shown = text::panel_draw_width_value(format_args!("{width:.2}"));
+    if widget::slider(
+        ui,
+        &mut width,
+        MIN_INK_WIDTH..=MAX_INK_WIDTH,
+        PANEL_SLIDER,
+        &shown,
+    )
+    .is_pointer_button_down_on()
+    {
+        after.width = width;
+        changed = true;
+    }
+    changed |= reach_row(ui, &mark, &mut after);
+    if mark.ink == Ink::Measure {
+        widget::row_label(ui, text::ruler_rule());
+        let field = widget::select_field(ui, mark.rule.name(), ui.available_width());
+        egui::Popup::menu(&field)
+            .gap(-1.0)
+            .width(ui.available_width())
+            .show(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for rule in Rule::all() {
+                    if widget::select_row(ui, rule.name(), rule == mark.rule).clicked() {
+                        after.rule = rule;
+                        changed = true;
+                    }
+                }
+            });
+    }
+    if !changed {
+        return false;
+    }
+    let before = select
+        .opened_ink
+        .clone()
+        .filter(|held| held.id == id)
+        .unwrap_or(mark);
+    select.opened_ink = Some(before.clone());
+    frame.history.hold(
+        frame.scene,
+        SetStrokes {
+            before: vec![before],
+            after: vec![after],
+        },
+    );
+    true
+}
+
+/// The rows that say how far an area of effect reaches. DESIGN.md 8.3.
+///
+/// A reach moves the far point along the line the shape already runs on,
+/// so the shape keeps its heading and takes a new size.
+fn reach_row(ui: &mut egui::Ui, mark: &Stroke, after: &mut Stroke) -> bool {
+    let Some(reach) = mark.ink.reach(&mark.points) else {
+        return false;
+    };
+    let mut changed = false;
+    widget::row_label(ui, text::panel_stroke_reach());
+    let mut cells = reach;
+    if widget::input(
+        ui,
+        &mut cells,
+        text::unit_cells(),
+        100.0,
+        MIN_REACH..=MAX_REACH,
+        0.5,
+    )
+    .changed()
+    {
+        after.points = mark.reached(cells);
+        changed = true;
+    }
+    if mark.ink.spans() {
+        widget::row_label(ui, text::panel_stroke_across());
+        let mut span = if mark.span > 0.0 { mark.span } else { 1.0 };
+        if widget::input(
+            ui,
+            &mut span,
+            text::unit_cells(),
+            100.0,
+            MIN_REACH..=MAX_REACH,
+            0.5,
+        )
+        .changed()
+        {
+            after.span = span;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// The properties of the selected map. DESIGN.md 8.1.
@@ -2588,85 +4108,154 @@ fn map_properties(
     ui: &mut egui::Ui,
     id: NodeId,
     select: &mut Select,
-    scene: &mut Scene,
+    frame: &mut Frame<'_>,
     tokens: Tokens,
 ) -> bool {
-    let names = crate::scene::group_names(scene);
     let mut edited = false;
     // DESIGN.md 8.1 gives the file name a row of its own. The title of the
     // panel carries it now, so the row would say it twice.
-    widget::row_label(ui, "Group");
-    let holder = crate::scene::parent_of(scene, id).map(|(group, _)| group);
-    let open = holder
-        .and_then(|group| names.iter().find(|(other, ..)| *other == group))
-        .map_or("", |(_, group_name, _)| group_name.as_str());
-    let field = widget::select_field(ui, open, ui.available_width());
-    egui::Popup::menu(&field)
-        .gap(-1.0)
-        .width(ui.available_width())
-        .show(|ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            for (group, group_name, depth) in &names {
-                let label = format!("{}{group_name}", "  ".repeat(*depth));
-                if widget::select_row(ui, &label, holder == Some(*group)).clicked()
-                    && crate::scene::move_into(scene, id, *group)
-                {
-                    edited = true;
-                }
-            }
-        });
-    let Some(map) = crate::scene::asset_mut(scene, id) else {
+    widget::row_label(ui, text::panel_map_group());
+    let move_to = group_field(ui, id, frame.scene);
+    if let Some(group) = move_to
+        && let Some(change) = reshape(
+            frame.scene,
+            Deed::AnotherGroup,
+            crate::scene::name_of(frame.scene, id),
+            |scene| {
+                crate::scene::move_into(scene, id, group);
+            },
+        )
+    {
+        frame.history.kept(change);
+        edited = true;
+    }
+    let Some(map) = crate::scene::find(frame.scene, id)
+        .and_then(Node::asset)
+        .cloned()
+    else {
         return edited;
     };
-    widget::row_label(ui, "Pixels per cell");
+    // The widgets write into this copy. One change at the end of the panel
+    // carries whatever they wrote.
+    let mut after = map.clone();
+    let mut changed = false;
+    changed |= map_numbers(ui, &map, &mut after);
+    if widget::button(
+        ui,
+        text::panel_map_measure(),
+        Some(Icon::Ruler),
+        Height::Panel,
+    )
+    .clicked()
+    {
+        select.measure = Some(Measure::Start);
+    }
+    if select.measure.is_some() {
+        widget::helper(ui, text::panel_map_measure_helper());
+    }
+    // DESIGN.md 8.1 puts the turn and the flip in the footer of the panel.
+    ui.horizontal_wrapped(|ui| {
+        if widget::button(
+            ui,
+            text::panel_map_turn_button(),
+            Some(Icon::RotateCw),
+            Height::Row,
+        )
+        .clicked()
+        {
+            after.rotation += std::f64::consts::FRAC_PI_2;
+            changed = true;
+        }
+        if widget::button(
+            ui,
+            text::panel_map_flip(),
+            Some(Icon::FlipHorizontal2),
+            Height::Row,
+        )
+        .clicked()
+        {
+            after.flip_x = !map.flip_x;
+            changed = true;
+        }
+    });
+    widget::helper(ui, text::panel_map_flip_helper());
+    let _ = tokens;
+    if changed {
+        // A drag of a number runs over many frames. Every one of them goes
+        // back to the map as it stood when the drag began, so the whole
+        // drag is one step. `DmUi::run` closes it when the DM lets go.
+        let before = select
+            .opened
+            .clone()
+            .filter(|held| held.id == id)
+            .unwrap_or(map);
+        select.opened = Some(before.clone());
+        frame.history.hold(
+            frame.scene,
+            SetAssets {
+                before: vec![before],
+                after: vec![after],
+            },
+        );
+        edited = true;
+    }
+    edited
+}
+
+/// The grid size, the size and the turn of a map. DESIGN.md 8.1.
+///
+/// The three write into `after`, which the panel hands to the history as
+/// one change. Returns `true` when the DM moved one of them.
+fn map_numbers(ui: &mut egui::Ui, map: &Asset, after: &mut Asset) -> bool {
+    let mut changed = false;
+    widget::row_label(ui, text::panel_map_grid_px());
     let mut grid_px = map.grid_px;
     if widget::input(
         ui,
         &mut grid_px,
-        "px",
+        text::unit_px(),
         100.0,
         MIN_GRID_PX..=MAX_GRID_PX,
         1.0,
     )
     .changed()
     {
-        map.grid_px = grid_px;
-        edited = true;
+        after.grid_px = grid_px;
+        changed = true;
     }
     // The size sits next to the grid size because the two multiply: a map
     // with the right grid size draws at true size only at 100 percent.
     let mut percent = map.scale * 100.0;
-    widget::row_label(ui, "Size");
-    if widget::input(ui, &mut percent, "%", 100.0, MIN_PERCENT..=MAX_PERCENT, 0.5).changed() {
-        map.scale = percent / 100.0;
-        edited = true;
+    widget::row_label(ui, text::panel_map_size());
+    if widget::input(
+        ui,
+        &mut percent,
+        text::unit_percent(),
+        100.0,
+        MIN_PERCENT..=MAX_PERCENT,
+        0.5,
+    )
+    .changed()
+    {
+        after.scale = percent / 100.0;
+        changed = true;
     }
     let mut degrees = map.rotation.to_degrees();
-    widget::row_label(ui, "Turn");
-    if widget::input(ui, &mut degrees, "\u{b0}", 100.0, -360.0..=360.0, 0.5).changed() {
-        map.rotation = degrees.to_radians();
-        edited = true;
+    widget::row_label(ui, text::panel_map_turn());
+    if widget::input(
+        ui,
+        &mut degrees,
+        text::unit_degrees(),
+        100.0,
+        -360.0..=360.0,
+        0.5,
+    )
+    .changed()
+    {
+        after.rotation = degrees.to_radians();
+        changed = true;
     }
-    if widget::button(ui, "Measure a cell", Some(Icon::Ruler), Height::Panel).clicked() {
-        select.measure = Some(Measure::Start);
-    }
-    if select.measure.is_some() {
-        widget::helper(ui, "Click two corners of one cell. Escape gives it up.");
-    }
-    // DESIGN.md 8.1 puts the turn and the flip in the footer of the panel.
-    ui.horizontal(|ui| {
-        if widget::button(ui, "Turn", Some(Icon::RotateCw), Height::Row).clicked() {
-            map.rotation += std::f64::consts::FRAC_PI_2;
-            edited = true;
-        }
-        if widget::button(ui, "Flip", Some(Icon::FlipHorizontal2), Height::Row).clicked() {
-            map.flip_x = !map.flip_x;
-            edited = true;
-        }
-    });
-    widget::helper(ui, "Shift with F flips the map the other way.");
-    let _ = tokens;
-    edited
+    changed
 }
 
 /// The Select tool on the canvas: pick, move, scale, turn and flip maps.
@@ -2728,9 +4317,11 @@ fn canvas(
     let mut edited = false;
     if let (true, Some(pos)) = (pointer.down(), pointer.pos) {
         edited |= apply_drag(select, frame, view.to_world(pos), snap);
-    } else if let Some(Drag::Band { start_cursor }) = select.drag.take() {
+    } else if let Some(dropped) = select.drag.take() {
+        // The drag is over, so what it wrote becomes one step.
+        frame.history.settle();
         // The band is over: what it covered is what the DM now holds.
-        if let Some(pos) = pointer.pos {
+        if let (Drag::Band { start_cursor }, Some(pos)) = (dropped, pointer.pos) {
             for id in band_covers(frame, start_cursor, view.to_world(pos)) {
                 if !select.holds(id) {
                     select.chosen.push(id);
@@ -2746,7 +4337,7 @@ fn canvas(
     });
     set_cursor(ui, select.drag.is_some(), icon, pointer, &handles);
 
-    edited |= keys(ui, select, frame.scene);
+    edited |= keys(ui, select, frame);
     edited |= selection_popup(ui.ctx(), select, frame, tokens);
 
     if let (Some(Drag::Band { start_cursor }), Some(pos)) = (select.drag.as_ref(), pointer.pos) {
@@ -2825,7 +4416,7 @@ fn selection_popup(
     panel(
         ctx,
         "selection",
-        &format!("{} picked", held.len()),
+        &text::panel_picked_title(held.len()),
         Place {
             left_top,
             width: PANEL_WIDTH,
@@ -2837,6 +4428,7 @@ fn selection_popup(
                 let name = match crate::scene::find(frame.scene, *id) {
                     Some(Node::Group(group)) => group.name.clone(),
                     Some(Node::Asset(asset)) => asset.path.to_string_lossy().into_owned(),
+                    Some(Node::Stroke(stroke)) => stroke.ink.name().to_owned(),
                     None => continue,
                 };
                 let (rect, _) = ui.allocate_exact_size(
@@ -2846,18 +4438,32 @@ fn selection_popup(
                 row_name(ui, rect, &name, false, tokens);
             }
             ui.horizontal(|ui| {
-                if widget::button(ui, "Group", Some(Icon::Plus), Height::Panel).clicked() {
+                if widget::button(
+                    ui,
+                    text::panel_picked_group(),
+                    Some(Icon::Plus),
+                    Height::Panel,
+                )
+                .clicked()
+                {
                     group_them = true;
                 }
-                if widget::button(ui, "Close", None, Height::Panel).clicked() {
+                if widget::button(ui, text::panel_picked_close(), None, Height::Panel).clicked() {
                     select.popup = false;
                 }
             });
         },
     );
     if group_them {
-        let name = format!("Group {}", frame.scene.next_id());
-        if let Some(id) = crate::scene::group_selection(frame.scene, &select.chosen, name) {
+        let name = text::panel_objects_group_name(frame.scene.next_id());
+        let chosen = select.chosen.clone();
+        let mut made = None;
+        let subject = name.clone();
+        let change = reshape(frame.scene, Deed::Group, subject, |scene| {
+            made = crate::scene::group_selection(scene, &chosen, name);
+        });
+        if let (Some(change), Some(id)) = (change, made) {
+            frame.history.kept(change);
             select.chosen = vec![id];
             select.popup = false;
             edited = true;
@@ -2942,9 +4548,12 @@ fn table_tool(
 
     let mut edited = false;
     let alt = ui.input(|i| i.modifiers.alt);
+    // The box this frame works on. What the drag, the keys and the wheel
+    // write goes into one change at the end, so the DM can take it back.
+    let mut box_now = frame.scene.tv_box;
     match (pointer.down(), pointer.pos, table.drag) {
         (true, Some(pos), Some(drag)) => {
-            edited = drag_box(&mut frame.scene.tv_box, drag, view.to_world(pos));
+            edited = drag_box(&mut box_now, drag, view.to_world(pos));
         }
         (true, _, _) => {}
         // The drag is over. A size that came close to true size takes it
@@ -2955,14 +4564,11 @@ fn table_tool(
                 // A click on a handle that never moved is not a resize. It
                 // must not pull a size the DM chose with Alt back to true
                 // size.
-                let resized = (frame.scene.tv_box.width - start_width).abs() > f64::EPSILON;
-                let snapped = snap_to_true_size(
-                    frame.scene.tv_box.width,
-                    TV_WIDTH_INCHES,
-                    frame.settings.snap_percent,
-                );
-                if resized && (snapped - frame.scene.tv_box.width).abs() > f64::EPSILON {
-                    frame.scene.tv_box.width = snapped;
+                let resized = (box_now.width - start_width).abs() > f64::EPSILON;
+                let snapped =
+                    snap_to_true_size(box_now.width, TV_WIDTH_INCHES, frame.settings.snap_percent);
+                if resized && (snapped - box_now.width).abs() > f64::EPSILON {
+                    box_now.width = snapped;
                     edited = true;
                 }
             }
@@ -2971,16 +4577,28 @@ fn table_tool(
     // The keys wait for the drag to end. A drag rewrites the box from its
     // start state every frame, so a key press in the middle of one is lost.
     if table.drag.is_none() {
-        edited |= arrow_keys(ui, &mut frame.scene.tv_box);
+        edited |= arrow_keys(ui, &mut box_now);
     }
 
     // Ctrl and Alt with the wheel reach a zoom without a drag on a handle.
     // Figma has no gesture that resizes an object with the wheel, so Alt
     // marks this one as ours. The canvas already gave the gesture up.
     if let (Some(pinch), true) = (pointer.box_zoom, pointer.hovered) {
-        let zoom = frame.scene.tv_box.zoom(TV_WIDTH_INCHES) * f64::from(pinch);
-        frame.scene.tv_box.width = clamp_width(TV_WIDTH_INCHES / zoom);
+        let zoom = box_now.zoom(TV_WIDTH_INCHES) * f64::from(pinch);
+        box_now.width = clamp_width(TV_WIDTH_INCHES / zoom);
         edited = true;
+    }
+    if box_now != frame.scene.tv_box {
+        // The first frame of the gesture keeps the box the undo goes back
+        // to. `DmUi::run` closes the step when the DM lets go.
+        let before = *table.opened.get_or_insert(frame.scene.tv_box);
+        frame.history.hold(
+            frame.scene,
+            SetTvBox {
+                before,
+                after: box_now,
+            },
+        );
     }
 
     let icon = table.drag.map(|_| egui::CursorIcon::ResizeNwSe);
@@ -3126,6 +4744,12 @@ fn held_corners(select: &Select, frame: &Frame<'_>) -> Option<[(f64, f64); 4]> {
             let (min, max) = crate::scene::bounds(group, frame.size_of)?;
             Some([min, (max.0, min.1), max, (min.0, max.1)])
         }
+        // A stroke turns and grows with no handles of its own yet, so the
+        // box says where it stands and nothing more.
+        Node::Stroke(stroke) => {
+            let (min, max) = stroke.bounds()?;
+            Some([min, (max.0, min.1), max, (min.0, max.1)])
+        }
     }
 }
 
@@ -3157,6 +4781,9 @@ fn press(
         &handle_points,
         HANDLE_REACH,
     );
+    // A press starts a gesture, so whatever the DM had under their hand
+    // becomes a step of its own.
+    frame.history.settle();
     if let (Some(handle), Some(corners)) = (hit_handle, held_corners(select, frame)) {
         let starts = crate::scene::placed(frame.scene, &select.chosen);
         let pivot = pivot_of(&corners);
@@ -3175,20 +4802,23 @@ fn press(
         });
         return;
     }
-    // The box of a group takes the press first. Inside the box, the press
-    // goes on to the asset under the pointer.
-    let aimed = group_at(frame, view, pos).or_else(|| {
-        // The topmost asset under the pointer takes the press. The tree
-        // draws the bottom one first, so the search runs the other way.
-        crate::scene::assets(frame.scene)
-            .iter()
-            .rev()
-            .find(|asset| {
-                (frame.size_of)(&asset.path)
-                    .is_some_and(|size| hit_test(cursor, &asset.corners(size)))
-            })
-            .map(|asset| asset.id)
-    });
+    // The box of a group takes the press first, then a stroke, because a
+    // stroke draws over every map. Inside the box, the press goes on to
+    // the asset under the pointer.
+    let aimed = group_at(frame, view, pos)
+        .or_else(|| ink_at(frame, cursor))
+        .or_else(|| {
+            // The topmost asset under the pointer takes the press. The tree
+            // draws the bottom one first, so the search runs the other way.
+            crate::scene::assets(frame.scene)
+                .iter()
+                .rev()
+                .find(|asset| {
+                    (frame.size_of)(&asset.path)
+                        .is_some_and(|size| hit_test(cursor, &asset.corners(size)))
+                })
+                .map(|asset| asset.id)
+        });
     let Some(id) = aimed else {
         // A press on bare canvas starts a band that picks what it covers.
         if !add {
@@ -3204,31 +4834,40 @@ fn press(
         select.take(id, add);
     }
     select.drag = Some(Drag::Move {
-        starts: standing(frame.scene, &select.chosen),
+        was: standing(frame.scene, &select.chosen),
         start_cursor: cursor,
     });
 }
 
-/// Where every asset the DM holds stands now.
+/// The stroke under the pointer, if the pointer is on one.
+///
+/// The strokes draw over the maps, and the topmost one takes the press,
+/// so the DM picks what they see. Issue #12.
+fn ink_at(frame: &Frame<'_>, cursor: (f64, f64)) -> Option<NodeId> {
+    crate::scene::ink_order(frame.scene, crate::scene::Audience::Dm)
+        .iter()
+        .rev()
+        .find(|stroke| stroke.touches(cursor, PICK_REACH))
+        .map(|stroke| stroke.id)
+}
+
+/// Every asset the DM holds, as it stands now.
 ///
 /// A group in the selection hands over every asset under it, so a drag on
-/// a group moves all of it and nothing loses its place inside.
-fn standing(scene: &Scene, chosen: &[NodeId]) -> Vec<(NodeId, (f64, f64))> {
+/// a group moves all of it and nothing loses its place inside. The whole
+/// asset comes along, because the change that ends the drag puts every
+/// field of it back.
+fn standing(scene: &Scene, chosen: &[NodeId]) -> Vec<Asset> {
     crate::scene::normalize(scene, chosen)
         .iter()
         .flat_map(|id| crate::scene::assets_of(scene, *id))
-        .filter_map(|id| {
-            let center = crate::scene::find(scene, id)
-                .and_then(Node::asset)
-                .map(|asset| asset.center)?;
-            Some((id, center))
-        })
+        .filter_map(|id| crate::scene::find(scene, id).and_then(Node::asset).cloned())
         .collect()
 }
 
 /// What the keyboard does to the selected map. Returns `true` when it
 /// changed one.
-fn keys(ui: &egui::Ui, select: &mut Select, scene: &mut Scene) -> bool {
+fn keys(ui: &egui::Ui, select: &mut Select, frame: &mut Frame<'_>) -> bool {
     // A number in the panel takes the keyboard first, or `R` and `F` would
     // turn and flip the map while the DM types.
     if ui.ctx().egui_wants_keyboard_input() {
@@ -3241,7 +4880,7 @@ fn keys(ui: &egui::Ui, select: &mut Select, scene: &mut Scene) -> bool {
     if select.drag.is_some() || select.chosen.is_empty() {
         return edited;
     }
-    let held = crate::scene::normalize(scene, &select.chosen);
+    let held = crate::scene::normalize(frame.scene, &select.chosen);
     let one = select.only();
     ui.input(|input| {
         for event in &input.events {
@@ -3258,34 +4897,84 @@ fn keys(ui: &egui::Ui, select: &mut Select, scene: &mut Scene) -> bool {
             // Order lives inside one group, so these two keys move nodes
             // past their brothers and sisters and never leave the parent.
             if matches!(key, egui::Key::PageUp | egui::Key::PageDown) {
-                if crate::scene::share_parent(scene, &held).is_none() {
-                    "Order works inside one group. Pick nodes that sit together."
-                        .clone_into(&mut select.note);
+                if crate::scene::share_parent(frame.scene, &held).is_none() {
+                    text::panel_objects_one_group().clone_into(&mut select.note);
                     continue;
                 }
                 select.note.clear();
-                edited |= crate::scene::reorder_all(scene, &held, *key == egui::Key::PageUp);
+                let toward_top = *key == egui::Key::PageUp;
+                let subject = held
+                    .first()
+                    .map(|id| crate::scene::name_of(frame.scene, *id))
+                    .unwrap_or_default();
+                if let Some(change) = reshape(frame.scene, Deed::Order, subject, |scene| {
+                    crate::scene::reorder_all(scene, &held, toward_top);
+                }) {
+                    frame.history.kept(change);
+                    edited = true;
+                }
                 continue;
             }
-            let Some(asset) = one.and_then(|id| crate::scene::asset_mut(scene, id)) else {
+            let Some(before) = one
+                .and_then(|id| crate::scene::find(frame.scene, id))
+                .and_then(Node::asset)
+                .cloned()
+            else {
                 continue;
             };
+            let mut after = before.clone();
             match key {
-                egui::Key::R => asset.rotation += std::f64::consts::FRAC_PI_2,
-                egui::Key::F if modifiers.shift => asset.flip_y = !asset.flip_y,
-                egui::Key::F => asset.flip_x = !asset.flip_x,
+                egui::Key::R => after.rotation += std::f64::consts::FRAC_PI_2,
+                egui::Key::F if modifiers.shift => after.flip_y = !before.flip_y,
+                egui::Key::F => after.flip_x = !before.flip_x,
                 // Plus is the numpad key; Equals is the shared "=/+" main
                 // row key, which egui reports without needing Shift.
                 egui::Key::Plus | egui::Key::Equals => {
-                    asset.scale = step_scale(asset.scale, true);
+                    after.scale = step_scale(before.scale, true);
                 }
-                egui::Key::Minus => asset.scale = step_scale(asset.scale, false),
+                egui::Key::Minus => after.scale = step_scale(before.scale, false),
                 _ => continue,
             }
+            frame.history.run(
+                frame.scene,
+                SetAssets {
+                    before: vec![before],
+                    after: vec![after],
+                },
+            );
             edited = true;
         }
     });
     edited
+}
+
+/// `Ctrl+Z` takes the last change back. `Ctrl+Shift+Z` writes it again.
+///
+/// A field in a panel takes the keyboard first, because egui keeps an undo
+/// of its own for the text in it.
+///
+/// A drag waits, `dragging`, and so does a change the DM still holds. A
+/// drag rewrites the scene from the state it started in, every frame, so
+/// it would write over whatever the undo put back. The press that starts
+/// one writes nothing until the pointer moves, so the history alone does
+/// not say that a hand is on the canvas.
+///
+/// Returns `true` when the scene changed.
+fn undo_keys(ui: &egui::Ui, frame: &mut Frame<'_>, dragging: bool) -> bool {
+    if dragging || ui.ctx().egui_wants_keyboard_input() || frame.history.holding() {
+        return false;
+    }
+    // Redo goes first. Ctrl and Shift with Z would answer to the undo
+    // shortcut as well, and the one that reads the event first takes it.
+    let redo =
+        ui.input_mut(|input| input.consume_shortcut(&REDO) || input.consume_shortcut(&REDO_Y));
+    if redo {
+        return frame.history.redo(frame.scene);
+    }
+    if ui.input_mut(|input| input.consume_shortcut(&UNDO)) {
+        return frame.history.undo(frame.scene);
+    }
+    false
 }
 
 /// One click of the measure tool. Returns `true` when it set the grid size.
@@ -3298,18 +4987,28 @@ fn measure_click(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64))
         return false;
     };
     select.measure = None;
-    let Some(map) = select
+    let Some(before) = select
         .only()
-        .and_then(|id| crate::scene::asset_mut(frame.scene, id))
+        .and_then(|id| crate::scene::find(frame.scene, id))
+        .and_then(Node::asset)
+        .cloned()
     else {
         return false;
     };
-    let Some(grid_px) = grid_px_from_measure(first, cursor, map.grid_px, map.scale) else {
+    let Some(grid_px) = grid_px_from_measure(first, cursor, before.grid_px, before.scale) else {
         return false;
     };
-    map.grid_px = grid_px;
+    let mut after = before.clone();
+    after.grid_px = grid_px;
     // A measured map draws straight from its grid size: one cell, one inch.
-    map.scale = 1.0;
+    after.scale = 1.0;
+    frame.history.run(
+        frame.scene,
+        SetAssets {
+            before: vec![before],
+            after: vec![after],
+        },
+    );
     true
 }
 
@@ -3516,36 +5215,40 @@ fn hovered_handle(pos: egui::Pos2, handles: &[egui::Pos2]) -> Option<egui::Curso
 ///
 /// Returns `true` when the map changed.
 fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), snap: bool) -> bool {
-    let Some(drag) = select.drag.clone() else {
+    // The drag is read where it lies. A frame of a move drag would
+    // otherwise clone every asset the DM holds twice: once to read the
+    // spots it started from, and once for the change it builds.
+    let Some(drag) = select.drag.as_ref() else {
         return false;
     };
     match drag {
         // The band picks nothing until the DM lets go of it.
         Drag::Band { .. } => false,
-        Drag::Move {
-            starts,
-            start_cursor,
-        } => {
+        Drag::Move { was, start_cursor } => {
             // A press without motion picks and nothing more: a snap would
             // shift a map that the DM placed off the grid.
-            if cursor == start_cursor || starts.is_empty() {
+            if cursor == *start_cursor || was.is_empty() {
                 return false;
             }
             let step = (cursor.0 - start_cursor.0, cursor.1 - start_cursor.1);
             // One asset snaps to its own grid. A selection moves as one
             // piece, so the first asset snaps and the rest follow it.
-            let lead = snap.then(|| snap_step(frame, &starts[0], step)).flatten();
+            let lead = snap.then(|| snap_step(frame, &was[0], step)).flatten();
             let step = lead.unwrap_or(step);
-            for (id, start) in &starts {
-                let Some(asset) = crate::scene::asset_mut(frame.scene, *id) else {
-                    continue;
-                };
-                asset.center = (start.0 + step.0, start.1 + step.1);
-                if !snap && let Some(size) = (frame.size_of)(&asset.path.clone()) {
-                    let corners = asset.corners(size);
-                    asset.snap_offset = corner_offset(&corners);
-                }
-            }
+            let after: Vec<Asset> = was
+                .iter()
+                .map(|start| {
+                    let mut asset = start.clone();
+                    asset.center = (start.center.0 + step.0, start.center.1 + step.1);
+                    if !snap && let Some(size) = (frame.size_of)(&asset.path) {
+                        let corners = asset.corners(size);
+                        asset.snap_offset = corner_offset(&corners);
+                    }
+                    asset
+                })
+                .collect();
+            let before = was.clone();
+            frame.history.hold(frame.scene, SetAssets { before, after });
             true
         }
         Drag::Scale {
@@ -3553,8 +5256,16 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             pivot,
             start_cursor,
         } => {
-            let factor = scale_from_drag(pivot, start_cursor, cursor);
-            crate::scene::scale_about(frame.scene, &starts, pivot, factor);
+            let factor = scale_from_drag(*pivot, *start_cursor, cursor);
+            frame.history.hold(
+                frame.scene,
+                Grow {
+                    subject: held_names(frame.scene, starts),
+                    starts: starts.clone(),
+                    pivot: *pivot,
+                    factor,
+                },
+            );
             true
         }
         Drag::Rotate {
@@ -3567,27 +5278,39 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             // can get back on one. A group turns as one piece, so every
             // asset in it takes the same angle.
             let base = starts.first().map_or(0.0, |first| first.rotation);
-            let turned = rotation_from_drag(base, pivot, start_cursor, cursor, snap);
-            crate::scene::rotate_about(frame.scene, &starts, pivot, turned - base);
+            let turned = rotation_from_drag(base, *pivot, *start_cursor, cursor, snap);
+            frame.history.hold(
+                frame.scene,
+                Turn {
+                    subject: held_names(frame.scene, starts),
+                    starts: starts.clone(),
+                    pivot: *pivot,
+                    angle: turned - base,
+                },
+            );
             true
         }
     }
 }
 
+/// What the history calls the assets of a drag: the file, or a count.
+fn held_names(scene: &Scene, starts: &[Placed]) -> String {
+    match starts {
+        [] => String::new(),
+        [one] => crate::scene::name_of(scene, one.id),
+        many => text::history_maps_many(many.len()),
+    }
+}
+
 /// The step a move takes once the leading asset snaps to its own grid.
-fn snap_step(
-    frame: &Frame<'_>,
-    lead: &(NodeId, (f64, f64)),
-    step: (f64, f64),
-) -> Option<(f64, f64)> {
-    let (id, start) = lead;
-    let asset = crate::scene::find(frame.scene, *id).and_then(Node::asset)?;
-    let size = (frame.size_of)(&asset.path)?;
+fn snap_step(frame: &Frame<'_>, lead: &Asset, step: (f64, f64)) -> Option<(f64, f64)> {
+    let size = (frame.size_of)(&lead.path)?;
+    let start = lead.center;
     let moved = (start.0 + step.0, start.1 + step.1);
-    let mut settled = asset.clone();
+    let mut settled = lead.clone();
     settled.center = moved;
     let corners = settled.corners(size);
-    let snapped = snap_corner(moved, &corners, asset.snap_offset);
+    let snapped = snap_corner(moved, &corners, lead.snap_offset);
     Some((snapped.0 - start.0, snapped.1 - start.1))
 }
 
@@ -3615,7 +5338,138 @@ fn draw_selection(painter: &egui::Painter, handles: &[egui::Pos2], tokens: Token
 
 #[cfg(test)]
 mod tests {
-    use super::{ROW_HEIGHT, Settings, row_parts, theme};
+    use super::{ROW_HEIGHT, Settings, bite, join_scene, row_parts, theme};
+    use crate::command::Command as _;
+    use crate::scene::{Group, Node, Scene, Shown};
+    use crate::stroke::{Ink, Rule, Stroke};
+
+    /// A stroke of this ink, through these points.
+    fn stroke(id: u64, ink: Ink, points: &[(f64, f64)]) -> Stroke {
+        Stroke {
+            id,
+            shown: Shown::default(),
+            ink,
+            points: points.to_vec(),
+            color: [0, 0, 0, 255],
+            width: 0.1,
+            span: 0.0,
+            rule: Rule::default(),
+        }
+    }
+
+    /// A scene whose Drawings group holds these strokes.
+    fn drawn(strokes: Vec<Stroke>) -> Scene {
+        let mut scene = Scene::default();
+        let mut group = Group::new(9, "Drawings".to_owned());
+        group.ink = true;
+        group.children = strokes.into_iter().map(Node::Stroke).collect();
+        scene.root.children.push(Node::Group(group));
+        scene
+    }
+
+    /// What the Drawings group holds now, as names and depths.
+    fn inside(scene: &Scene) -> Vec<(usize, String)> {
+        fn walk(nodes: &[Node], depth: usize, found: &mut Vec<(usize, String)>) {
+            for node in nodes {
+                match node {
+                    Node::Group(group) => {
+                        found.push((depth, group.name.clone()));
+                        walk(&group.children, depth + 1, found);
+                    }
+                    Node::Stroke(stroke) => found.push((depth, format!("{:?}", stroke.ink))),
+                    Node::Asset(_) => {}
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&scene.root.children, 0, &mut found);
+        found
+    }
+
+    #[test]
+    fn taking_back_the_first_stroke_takes_its_group_with_it() {
+        let mut scene = Scene::default();
+        let mark = stroke(0, Ink::Pen, &[(0.0, 0.0), (1.0, 0.0)]);
+        let change = join_scene(&mut scene, mark).expect("the stroke joins the tree");
+        assert_eq!(
+            inside(&scene),
+            vec![(0, "Drawings".to_owned()), (1, "Pen".to_owned())]
+        );
+        // The group was made inside the change, so the change takes it
+        // back as well and no empty group stands behind.
+        change.revert(&mut scene);
+        assert!(inside(&scene).is_empty(), "{:?}", inside(&scene));
+    }
+
+    #[test]
+    fn a_stroke_takes_its_name_where_it_joins_the_tree() {
+        let mut scene = drawn(vec![stroke(9000, Ink::Pen, &[(0.0, 0.0), (1.0, 0.0)])]);
+        // The stroke comes in with the name a press would have left on
+        // it, which is no name at all.
+        let mark = stroke(crate::scene::ROOT_ID, Ink::Line, &[(2.0, 2.0), (3.0, 3.0)]);
+        join_scene(&mut scene, mark).expect("the stroke joins the tree");
+        let names: Vec<u64> = crate::scene::ink_order(&scene, crate::scene::Audience::Dm)
+            .iter()
+            .map(|stroke| stroke.id)
+            .collect();
+        assert_eq!(names.len(), 2);
+        assert_ne!(names[0], names[1], "two strokes took one name");
+        assert!(names.iter().all(|id| *id != crate::scene::ROOT_ID));
+    }
+
+    #[test]
+    fn the_eraser_takes_a_whole_effect_and_leaves_no_line_behind() {
+        let mut scene = drawn(vec![stroke(1, Ink::Beam, &[(0.0, 0.0), (10.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 0.2));
+        // The beam is gone, and no piece of its outline stands in for it.
+        assert_eq!(inside(&scene), vec![(0, "Drawings".to_owned())]);
+    }
+
+    #[test]
+    fn the_eraser_takes_a_kept_measure_whole_as_well() {
+        let mut scene = drawn(vec![stroke(1, Ink::Measure, &[(0.0, 0.0), (10.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 0.2));
+        assert_eq!(inside(&scene), vec![(0, "Drawings".to_owned())]);
+    }
+
+    #[test]
+    fn the_pieces_of_a_cut_line_join_a_group() {
+        let mut scene = drawn(vec![stroke(1, Ink::Pen, &[(0.0, 0.0), (10.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 1.0));
+        assert_eq!(
+            inside(&scene),
+            vec![
+                (0, "Drawings".to_owned()),
+                (1, "Pieces".to_owned()),
+                (2, "Pen".to_owned()),
+                (2, "Pen".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_second_cut_stays_in_the_group_the_first_one_made() {
+        let mut scene = drawn(vec![stroke(1, Ink::Pen, &[(0.0, 0.0), (20.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 1.0));
+        assert!(bite(&mut scene, (12.0, 0.0), 1.0));
+        // Three pieces, and one group holding all of them.
+        let held = inside(&scene);
+        let groups = held.iter().filter(|(_, name)| name == "Pieces").count();
+        let pieces = held.iter().filter(|(_, name)| name == "Pen").count();
+        assert_eq!((groups, pieces), (1, 3), "{held:?}");
+        assert!(held.iter().all(|(depth, _)| *depth <= 2), "{held:?}");
+    }
+
+    #[test]
+    fn a_bite_that_cuts_nothing_leaves_the_stroke_where_it_stood() {
+        let mut scene = drawn(vec![stroke(1, Ink::Pen, &[(0.0, 0.0), (10.0, 0.0)])]);
+        // The disc reaches the line but takes no part of it away.
+        assert!(!bite(&mut scene, (5.0, 4.0), 0.2));
+        assert_eq!(
+            inside(&scene),
+            vec![(0, "Drawings".to_owned()), (1, "Pen".to_owned())]
+        );
+    }
 
     /// One row of the objects list, the size the panel gives it.
     fn row() -> egui::Rect {
@@ -3669,6 +5523,12 @@ mod tests {
     fn settings() -> Settings {
         Settings {
             theme: theme::Mode::default(),
+            language: crate::text::DEFAULT.to_owned(),
+            ink_color: [0, 0, 0, 255],
+            ink_width: 0.1,
+            ink_nib: super::Nib::default(),
+            ink_rule: crate::stroke::Rule::default(),
+            ink_snap: true,
             ui_scale: theme::DEFAULT_SCALE,
             tv_display: Some(1),
             swap_windows: false,
