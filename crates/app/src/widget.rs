@@ -114,8 +114,7 @@ pub fn row_label(ui: &mut Ui, text: &str) {
 pub fn button(ui: &mut Ui, text: &str, glyph: Option<Icon>, height: Height) -> Response {
     let tokens = theme::of(ui.ctx());
     let font = theme::font(theme::BODY, false);
-    let width =
-        text_width(ui, text, &font) + 2.0 * PAD + glyph.map_or(0.0, |_| SMALL_ICON + ICON_GAP);
+    let width = button_width(ui, text, glyph);
     let (rect, response) = ui.allocate_exact_size(vec2(width, height.points()), Sense::click());
     let fill = if response.is_pointer_button_down_on() || response.hovered() {
         tokens.raised
@@ -461,6 +460,62 @@ pub fn slider(
 }
 
 /// How wide `text` runs in `font`.
+/// The swatch that picks the color of a stroke. DESIGN.md 8.3.
+///
+/// It offers a blend and no more. `egui` writes an additive color as one
+/// with no alpha at all, and the ink pipeline blends on alpha, so an
+/// additive color would draw nothing at all and read as a broken swatch.
+/// The alpha stays above zero for the same reason: a stroke the DM cannot
+/// see is a stroke they cannot find on the canvas. Issue #12.
+///
+/// Returns `true` when the DM changed the color.
+pub fn color_swatch(ui: &mut Ui, color: &mut [u8; 4]) -> bool {
+    let mut picked = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
+    let response = egui::color_picker::color_edit_button_srgba(
+        ui,
+        &mut picked,
+        egui::color_picker::Alpha::OnlyBlend,
+    );
+    if !response.changed() {
+        return false;
+    }
+    let mut taken = picked.to_srgba_unmultiplied();
+    taken[3] = taken[3].max(MIN_ALPHA);
+    *color = taken;
+    true
+}
+
+/// The faintest a stroke may draw, out of 255.
+///
+/// Ten is a wash the DM can still see well enough to pick the stroke up
+/// again. Nothing is not a color.
+const MIN_ALPHA: u8 = 10;
+
+/// How wide a button of these words stands, in points.
+///
+/// A panel that has to know whether two buttons fit beside one another
+/// asks this first. A language whose words run longer than the English
+/// ones then takes another row instead of losing the end of a word.
+pub fn button_width(ui: &Ui, text: &str, glyph: Option<Icon>) -> f32 {
+    let font = theme::font(theme::BODY, false);
+    text_width(ui, text, &font) + 2.0 * PAD + glyph.map_or(0.0, |_| SMALL_ICON + ICON_GAP)
+}
+
+/// How tall these words stand once they wrap to `width`, in points.
+pub fn helper_height(ui: &Ui, text: &str, width: f32) -> f32 {
+    ui.ctx().fonts_mut(|fonts| {
+        fonts
+            .layout(
+                text.to_owned(),
+                theme::font(theme::SMALL, false),
+                egui::Color32::PLACEHOLDER,
+                width,
+            )
+            .size()
+            .y
+    })
+}
+
 fn text_width(ui: &Ui, text: &str, font: &egui::FontId) -> f32 {
     ui.ctx().fonts_mut(|fonts| {
         fonts

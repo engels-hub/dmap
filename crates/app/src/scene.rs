@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::stroke::Stroke;
+
 use crate::tvbox::TvBox;
 
 /// The name of every node in one scene.
@@ -61,6 +63,8 @@ pub enum Node {
     Group(Group),
     /// One image on the canvas.
     Asset(Asset),
+    /// One thing the DM drew, over the images. See [`crate::stroke`].
+    Stroke(Stroke),
 }
 
 impl Node {
@@ -69,6 +73,7 @@ impl Node {
         match self {
             Self::Group(group) => group.id,
             Self::Asset(asset) => asset.id,
+            Self::Stroke(stroke) => stroke.id,
         }
     }
 
@@ -79,6 +84,7 @@ impl Node {
         match self {
             Self::Group(group) => group.shows(audience),
             Self::Asset(asset) => asset.shows(audience),
+            Self::Stroke(stroke) => stroke.shown.says(audience),
         }
     }
 
@@ -86,7 +92,7 @@ impl Node {
     pub fn group(&self) -> Option<&Group> {
         match self {
             Self::Group(group) => Some(group),
-            Self::Asset(_) => None,
+            _ => None,
         }
     }
 
@@ -94,7 +100,15 @@ impl Node {
     pub fn asset(&self) -> Option<&Asset> {
         match self {
             Self::Asset(asset) => Some(asset),
-            Self::Group(_) => None,
+            _ => None,
+        }
+    }
+
+    /// The stroke this node holds, if it is one.
+    pub fn stroke(&self) -> Option<&Stroke> {
+        match self {
+            Self::Stroke(stroke) => Some(stroke),
+            _ => None,
         }
     }
 }
@@ -114,6 +128,13 @@ pub struct Group {
     /// What sits in this group, bottom one first.
     #[serde(default)]
     pub children: Vec<Node>,
+    /// Whether a new stroke joins this group.
+    ///
+    /// The Draw view keeps its strokes together, and it finds the group
+    /// by this mark and not by its name, so the group holds whatever the
+    /// DM renamed it to and reads the same in every language.
+    #[serde(default)]
+    pub ink: bool,
 }
 
 fn group_name() -> String {
@@ -128,6 +149,7 @@ impl Group {
             name,
             shown: Shown::default(),
             children: Vec::new(),
+            ink: false,
         }
     }
 
@@ -236,6 +258,7 @@ fn rename_nodes(
         let id = match node {
             Node::Group(group) => &mut group.id,
             Node::Asset(asset) => &mut asset.id,
+            Node::Stroke(stroke) => &mut stroke.id,
         };
         if *id == ROOT_ID || !taken.insert(*id) {
             while !taken.insert(*next) {
@@ -279,6 +302,7 @@ fn collect_drawn<'a>(nodes: &'a [Node], audience: Audience, drawn: &mut Vec<&'a 
         match node {
             Node::Asset(asset) => drawn.push(asset),
             Node::Group(group) => collect_drawn(&group.children, audience, drawn),
+            Node::Stroke(_) => {}
         }
     }
 }
@@ -312,6 +336,7 @@ fn collect_for_dm<'a>(nodes: &'a [Node], on_tv: bool, drawn: &mut Vec<(&'a Asset
         match node {
             Node::Asset(asset) => drawn.push((asset, reaches_tv)),
             Node::Group(group) => collect_for_dm(&group.children, reaches_tv, drawn),
+            Node::Stroke(_) => {}
         }
     }
 }
@@ -565,7 +590,7 @@ pub fn ungroup(scene: &mut Scene, id: NodeId) -> bool {
 }
 
 /// Where an asset stood when a drag began.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Placed {
     /// The asset this belongs to.
     pub id: NodeId,
@@ -663,7 +688,7 @@ pub fn assets_of(scene: &Scene, id: NodeId) -> Vec<NodeId> {
     match find(scene, id) {
         Some(Node::Asset(asset)) => vec![asset.id],
         Some(Node::Group(group)) => under(group).iter().map(|asset| asset.id).collect(),
-        None => Vec::new(),
+        Some(Node::Stroke(_)) | None => Vec::new(),
     }
 }
 
@@ -780,6 +805,7 @@ fn collect_assets<'a>(nodes: &'a [Node], found: &mut Vec<&'a Asset>) {
         match node {
             Node::Asset(asset) => found.push(asset),
             Node::Group(group) => collect_assets(&group.children, found),
+            Node::Stroke(_) => {}
         }
     }
 }
@@ -819,6 +845,22 @@ fn find_in(nodes: &[Node], id: NodeId) -> Option<&Node> {
     None
 }
 
+/// What the DM sees a node called: a group name, or a file name.
+///
+/// The history list and the panels both name a node this way, so a step
+/// reads as the row the DM pressed.
+pub fn name_of(scene: &Scene, id: NodeId) -> String {
+    match find(scene, id) {
+        Some(Node::Group(group)) => group.name.clone(),
+        Some(Node::Asset(asset)) => asset.path.file_name().map_or_else(
+            || asset.path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        ),
+        Some(Node::Stroke(stroke)) => stroke.ink.name().to_owned(),
+        None => String::new(),
+    }
+}
+
 /// The asset of this name, ready to change.
 pub fn asset_mut(scene: &mut Scene, id: NodeId) -> Option<&mut Asset> {
     find_asset(&mut scene.root.children, id)
@@ -833,10 +875,87 @@ fn find_asset(nodes: &mut [Node], id: NodeId) -> Option<&mut Asset> {
                     return Some(found);
                 }
             }
-            Node::Asset(_) => {}
+            Node::Asset(_) | Node::Stroke(_) => {}
         }
     }
     None
+}
+
+/// The screens of this node, ready to change.
+///
+/// A group and an asset both carry the pair, so a switch in the list
+/// reaches either one through this.
+pub fn shown_mut(scene: &mut Scene, id: NodeId) -> Option<&mut Shown> {
+    if has_group(scene, id) {
+        return group_mut(scene, id).map(|group| &mut group.shown);
+    }
+    if has_stroke(scene, id) {
+        return stroke_mut(scene, id).map(|stroke| &mut stroke.shown);
+    }
+    asset_mut(scene, id).map(|asset| &mut asset.shown)
+}
+
+/// The group a new stroke joins, made when there is none.
+///
+/// Issue #12: the strokes keep to a group of their own, so a hundred pen
+/// marks do not flood the objects list. The group starts closed.
+pub fn ink_group(scene: &mut Scene, name: String) -> NodeId {
+    if let Some(group) = groups(scene).iter().find(|group| group.ink) {
+        return group.id;
+    }
+    let id = scene.next_id();
+    let mut group = Group::new(id, name);
+    group.ink = true;
+    scene.root.children.push(Node::Group(group));
+    id
+}
+
+/// Whether the tree holds a stroke of this name.
+pub fn has_stroke(scene: &Scene, id: NodeId) -> bool {
+    find(scene, id).and_then(Node::stroke).is_some()
+}
+
+/// The stroke of this name, ready to change.
+pub fn stroke_mut(scene: &mut Scene, id: NodeId) -> Option<&mut Stroke> {
+    find_stroke(&mut scene.root.children, id)
+}
+
+fn find_stroke(nodes: &mut [Node], id: NodeId) -> Option<&mut Stroke> {
+    for node in nodes {
+        match node {
+            Node::Stroke(stroke) if stroke.id == id => return Some(stroke),
+            Node::Group(group) => {
+                if let Some(found) = find_stroke(&mut group.children, id) {
+                    return Some(found);
+                }
+            }
+            Node::Stroke(_) | Node::Asset(_) => {}
+        }
+    }
+    None
+}
+
+/// Every stroke in the scene, in the order they draw for `audience`.
+///
+/// A stroke draws over every map, so the strokes come as their own list
+/// and not in the order the tree holds them. PLAN.md 5.3.
+pub fn ink_order(scene: &Scene, audience: Audience) -> Vec<&Stroke> {
+    let mut drawn = Vec::new();
+    collect_ink(&scene.root.children, audience, &mut drawn);
+    drawn
+}
+
+fn collect_ink<'a>(nodes: &'a [Node], audience: Audience, drawn: &mut Vec<&'a Stroke>) {
+    for node in nodes {
+        if !node.shows(audience) {
+            continue;
+        }
+        match node {
+            Node::Stroke(stroke) => drawn.push(stroke),
+            Node::Group(group) => collect_ink(&group.children, audience, drawn),
+            Node::Asset(_) => {}
+        }
+    }
 }
 
 /// The group of this name, ready to change.

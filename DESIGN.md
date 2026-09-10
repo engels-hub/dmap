@@ -35,7 +35,7 @@ The light theme is warm: cream surfaces, dark brown ink, vermilion accent. The d
 
 ## 3. Typography
 
-- Font: Atkinson Hyperlegible, weights 400 and 700. Fallback: Helvetica Neue, Arial, sans-serif.
+- Font: Atkinson Hyperlegible, weights 400 and 700, for the Latin alphabet. Fira Sans, the same weights, for Greek and Cyrillic. See 3.2.
 - Numbers use tabular figures.
 - Sizes:
 
@@ -60,12 +60,21 @@ Every size in this document is a size at scale 1. The DM picks a scale between 7
 
 Caution: a scale under 100 % takes a button under the 24 px floor of section 6. That is the DM's choice, and the floor holds for the design itself.
 
+### 3.2 The words
+
+- One file holds every word the window shows: `crates/app/assets/lang/en.json`. No screen writes a word of its own.
+- A key says where the word belongs, such as `panel.objects.title`. A place for a number or a name stands in braces, such as `{count}`, and a language puts it where it wants it.
+- Every other file in that folder is a translation, and the program carries them all. A key a translation lacks falls back to English, so the window never shows a bare key.
+- The DM picks the language in Settings, and the window takes it at once. DESIGN.md 9.1.
+- Atkinson Hyperlegible holds the Latin alphabet and no more. Fira Sans stands behind it in every family, in both weights, and holds Greek and Cyrillic. A letter neither one holds falls to the faces egui carries. `tools/fonts.py` cuts Fira down to the letters Atkinson lacks, so the program carries each alphabet once.
+- A language whose words run longer than the English ones costs a line, never a control. A label wraps, a row of buttons takes a second row, and a body that outgrows its dialog scrolls. DESIGN.md 1.
+
 ## 4. Icons
 
 - Set: Lucide (ISC license). Keep the license text in the repository.
 - Stroke 2 px on a 24 px grid. Round caps and joins. No fills. A star that is set is the one glyph with a fill.
 - Sizes: 18 px in the toolbar, in dialog navigation, in a close button and for the select chevron, 16 px in a panel, a menu and a list row, 14 px for a list twist and for the checkbox check, 13 px in a path line.
-- Glyphs in the toolbar: `mouse-pointer` (Select), `pencil` (Draw), `ruler` (Edit), `monitor` (Table), `layers` (Scenes), `plus` (Add map), `sliders-horizontal` (Settings).
+- Glyphs in the toolbar: `mouse-pointer` (Select), `pencil` (Draw), `drafting-compass` (Edit), `monitor` (Table), `layers` (Scenes), `plus` (Add map), `sliders-horizontal` (Settings).
 - Glyphs on the second bar of the Edit view: `brick-wall` (Walls), `door-open` (Doors), `sun` (Light), `cloud-fog` (Fog).
 - Glyphs in a dialog: `monitor` (Table tab), `grid-3x3` (Grid tab), `sun` (Light tab), `keyboard` (Shortcuts tab), `info` (About tab), `x` (close), `chevron-down` (select), `check` (checkbox), `import` (Import).
 - Glyphs in a panel or a menu: `folder`, `image`, `film`, `eye`, `eye-off`, `monitor-off`, `star`, `search`, `chevron-right`, `arrow-up`, `arrow-down`, `rotate-cw`, `flip-horizontal-2`, `flip-vertical-2`, `ruler`, `trash`, `minus` (line), `square`, `circle`, `eraser`, `play`, `pause`, `undo`, `triangle-alert`.
@@ -127,6 +136,13 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - A picked group has a 2 px dashed `accent` box. A 1 px dash is too thin to read at a zoom that shows the whole canvas. The root group has no box.
 - A map the TV does not show draws at half strength on the DM screen. A group that is off for the TV takes every map under it to half strength. The TV draws every map it shows at full strength.
 
+### 5.7 History button
+
+- The button floats 12 px from the right edge and 12 px from the bottom edge. It stands level with the toolbar.
+- It takes the shape of a toolbar entry: 44 px high, the `undo` glyph 18 px over the label 13 px, on a `surface` box with a 1 px `ink` border and the hard shadow.
+- It sits apart from the toolbar, because it belongs to no view. Every view writes to the history.
+- A press opens the History dialog. A second press closes it.
+
 ## 6. Controls
 
 All controls have square corners.
@@ -144,7 +160,7 @@ Two rules hold for every control:
 | Segmented control | Segments 28 px high, 10 px horizontal padding, 1 px `rule` border, borders overlap by 1 px. The selected segment has `raised` background, `accent` text and a 3 px `accent` bar on its bottom edge. |
 | Checkbox | 18 px square, 1 px border (`ink` when checked, `rule` when not), `field` background, `check` glyph 14 px in `accent`. Label 14 px to the right, gap 8 px. A label too long for its row wraps under itself. |
 | Slider | Track 2 px `rule`, filled part `ink`, knob 14 px square with 1 px `ink` border and `field` background. Value text in `mute` to the right. |
-| Color swatch | 28 px square, 1 px `rule` border, the hex value 14 px to the right. A click opens the color popover. |
+| Color swatch | 28 px square, 1 px `rule` border, the hex value 14 px to the right. A click opens the color popover. The popover gives a hue, a shade and an alpha. It gives no additive mode, because the canvas blends on alpha only. The alpha stays above zero, so a stroke is always visible. |
 | Button | Height 28 px, 10 px horizontal padding, 1 px `ink` border, `field` background, 14 px text. A button in a panel is 26 px high. A button in a row is 24 px high. No button goes under 24 px. |
 | Key chip | Height 22 px, 8 px horizontal padding, 1 px `rule` border, `field` background, 14 px text. |
 | Search field | As text input, with a `search` glyph 16 px on the left and an 8 px gap. |
@@ -194,7 +210,29 @@ Rows: Zoom in percent, with the helper "100 % is true size on the TV"; Move, wit
 
 ### 8.3 Draw panel, in the Draw view
 
-A row of five 28 px squares holds the pen, the line, the rectangle, the ellipse and the eraser. The squares share a 1 px `rule` border and overlap by 1 px. The chosen square takes the segmented control treatment. Rows below: Color as a swatch, Width as a slider.
+A row of six 28 px squares holds the pen, the line, the rectangle, the ellipse, the eraser and the ruler. One 1 px `rule` border holds the whole row, and a dashed 1 px line in `rule` stands between each pair, dash and gap 3 px, as the views do in the toolbar. See 5.2. The chosen square takes the `raised` background and a 3 px `accent` bar on its top edge, and its glyph takes `accent`.
+
+Under it stands the label Effects and a second row of three squares: the burst, the cone and the beam. They lie over the map instead of marking it, and a row of nine squares outgrows the panel.
+
+Rows below: Color as a swatch, the checkbox "Start on the grid", Width as a slider, and Measure as a select when the ruler is on. Every one of these is a choice the program keeps, so the next stroke draws as the last one did.
+
+A shape starts on a crossing of the grid while that checkbox is on, because a spell lands on a cell. `Shift` holds the snap off for one drag. The ruler takes `Alt` for that instead, because `Shift` there keeps the measure. A free line from the pen never snaps: it follows the hand.
+
+The ruler measures a distance. A drag draws a line from the press to the pointer, and a label at the pointer gives the distance in cells and in feet. The second button bends the ruler where the pointer stands, so a measure walks a corridor. `Shift` as the drag ends keeps the measure: the line becomes a stroke in the scene, with a row in the Objects list and a place in the project file. A plain end clears the line, and `Escape` gives it up. Measure says how the ruler counts a diagonal: Euclidean, D&D 5e, Pathfinder or Manhattan.
+
+An area of effect fills its shape at a quarter of the alpha the DM picked, and its outline takes the whole of it, so the map reads through it. A label beside the shape says how far it reaches, in cells and in feet.
+
+A burst takes one drag, from its middle to its edge. A cone takes one as well, from its point out to where it ends: it ends as wide as it is long, on a straight edge. D&D 5e, chapter 10. A beam takes two drags, one for its length and one for its width. The second begins after the first ends, so no gesture asks for a button and a move at the same time.
+
+The eraser takes a bite out of every stroke it passes over, and it bites its way along the path the pointer took. What is left of a shape is a free line: a box with a bite out of it is no longer a box. The pieces of one stroke join a group, so the objects list holds them together, and a later bite keeps to that group.
+
+An area of effect and a kept measure come away whole. Each one stands for one thing, a spell over a patch of the map or a distance read off it, and a piece of either says nothing. The eraser takes them from anywhere inside them, not from their line alone.
+
+**The panel of a stroke, in the Select view**
+
+A stroke the DM picked opens a panel of its own, headed with what it is: Pen, Line, Rectangle, Ellipse, Ruler, Burst, Cone or Beam. Rows: Color as a swatch, Width as a slider, Reach in cells for an area of effect, Across in cells for a beam, and Measure as a select for a ruler. A new reach moves the far point along the line the shape already runs on, so the shape keeps its heading.
+
+A press on the canvas takes the stroke under the pointer before it takes a map, because a stroke draws over every map.
 
 ### 8.4 Objects list
 
@@ -204,7 +242,7 @@ The list shows the scene as a tree of groups and assets. It docks on the left.
 
 - Each row is 26 px high. A child row indents 14 px from its parent.
 - A twist glyph 14 px opens and closes a group. A group starts closed.
-- The icon says what the row is: `folder` for a group, `image` for a picture, `film` for a video.
+- The icon says what the row is: `folder` for a group, `image` for a picture, `film` for a video, `ruler` for a kept measure.
 - The name takes the width that is left. A name too long for its row ends in an ellipsis, and the whole name comes up under the pointer.
 - The right of the row holds the star, then two switches, each 16 px in a 22 px square: `eye` for the DM screen and `monitor` for the TV. An off switch takes the `eye-off` or `monitor-off` glyph in `mute`.
 - The root group is always visible and carries no switches.
@@ -229,7 +267,7 @@ A scene of a hundred thousand assets branches deep. Three things keep the list i
 
 **The footer**
 
-The footer holds Group and New group, and a helper line that names the picked nodes.
+The footer holds Group and New group, and a helper line that names the picked nodes. Two buttons that do not fit one row take a second row, and the list above them gives up the height. A language whose words run long never loses the end of one.
 
 ## 9. Dialogs
 
@@ -238,17 +276,19 @@ The footer holds Group and New group, and a helper line that names the picked no
 - Header 42 px: title 16 px bold at 20 px from the left, close icon in a 28 px square at 12 px from the right, 1 px `rule` bottom border.
 - Navigation column 168 px wide, 1 px `rule` right border, 10 px vertical padding. Each entry is 32 px high: icon 18 px, label 14 px, gap 8 px, padding 12 px on the left. The active entry has `raised` background and a 3 px `accent` bar on its left edge.
 - Body: padding 18 px 20 px, rows with a 16 px gap. Each row has a label column 140 px wide (14 px, 6 px top padding) and a control column with a 6 px gap between stacked controls. A dialog is wide enough for a label column, and a panel is not.
+- A label that outgrows its column wraps inside it, and the row grows. The column keeps its width, so the controls of every row stay in line. The body scrolls when the rows outgrow it.
 - Footer, where a dialog has one: 48 px high, 1 px `rule` top border, padding 0 20 px, buttons with a 10 px gap. The last button sits on the right.
 
 ### 9.1 Settings, Table tab
 
 1. Display: select with the display name and its resolution.
 2. Size: segmented control (Diagonal, Pixels per inch, Width), then one input with its unit, then a helper line with the computed pixels per inch and the size of the table area at true size.
-3. Snap to true size: input in percent, helper text "either side of 100 %".
-4. Windows: checkbox "Swap the two windows instead of moving the DM window".
+3. Sticks to 100 %: input in percent, helper text "either side of 100 %".
+4. Windows (wayland compat): checkbox "Swap window roles instead of moving". It starts on, because a Wayland compositor lets no program place its own window.
 5. Check: checkbox "Show a 1 inch grid and a 6 inch ruler on the TV".
 6. Theme: segmented control (Light, Dark). See section 2.
-7. Interface scale: slider with the percent to its right. Helper: "How big the toolbar, the panels and the dialogs draw. The maps keep their size". See section 3.1.
+7. Language: select with the name of each language in its own words.
+8. Interface scale: slider with the percent to its right. Helper: "Changes size of the UI. Maps keep their size". See section 3.1.
 
 ### 9.2 Settings, Grid tab
 
@@ -306,6 +346,18 @@ The release archive keeps the same three files beside the program. This tab is t
 - Row: The file holds, with one checkbox for each thing the importer found. Each checkbox starts on.
 - Row: Foundry folder, with the path and the Change button. Helper: "A Foundry scene needs this. A Universal VTT file does not".
 - The footer holds Import on the left and Cancel on the right.
+
+### 9.8 History
+
+- Size 520 x 460 px.
+- Each step is a row 46 px high with a 1 px `rule` bottom border, and 12 px of padding on each side.
+- A row holds two lines. The first line 14 px names what the DM did and the file or the group it happened to, such as "Move ivan.jpg". The time stands at the right end of that line, 13 px in `mute`, and reads "just now", "4 min ago", "2 h ago" or "3 days ago".
+- The second line 13 px in `mute` holds the numbers the step wrote: two spots in inches for a move, two angles for a turn, two sizes in percent, the two pixel counts of a grid size, or the two pairs of screens of a switch.
+- The newest step stands at the top. The last row reads "Before the first change" and carries no second line.
+- The step the scene stands on takes the `raised` background, a 3 px `accent` bar on its left edge, and `accent` bold text.
+- A step the DM took back draws in `mute`. It stays on the list, so a walk forward is one click.
+- A click on a row takes the scene to the state after that step.
+- The footer holds the helper "A click on a step takes the scene there".
 
 ## 10. Other overlays
 
