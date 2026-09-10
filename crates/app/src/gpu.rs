@@ -74,27 +74,42 @@ impl std::fmt::Debug for Pane {
 
 impl Pane {
     /// Acquires the next frame, or `None` when this frame should be skipped.
+    ///
+    /// A surface that went out of date is configured again, and then the
+    /// frame is asked for once more. The caller sees `None` only when the
+    /// window has nothing to show, such as a window behind another one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the surface fails validation.
     pub fn acquire(&mut self, device: &wgpu::Device) -> Result<Option<wgpu::SurfaceTexture>> {
         use wgpu::CurrentSurfaceTexture as Current;
-        Ok(match self.surface.get_current_texture() {
-            Current::Success(frame) | Current::Suboptimal(frame) => Some(frame),
-            Current::Timeout | Current::Occluded => None,
-            Current::Outdated | Current::Lost => {
-                self.surface.configure(device, &self.config);
-                None
+        // Two turns: the first can find the surface out of date, and the
+        // second draws on the surface the configuration made.
+        for _ in 0..2 {
+            match self.surface.get_current_texture() {
+                Current::Success(frame) | Current::Suboptimal(frame) => return Ok(Some(frame)),
+                Current::Timeout | Current::Occluded => return Ok(None),
+                Current::Outdated | Current::Lost => self.surface.configure(device, &self.config),
+                Current::Validation => anyhow::bail!("surface validation error"),
             }
-            Current::Validation => anyhow::bail!("surface validation error"),
-        })
+        }
+        Ok(None)
     }
 
     /// Reconfigures the surface after the window changed size.
-    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    ///
+    /// Returns `true` when the surface took a new size. A window that is
+    /// minimized reports 0x0, and a window that only moved reports the size
+    /// it already has. Both keep the surface as it is.
+    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) -> bool {
         if width == 0 || height == 0 || (width, height) == (self.config.width, self.config.height) {
-            return;
+            return false;
         }
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(device, &self.config);
+        true
     }
 }
 

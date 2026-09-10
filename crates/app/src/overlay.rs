@@ -63,9 +63,11 @@ impl Overlay {
 
     /// Draws the TV: the canvas through `draw_canvas`, then the overlay.
     ///
+    /// Returns `false` when the surface gave no frame and nothing was shown.
+    ///
     /// # Errors
     ///
-    /// Returns an error when the surface has no frame to draw into.
+    /// Returns an error when the surface fails validation.
     pub fn render(
         &mut self,
         gpu: &Gpu,
@@ -74,7 +76,7 @@ impl Overlay {
         camera: &Camera,
         mode: theme::Mode,
         draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let viewport = (pane.config.width, pane.config.height);
         let paint = self.paint(strokes, camera, viewport, mode);
         let canvas = mode.tokens().canvas;
