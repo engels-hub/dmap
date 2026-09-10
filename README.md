@@ -136,6 +136,23 @@ Pick a view in the toolbar at the bottom of the window. The toolbar comes in two
 | Set the pixels in one grid cell | Type the number in the panel, or press Measure a cell and click two corners of one cell |
 | Give up a measure | `Escape` |
 
+**Draw** marks the map, and lays an area of effect over it. Everything you draw sits in inches on the canvas, so it stays where you put it when a map moves under it.
+
+| Action | Control |
+|---|---|
+| Pick a pen, a shape, the eraser or the ruler | The squares at the top of the Draw panel |
+| Draw | Drag on the canvas |
+| Take a bite out of a stroke | Drag the eraser over it. What is left of a shape is a free line |
+| Measure a distance | Drag the ruler. The label gives cells and feet |
+| Bend the measure | The second button, while you drag |
+| Keep the measure | `Shift` as you let go. Without it the line goes |
+| Give up the measure | `Escape` |
+| Choose how a diagonal counts | Measure, in the panel: Euclidean, D&D 5e, Pathfinder or Manhattan |
+| Lay a burst | Drag from its middle to its edge |
+| Lay a cone or a beam | Drag for the length, let go, then move for the width and click |
+
+The color, the width, the square you last used and the way you count a diagonal are yours: the program keeps them and the next stroke takes them.
+
 **Table** works on the TV box, the part of the canvas the TV shows.
 
 | Action | Control |

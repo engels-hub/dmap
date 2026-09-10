@@ -450,6 +450,10 @@ pub enum Deed {
     Group,
     /// A node moved up or down the stack.
     Order,
+    /// The DM drew something.
+    Draw,
+    /// The eraser took a bite out of what the DM drew.
+    Erase,
 }
 
 impl Deed {
@@ -463,6 +467,8 @@ impl Deed {
             Self::AnotherGroup => text::history_deed_another_group(),
             Self::Group => text::history_deed_group(),
             Self::Order => text::history_deed_order(),
+            Self::Draw => text::history_deed_draw(),
+            Self::Erase => text::history_deed_erase(),
         }
     }
 }

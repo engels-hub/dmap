@@ -210,9 +210,17 @@ Rows: Zoom in percent, with the helper "100 % is true size on the TV"; Move, wit
 
 ### 8.3 Draw panel, in the Draw view
 
-A row of six 28 px squares holds the pen, the line, the rectangle, the ellipse, the eraser and the ruler. The squares share a 1 px `rule` border and overlap by 1 px. The chosen square takes the segmented control treatment. Rows below: Color as a swatch, Width as a slider. The ruler takes the same color and the same width as a stroke.
+A row of six 28 px squares holds the pen, the line, the rectangle, the ellipse, the eraser and the ruler. One 1 px `rule` border holds the whole row, and a dashed 1 px line in `rule` stands between each pair, dash and gap 3 px, as the views do in the toolbar. See 5.2. The chosen square takes the `raised` background and a 3 px `accent` bar on its top edge, and its glyph takes `accent`.
 
-The ruler measures a distance. A drag draws a line from the press to the pointer, and a label at the pointer gives the distance. A click in the drag sets a waypoint, so the line bends. `Shift` as the drag ends keeps the measure: the line becomes an asset in the scene, with a row in the Objects list and a place in the project file. A plain end clears the line.
+Under it stands the label Effects and a second row of three squares: the burst, the cone and the beam. They lie over the map instead of marking it, and a row of nine squares outgrows the panel.
+
+Rows below: Color as a swatch, Width as a slider, and Measure as a select when the ruler is on. Every one of these is a choice the program keeps, so the next stroke draws as the last one did.
+
+The ruler measures a distance. A drag draws a line from the press to the pointer, and a label at the pointer gives the distance in cells and in feet. The second button bends the ruler where the pointer stands, so a measure walks a corridor. `Shift` as the drag ends keeps the measure: the line becomes a stroke in the scene, with a row in the Objects list and a place in the project file. A plain end clears the line, and `Escape` gives it up. Measure says how the ruler counts a diagonal: Euclidean, D&D 5e, Pathfinder or Manhattan.
+
+An area of effect fills its shape at a quarter of the alpha the DM picked, and its outline takes the whole of it, so the map reads through it. A burst takes one drag, from its middle to its edge. A cone and a beam take two: the first drag says how far they reach, and the second how wide they end. A label beside the shape says both numbers.
+
+The eraser takes a bite out of every stroke it passes over, and it bites its way along the path the pointer took. What is left of a shape is a free line: a box with a bite out of it is no longer a box.
 
 ### 8.4 Objects list
 
