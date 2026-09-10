@@ -248,20 +248,29 @@ impl GridLayer {
         // with a width of zero and draws them alone.
         let usable = camera.pixels_per_inch.is_finite() && camera.pixels_per_inch > 0.0;
         let pixels_per_inch = if usable { camera.pixels_per_inch } else { 1.0 };
-        let width = if usable { line.width } else { 0.0 };
+        let step = step_for(pixels_per_inch);
+        // A line holds its share of the cell and fades as the DM zooms
+        // out, so a grid that says nothing more is not a grid that covers
+        // everything. DESIGN.md 5.1.
+        let alpha = line.color[3] * faded(step);
+        let width = if usable && alpha > 0.0 {
+            thinned(line.width, (step * pixels_per_inch) as f32)
+        } else {
+            0.0
+        };
         let values: [f32; FIELDS] = [
             viewport.0 as f32,
             viewport.1 as f32,
             camera.center.0 as f32,
             camera.center.1 as f32,
             pixels_per_inch as f32,
-            step_for(pixels_per_inch) as f32,
+            step as f32,
             width,
             f32::from(u8::from(line.automatic)),
             line.color[0],
             line.color[1],
             line.color[2],
-            line.color[3],
+            alpha,
         ];
         let bytes: Vec<u8> = values
             .iter()
@@ -283,6 +292,48 @@ impl GridLayer {
     }
 }
 
+/// How much of a cell a line may take, from edge to edge.
+///
+/// A tenth leaves nine tenths of the map to look at. Without this a wide
+/// line keeps its pixels as the DM zooms out, the cell narrows toward
+/// `MIN_CELL`, and the grid swallows the map it lies on.
+const MAX_SHARE: f32 = 0.1;
+
+/// The step where a grid starts to go away, in inches.
+///
+/// A step of one inch is the cell of the table, and it always draws. Past
+/// this the lines say less and less about the map, so they fade with each
+/// doubling and stop at [`GONE_STEP`].
+const FADE_STEP: f64 = 2.0;
+
+/// The step where a grid draws no more, in inches.
+///
+/// Sixteen inches is eighty feet to a cell. A DM this far out is looking
+/// at the whole map, not at where a figure stands.
+const GONE_STEP: f64 = 16.0;
+
+/// How thick a line may draw over a cell this wide, in pixels.
+///
+/// Takes and returns surface pixels. See [`MAX_SHARE`].
+fn thinned(width: f32, cell: f32) -> f32 {
+    width.min(cell * MAX_SHARE)
+}
+
+/// How much of its color a line keeps at this step, from 0 to 1.
+///
+/// The fade counts doublings, not inches, because that is how the step
+/// grows. See [`FADE_STEP`] and [`GONE_STEP`].
+fn faded(step: f64) -> f32 {
+    if step <= FADE_STEP {
+        return 1.0;
+    }
+    if step >= GONE_STEP {
+        return 0.0;
+    }
+    let span = GONE_STEP.log2() - FADE_STEP.log2();
+    (1.0 - (step.log2() - FADE_STEP.log2()) / span) as f32
+}
+
 /// How many inches lie between two lines at this zoom.
 ///
 /// One inch is the cell of DESIGN.md 5.1. A camera far enough out would
@@ -298,7 +349,31 @@ fn step_for(pixels_per_inch: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{MIN_CELL, step_for};
+    use super::{FADE_STEP, GONE_STEP, MIN_CELL, faded, step_for, thinned};
+
+    #[test]
+    fn a_line_never_takes_more_than_a_tenth_of_a_cell() {
+        // Eight points on a screen of two device pixels, over the narrowest
+        // cell the step allows.
+        assert!((thinned(16.0, 24.0) - 2.4).abs() < 0.001);
+        // A line that already fits keeps every pixel it asked for.
+        assert!((thinned(2.0, 48.0) - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_grid_holds_its_color_at_the_cell_of_the_table() {
+        assert!((faded(1.0) - 1.0).abs() < f32::EPSILON);
+        assert!((faded(FADE_STEP) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_grid_goes_away_as_the_camera_leaves() {
+        // Each doubling past the fade takes another third of the color.
+        assert!((faded(4.0) - 2.0 / 3.0).abs() < 0.001);
+        assert!((faded(8.0) - 1.0 / 3.0).abs() < 0.001);
+        assert!(faded(GONE_STEP).abs() < f32::EPSILON);
+        assert!(faded(64.0).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn a_close_camera_draws_one_line_for_each_inch() {

@@ -27,7 +27,7 @@ pub enum TvPlacement {
 /// A field the DM never set is `None`, and the theme token stands in its
 /// place. So a theme that changes its table of colors carries every DM
 /// who kept the tokens with it.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Paper {
     /// The canvas background, as red, green and blue.
@@ -42,17 +42,34 @@ pub struct Paper {
     pub width: Option<f32>,
 }
 
+impl Default for Paper {
+    fn default() -> Self {
+        Self {
+            canvas: None,
+            line: None,
+            // A line that reads the map below it is right on every map, and
+            // a DM who wants a color of their own says so in Settings.
+            automatic: true,
+            opacity: None,
+            width: None,
+        }
+    }
+}
+
 /// The thinnest and the thickest a grid line may draw, in points.
 ///
-/// Half a point is a hairline on a screen of two device pixels, and a
-/// quarter of the width of a stroke at its thinnest. Four points is as
-/// thick as a line may go before the cell it draws loses its middle.
+/// Half a point is a hairline on a screen of two device pixels. Eight
+/// points is a line the players read from across the table. A line that
+/// wide would swallow a cell as the DM zooms out, so the grid thins it
+/// against the cell it draws. See [`crate::grid::thinned`].
 pub const MIN_GRID_WIDTH: f64 = 0.5;
 /// See [`MIN_GRID_WIDTH`].
-pub const MAX_GRID_WIDTH: f64 = 4.0;
+pub const MAX_GRID_WIDTH: f64 = 8.0;
 
 /// How thick a grid line draws when the DM chose nothing, in points.
-const DEFAULT_GRID_WIDTH: f32 = 1.0;
+///
+/// Two points reads across a table without covering the map under it.
+const DEFAULT_GRID_WIDTH: f32 = 2.0;
 
 impl Paper {
     /// The canvas background this theme shows where no map is.
@@ -377,7 +394,7 @@ pub fn config_path() -> PathBuf {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Config, Paper, TvPlacement, default_scenes_dir};
+    use super::{Config, DEFAULT_GRID_WIDTH, Paper, TvPlacement, default_scenes_dir};
 
     fn scenes_at(dir: &str) -> Config {
         Config {
@@ -461,7 +478,9 @@ mod tests {
             for (took, want) in paper.line(mode, 1.0).color.iter().zip(token) {
                 assert!((took - want).abs() < f32::EPSILON);
             }
-            assert!(!paper.line(mode, 1.0).automatic);
+            // A first run reads the map under each line. Issue #66.
+            assert!(paper.line(mode, 1.0).automatic);
+            assert!((paper.width_of() - DEFAULT_GRID_WIDTH).abs() < f32::EPSILON);
             assert!((paper.opacity_of(mode) - tokens.grid.1).abs() < f32::EPSILON);
         }
     }

@@ -193,7 +193,9 @@ One grid covers the canvas on both screens, over every map. One cell is one inch
 
 The **Grid** tab of Settings holds the color of the canvas and the color of the grid. Each choice belongs to the theme you work in, so the dark theme and the light one keep grids of their own. **Reset** on a row gives the color of the theme back.
 
-The grid line takes one of two ways. **Chosen** draws the color you pick. **Automatic** reads the map under each line and turns its light around, so the line is pale over a dark map and dark over a pale one. An automatic line also holds itself away from the middle gray, which is where a line that only turns the map around would disappear. You set the width and the opacity of the line either way.
+The grid line takes one of two ways. **Automatic**, which every scene opens with, reads the map under each line and turns its light around, so the line is pale over a dark map and dark over a pale one. It also holds itself away from the middle gray, which is where a line that only turns the map around would disappear. **Chosen** draws the color you pick instead. You set the width and the opacity of the line either way.
+
+The line is 2 points wide, and you can take it from 0.5 to 8. However wide you make it, a line takes no more than a tenth of the cell it draws, and the whole grid fades as you zoom out. Past a step of 16 inches to a cell the grid draws no more, so a look at the whole map is a look at the map.
 
 To move something you already placed, drag its row onto a group. The **Group** field in the Map panel does the same without a drag.
 
