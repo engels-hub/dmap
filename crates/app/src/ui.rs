@@ -14,6 +14,7 @@ use crate::command::{
     Deed, Grow, History, Note, Restructure, SetAssets, SetName, SetShown, SetStrokes, SetTvBox,
     Turn, reshape,
 };
+use crate::config::{MAX_GRID_WIDTH, MIN_GRID_WIDTH, Paper};
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::icon;
 use crate::icons::Icon;
@@ -433,9 +434,28 @@ pub struct Settings {
     pub ink_snap: bool,
     /// What every size of DESIGN.md is multiplied by. DESIGN.md 3.1.
     pub ui_scale: f64,
+    /// The canvas and the grid of the light theme. Issue #66.
+    pub paper_light: Paper,
+    /// The canvas and the grid of the dark theme. Issue #66.
+    pub paper_dark: Paper,
 }
 
 impl Settings {
+    /// The colors of the theme the window draws.
+    pub fn paper(&self) -> &Paper {
+        match self.theme {
+            theme::Mode::Light => &self.paper_light,
+            theme::Mode::Dark => &self.paper_dark,
+        }
+    }
+
+    /// The colors of the theme the window draws, to change.
+    pub fn paper_mut(&mut self) -> &mut Paper {
+        match self.theme {
+            theme::Mode::Light => &mut self.paper_light,
+            theme::Mode::Dark => &mut self.paper_dark,
+        }
+    }
     /// Whether the two settings would put the windows in different places.
     ///
     /// Only a change here may touch the windows. Full screen takes the
@@ -884,20 +904,35 @@ impl DmUi {
         self.table.opened = None;
     }
 
-    /// Draws the canvas through `draw_canvas`, then the UI on top of it.
+    /// Draws the maps, then the canvas, then the UI on top of both.
     pub fn render(
         &mut self,
         gpu: &Gpu,
         pane: &mut Pane,
         paint: Paint,
         canvas: egui::Color32,
+        draw_maps: impl FnOnce(&mut wgpu::RenderPass<'static>),
         draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
     ) -> Result<()> {
-        render_pane(gpu, pane, &mut self.renderer, paint, canvas, draw_canvas)
+        render_pane(
+            gpu,
+            pane,
+            &mut self.renderer,
+            paint,
+            canvas,
+            draw_maps,
+            draw_canvas,
+        )
     }
 }
 
-/// Draws one window: the canvas first, then what `egui` painted over it.
+/// Draws one window: the maps, then the canvas, then what `egui` painted.
+///
+/// The frame takes two passes. `draw_maps` fills the texture the grid
+/// reads, because a grid line can take its color from the map below it
+/// and a shader cannot read the surface it writes to. `draw_canvas` then
+/// draws into the window itself, and it must start with the grid: the
+/// grid pass carries the maps across. DESIGN.md 5.1.
 ///
 /// Both windows go through here. The TV runs an `egui` of its own for the
 /// overlays it shows, and it draws them the same way the DM window draws
@@ -912,6 +947,7 @@ pub fn render_pane(
     renderer: &mut egui_wgpu::Renderer,
     paint: Paint,
     canvas: egui::Color32,
+    draw_maps: impl FnOnce(&mut wgpu::RenderPass<'static>),
     draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
 ) -> Result<()> {
     {
@@ -941,8 +977,13 @@ pub fn render_pane(
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             let buffers =
                 renderer.update_buffers(&gpu.device, &gpu.queue, &mut encoder, &jobs, &screen);
+            let ground = color::linear_token(canvas);
             {
-                let mut pass = begin_clear_pass(&mut encoder, &view, color::linear_token(canvas));
+                let mut pass = begin_clear_pass(&mut encoder, pane.beneath.view(), ground);
+                draw_maps(&mut pass);
+            };
+            {
+                let mut pass = begin_clear_pass(&mut encoder, &view, ground);
                 draw_canvas(&mut pass);
                 renderer.render(&mut pass, &jobs, &screen);
             };
@@ -2163,7 +2204,7 @@ fn settings_dialog(
                         edited = table_tab(body_ui, frame, &mut dialog.scale_drag, tokens);
                     }
                     Tab::Grid => {
-                        not_built(body_ui, text::dialog_settings_grid_soon());
+                        edited = grid_tab(body_ui, frame.settings);
                     }
                     Tab::Light => {
                         not_built(body_ui, text::dialog_settings_light_soon());
@@ -2382,6 +2423,109 @@ fn table_tab(
         widget::helper(ui, text::dialog_settings_scale_helper());
     });
     edited
+}
+
+/// The Grid tab of Settings: the colors of the canvas and the grid.
+///
+/// Every choice here belongs to the theme the window draws, so a DM who
+/// works in the dark theme and shows the light one keeps a grid they can
+/// see in both. Returns `true` when the DM changed something. DESIGN.md
+/// 9.2. Issue #66.
+fn grid_tab(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+    let mode = settings.theme;
+    let mut edited = false;
+    let paper = settings.paper_mut();
+    dialog_row(ui, text::dialog_settings_canvas(), |ui| {
+        let mut color = rgb_of(paper.canvas(mode));
+        ui.horizontal(|ui| {
+            if widget::color_swatch(ui, &mut color) {
+                paper.canvas = Some([color[0], color[1], color[2]]);
+                edited = true;
+            }
+            if reset(ui, paper.canvas.is_some()) {
+                paper.canvas = None;
+                edited = true;
+            }
+        });
+        widget::helper(ui, text::dialog_settings_canvas_helper());
+    });
+    dialog_row(ui, text::dialog_settings_line(), |ui| {
+        let mut automatic = paper.automatic;
+        let choices = [
+            (true, text::dialog_settings_line_auto()),
+            (false, text::dialog_settings_line_chosen()),
+        ];
+        if widget::segmented(ui, &mut automatic, &choices) {
+            paper.automatic = automatic;
+            edited = true;
+        }
+        widget::helper(ui, text::dialog_settings_line_helper());
+    });
+    // A chosen color has nothing to say while the line takes its own, so
+    // the row goes away instead of standing there greyed out.
+    if !paper.automatic {
+        dialog_row(ui, text::dialog_settings_line_color(), |ui| {
+            let token = mode.tokens().grid.0;
+            let shown = paper.line.unwrap_or([
+                (token >> 16) as u8,
+                (token >> 8) as u8,
+                u8::try_from(token & 0xff).unwrap_or(u8::MAX),
+            ]);
+            let mut color = [shown[0], shown[1], shown[2], u8::MAX];
+            ui.horizontal(|ui| {
+                if widget::color_swatch(ui, &mut color) {
+                    paper.line = Some([color[0], color[1], color[2]]);
+                    edited = true;
+                }
+                if reset(ui, paper.line.is_some()) {
+                    paper.line = None;
+                    edited = true;
+                }
+            });
+        });
+    }
+    dialog_row(ui, text::dialog_settings_line_width(), |ui| {
+        let mut width = f64::from(paper.width_of());
+        if widget::input(
+            ui,
+            &mut width,
+            text::unit_points(),
+            90.0,
+            MIN_GRID_WIDTH..=MAX_GRID_WIDTH,
+            0.1,
+        )
+        .changed()
+        {
+            paper.width = Some(width as f32);
+            edited = true;
+        }
+    });
+    dialog_row(ui, text::dialog_settings_line_opacity(), |ui| {
+        let mut opacity = f64::from(paper.opacity_of(mode));
+        let shown = text::dialog_settings_opacity_value((opacity * 100.0).round());
+        if widget::slider(ui, &mut opacity, 0.0..=1.0, 180.0, &shown).changed() {
+            paper.opacity = Some(opacity as f32);
+            edited = true;
+        }
+    });
+    not_built(ui, text::dialog_settings_grid_soon());
+    edited
+}
+
+/// The Reset button of a Grid tab row. It gives the token back.
+///
+/// The button stands in every row, so the rows keep one shape, and it
+/// takes no click while the row already shows the token.
+fn reset(ui: &mut egui::Ui, live: bool) -> bool {
+    ui.add_enabled_ui(live, |ui| {
+        widget::button(ui, text::dialog_settings_reset(), None, widget::Height::Row).clicked()
+    })
+    .inner
+}
+
+/// The red, green and blue of a color, with a full alpha.
+fn rgb_of(color: egui::Color32) -> [u8; 4] {
+    [color.r(), color.g(), color.b(), u8::MAX]
 }
 
 /// The Language row of the Table tab. DESIGN.md 9.1.
@@ -5333,7 +5477,7 @@ fn draw_selection(painter: &egui::Painter, handles: &[egui::Pos2], tokens: Token
 
 #[cfg(test)]
 mod tests {
-    use super::{ROW_HEIGHT, Settings, bite, join_scene, row_parts, theme};
+    use super::{Paper, ROW_HEIGHT, Settings, bite, join_scene, row_parts, theme};
     use crate::command::Command as _;
     use crate::scene::{Group, Node, Scene, Shown};
     use crate::stroke::{Ink, Rule, Stroke};
@@ -5528,6 +5672,8 @@ mod tests {
             tv_display: Some(1),
             swap_windows: false,
             snap_percent: 8.0,
+            paper_light: Paper::default(),
+            paper_dark: Paper::default(),
         }
     }
 

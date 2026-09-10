@@ -339,6 +339,8 @@ impl Running {
                 ink_rule: config.ink_rule,
                 ink_snap: config.ink_snap,
                 ui_scale: crate::theme::clamp_scale(config.ui_scale),
+                paper_light: config.paper_light.clone(),
+                paper_dark: config.paper_dark.clone(),
             },
             placed: false,
             tv_pointer: None,
@@ -391,6 +393,7 @@ impl Running {
             WindowEvent::RedrawRequested => {
                 let viewport = (pane.config.width, pane.config.height);
                 let (device, queue) = (&self.gpu.device, &self.gpu.queue);
+                let gpu = &self.gpu;
                 let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
                 let tv_camera = self.scene.tv_box.camera(viewport);
                 // The TV draws what it shows, and every map at full strength.
@@ -407,20 +410,34 @@ impl Running {
                 let map_layer = &mut self.map_layer;
                 let grid_layer = &self.grid_layer;
                 let ink_layer = &mut self.ink_layer;
-                let line = self.settings.theme.tokens().grid_line();
-                let width = pane.window.scale_factor() as f32;
                 let mode = self.settings.theme;
-                self.overlay
-                    .render(&self.gpu, pane, &ink, &tv_camera, mode, |pass| {
+                let paper = self.settings.paper();
+                let line = paper.line(mode, pane.window.scale_factor() as f32);
+                let canvas = paper.canvas(mode);
+                // A clone of the handle, because the pane goes into the
+                // call that draws it.
+                let beneath = pane.beneath.view().clone();
+                self.overlay.render(
+                    &self.gpu,
+                    pane,
+                    &ink,
+                    &tv_camera,
+                    mode,
+                    canvas,
+                    |pass| {
                         map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
+                    },
+                    |pass| {
                         // DESIGN.md 5.1: one grid covers the canvas and it
-                        // lies over every map, on both screens.
-                        grid_layer.draw(queue, pass, &tv_camera, viewport, line, width);
+                        // lies over every map, on both screens. The pass
+                        // carries the maps to the window with it.
+                        grid_layer.draw(gpu, pass, &beneath, &tv_camera, viewport, line);
                         ink_layer.draw(device, queue, pass, &ink, &tv_camera, viewport);
                         if let Some(center) = tv_pointer {
                             pointer.draw(queue, pass, center, viewport);
                         }
-                    })?;
+                    },
+                )?;
             }
             WindowEvent::CursorMoved { position, .. } if !is_dm => {
                 self.tv_pointer = Some((position.x as f32, position.y as f32));
@@ -522,6 +539,7 @@ impl Running {
         }
         let viewport = (self.dm.config.width, self.dm.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
+        let gpu = &self.gpu;
         // DESIGN.md 5.6: a map the TV does not show draws faint here, so
         // the DM sees at a glance what the players cannot.
         let shown: Vec<(&Asset, f32)> = crate::scene::dm_draw_order(&self.scene)
@@ -546,17 +564,21 @@ impl Running {
         let (map_layer, camera) = (&mut self.map_layer, &self.camera);
         let grid_layer = &self.grid_layer;
         let ink_layer = &mut self.ink_layer;
-        let tokens = self.settings.theme.tokens();
-        let line = tokens.grid_line();
-        let width = self.dm.window.scale_factor() as f32;
+        let mode = self.settings.theme;
+        let paper = self.settings.paper();
+        let line = paper.line(mode, self.dm.window.scale_factor() as f32);
+        let canvas = paper.canvas(mode);
+        let beneath = self.dm.beneath.view().clone();
         self.ui.render(
             &self.gpu,
             &mut self.dm,
             output.paint,
-            tokens.canvas,
+            canvas,
             |pass| {
                 map_layer.draw(device, queue, pass, &shown, camera, viewport);
-                grid_layer.draw(queue, pass, camera, viewport, line, width);
+            },
+            |pass| {
+                grid_layer.draw(gpu, pass, &beneath, camera, viewport, line);
                 ink_layer.draw(device, queue, pass, &ink, camera, viewport);
             },
         )?;
@@ -679,6 +701,8 @@ impl Running {
         config.ink_rule = self.settings.ink_rule;
         config.ink_snap = self.settings.ink_snap;
         config.ui_scale = self.settings.ui_scale;
+        config.paper_light.clone_from(&self.settings.paper_light);
+        config.paper_dark.clone_from(&self.settings.paper_dark);
         scene.clone_from(&self.scene);
     }
 }

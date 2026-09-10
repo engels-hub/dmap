@@ -191,6 +191,10 @@ A map the TV does not show draws faint on your own screen. So you see at a glanc
 
 One grid covers the canvas on both screens, over every map. One cell is one inch on the table.
 
+The **Grid** tab of Settings holds the color of the canvas and the color of the grid. Each choice belongs to the theme you work in, so the dark theme and the light one keep grids of their own. **Reset** on a row gives the color of the theme back.
+
+The grid line takes one of two ways. **Chosen** draws the color you pick. **Automatic** reads the map under each line and turns its light around, so the line is pale over a dark map and dark over a pale one. An automatic line also holds itself away from the middle gray, which is where a line that only turns the map around would disappear. You set the width and the opacity of the line either way.
+
 To move something you already placed, drag its row onto a group. The **Group** field in the Map panel does the same without a drag.
 
 A group draws over the groups under it, and its assets draw inside its place. Every group but the root shows a dashed box around what it holds. Click the box, or the group's name in the list, to take the group.

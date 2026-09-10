@@ -61,11 +61,15 @@ impl Overlay {
         }
     }
 
-    /// Draws the TV: the canvas through `draw_canvas`, then the overlay.
+    /// Draws the TV: the maps, the canvas, then the overlay.
     ///
     /// # Errors
     ///
     /// Returns an error when the surface has no frame to draw into.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one frame of the TV: what it draws, where it draws it, and the two passes"
+    )]
     pub fn render(
         &mut self,
         gpu: &Gpu,
@@ -73,12 +77,21 @@ impl Overlay {
         strokes: &[&Stroke],
         camera: &Camera,
         mode: theme::Mode,
+        canvas: egui::Color32,
+        draw_maps: impl FnOnce(&mut wgpu::RenderPass<'static>),
         draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
     ) -> Result<()> {
         let viewport = (pane.config.width, pane.config.height);
         let paint = self.paint(strokes, camera, viewport, mode);
-        let canvas = mode.tokens().canvas;
-        render_pane(gpu, pane, &mut self.renderer, paint, canvas, draw_canvas)
+        render_pane(
+            gpu,
+            pane,
+            &mut self.renderer,
+            paint,
+            canvas,
+            draw_maps,
+            draw_canvas,
+        )
     }
 
     /// Paints the overlay for one frame.

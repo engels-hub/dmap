@@ -22,6 +22,83 @@ pub enum TvPlacement {
     Display(String),
 }
 
+/// The colors of the canvas and the grid, for one theme. Issue #66.
+///
+/// A field the DM never set is `None`, and the theme token stands in its
+/// place. So a theme that changes its table of colors carries every DM
+/// who kept the tokens with it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Paper {
+    /// The canvas background, as red, green and blue.
+    pub canvas: Option<[u8; 3]>,
+    /// The grid line color, as red, green and blue.
+    pub line: Option<[u8; 3]>,
+    /// Whether a grid line takes its color from the map below it.
+    pub automatic: bool,
+    /// How solid a grid line draws, from 0 to 1.
+    pub opacity: Option<f32>,
+    /// How thick a grid line draws, in points.
+    pub width: Option<f32>,
+}
+
+/// The thinnest and the thickest a grid line may draw, in points.
+///
+/// Half a point is a hairline on a screen of two device pixels, and a
+/// quarter of the width of a stroke at its thinnest. Four points is as
+/// thick as a line may go before the cell it draws loses its middle.
+pub const MIN_GRID_WIDTH: f64 = 0.5;
+/// See [`MIN_GRID_WIDTH`].
+pub const MAX_GRID_WIDTH: f64 = 4.0;
+
+/// How thick a grid line draws when the DM chose nothing, in points.
+const DEFAULT_GRID_WIDTH: f32 = 1.0;
+
+impl Paper {
+    /// The canvas background this theme shows where no map is.
+    pub fn canvas(&self, mode: crate::theme::Mode) -> egui::Color32 {
+        match self.canvas {
+            Some([red, green, blue]) => egui::Color32::from_rgb(red, green, blue),
+            None => mode.tokens().canvas,
+        }
+    }
+
+    /// How a grid line draws, for the GPU.
+    ///
+    /// `scale` is the device pixels of one point, because the width is a
+    /// number of points and the shader counts surface pixels.
+    pub fn line(&self, mode: crate::theme::Mode, scale: f32) -> crate::grid::Line {
+        let token = mode.tokens().grid_line();
+        let mut color = match self.line {
+            Some([red, green, blue]) => [
+                crate::color::linear_from_srgb(red) as f32,
+                crate::color::linear_from_srgb(green) as f32,
+                crate::color::linear_from_srgb(blue) as f32,
+                token[3],
+            ],
+            None => token,
+        };
+        if let Some(opacity) = self.opacity {
+            color[3] = opacity.clamp(0.0, 1.0);
+        }
+        crate::grid::Line {
+            color,
+            width: self.width.unwrap_or(DEFAULT_GRID_WIDTH) * scale,
+            automatic: self.automatic,
+        }
+    }
+
+    /// How solid a grid line draws, from 0 to 1.
+    pub fn opacity_of(&self, mode: crate::theme::Mode) -> f32 {
+        self.opacity.unwrap_or_else(|| mode.tokens().grid.1)
+    }
+
+    /// How thick a grid line draws, in points.
+    pub fn width_of(&self) -> f32 {
+        self.width.unwrap_or(DEFAULT_GRID_WIDTH)
+    }
+}
+
 /// How many scenes of one name the scenes folder may hold.
 const MAX_SAME_NAME: u32 = 1000;
 
@@ -80,6 +157,12 @@ pub struct Config {
     /// `Shift` free to keep the measure. Issue #12.
     #[serde(default = "yes")]
     pub ink_snap: bool,
+    /// The canvas and the grid of the light theme. Issue #66.
+    #[serde(default)]
+    pub paper_light: Paper,
+    /// The canvas and the grid of the dark theme. Issue #66.
+    #[serde(default)]
+    pub paper_dark: Paper,
 }
 
 impl Default for Config {
@@ -98,6 +181,8 @@ impl Default for Config {
             ink_nib: crate::ui::Nib::default(),
             ink_rule: crate::stroke::Rule::default(),
             ink_snap: yes(),
+            paper_light: Paper::default(),
+            paper_dark: Paper::default(),
         }
     }
 }
@@ -292,7 +377,7 @@ pub fn config_path() -> PathBuf {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Config, TvPlacement, default_scenes_dir};
+    use super::{Config, Paper, TvPlacement, default_scenes_dir};
 
     fn scenes_at(dir: &str) -> Config {
         Config {
@@ -354,8 +439,62 @@ mod tests {
             ink_nib: crate::ui::Nib::Ellipse,
             ink_rule: crate::stroke::Rule::Fifth,
             ink_snap: false,
+            paper_light: Paper::default(),
+            paper_dark: Paper {
+                canvas: Some([10, 20, 30]),
+                line: Some([40, 50, 60]),
+                automatic: true,
+                opacity: Some(0.5),
+                width: Some(2.0),
+            },
         };
         assert_eq!(Config::from_json(&config.to_json()).unwrap(), config);
+    }
+
+    #[test]
+    fn a_paper_the_dm_never_touched_gives_the_tokens_back() {
+        let paper = Paper::default();
+        for mode in [crate::theme::Mode::Light, crate::theme::Mode::Dark] {
+            let tokens = mode.tokens();
+            assert_eq!(paper.canvas(mode), tokens.canvas);
+            let token = tokens.grid_line();
+            for (took, want) in paper.line(mode, 1.0).color.iter().zip(token) {
+                assert!((took - want).abs() < f32::EPSILON);
+            }
+            assert!(!paper.line(mode, 1.0).automatic);
+            assert!((paper.opacity_of(mode) - tokens.grid.1).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn a_chosen_line_reaches_the_gpu_in_linear_light() {
+        let paper = Paper {
+            line: Some([0xff, 0x80, 0x00]),
+            opacity: Some(0.5),
+            width: Some(2.0),
+            ..Paper::default()
+        };
+        let line = paper.line(crate::theme::Mode::Light, 2.0);
+        // The surface is sRGB, so the shader takes linear values. Half of
+        // 255 in sRGB is far below half in linear light.
+        assert!((line.color[0] - 1.0).abs() < 0.001);
+        assert!((line.color[1] - 0.216).abs() < 0.01);
+        assert!(line.color[2].abs() < f32::EPSILON);
+        assert!((line.color[3] - 0.5).abs() < f32::EPSILON);
+        // Two points on a screen of two device pixels for one point.
+        assert!((line.width - 4.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn an_automatic_line_keeps_its_opacity_and_no_more() {
+        let paper = Paper {
+            automatic: true,
+            opacity: Some(0.25),
+            ..Paper::default()
+        };
+        let line = paper.line(crate::theme::Mode::Dark, 1.0);
+        assert!(line.automatic);
+        assert!((line.color[3] - 0.25).abs() < f32::EPSILON);
     }
 
     #[test]

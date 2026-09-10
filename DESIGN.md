@@ -90,7 +90,10 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - Fills the window. Background is the user's canvas color. Default `canvas`.
 - One grid covers the whole canvas. It lies over every map, so the DM lines a map up with it. A map carries no grid of its own.
 - Both screens draw the grid. The players see the same cells the DM does.
-- The grid is 1 px lines in `grid`. One cell is one inch, on the DM screen and on the TV. A camera far enough out would draw those lines closer together than the eye can read, so the step doubles until a cell is at least 24 px wide. Every line that remains was a line before.
+- The grid is 1 pt lines in `grid`. One cell is one inch, on the DM screen and on the TV. A camera far enough out would draw those lines closer together than the eye can read, so the step doubles until a cell is at least 24 px wide. Every line that remains was a line before.
+- The DM sets the canvas color, and the color, the width and the opacity of the line, in Settings 9.2. A choice belongs to one theme, so a DM who works in the dark theme and shows the light one keeps a grid they can see in both.
+- An automatic line takes no color from the DM. It reads the map below it, turns the light of that map around, and then holds the result a quarter away from the middle gray. So the line is pale over a dark map, dark over a pale map, and it stays visible over the middle gray a line that only turns the map around would lose.
+- The maps of a frame draw into a texture of their own first, because a shader cannot read the surface it writes to. The grid pass reads that texture, mixes its lines into it, and writes both to the window. So the grid pass carries the maps, and it must run before the ink and the panels.
 - Map previews have a hard shadow `2px 3px 0 shadow` when the theme has a shadow value.
 - The DM camera pans with space+drag or the middle button and zooms with the wheel. There is no on-screen control for the DM camera.
 
@@ -292,11 +295,17 @@ The footer holds Group and New group, and a helper line that names the picked no
 
 ### 9.2 Settings, Grid tab
 
-1. Canvas background: color swatch. Helper: "Shown on both screens where no map is".
-2. Kind: segmented control (Square, Hex pointy top, Hex flat top, None).
-3. Cell size: input in inches. Helper: "Hex size is measured flat to flat".
-4. Show on: segmented control (Both screens, DM only, TV only).
-5. Line: color swatch, width input in TV pixels, opacity slider, style segmented control (Solid, Dashed, Dots).
+1. Canvas background: color swatch and a Reset button. Helper: "Shown on both screens where no map is".
+2. Grid line: segmented control (Automatic, Chosen). Helper: "Automatic turns the map around under each line, so the grid reads over a dark map and a light one".
+3. Line color: color swatch and a Reset button. The row stands only when the line is a chosen one.
+4. Line width: input in points, from 0.5 to 4.
+5. Line opacity: slider from 0 to 100 %.
+6. Kind: segmented control (Square, Hex pointy top, Hex flat top, None). Not built.
+7. Cell size: input in inches. Helper: "Hex size is measured flat to flat". Not built.
+8. Show on: segmented control (Both screens, DM only, TV only). Not built.
+9. Line style: segmented control (Solid, Dashed, Dots). Not built.
+
+A Reset button is dead while the row already shows the token of the theme. A row the DM never touched takes the token, so a change to the token table of section 2 reaches every DM who kept it.
 
 ### 9.3 Settings, Light tab
 
