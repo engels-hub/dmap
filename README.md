@@ -149,7 +149,8 @@ Pick a view in the toolbar at the bottom of the window. The toolbar comes in two
 | Give up the measure | `Escape` |
 | Choose how a diagonal counts | Measure, in the panel: Euclidean, D&D 5e, Pathfinder or Manhattan |
 | Lay a burst | Drag from its middle to its edge |
-| Lay a cone or a beam | Drag for the length, let go, then move for the width and click |
+| Lay a cone | Drag from its point out to where it ends. It ends as wide as it is long, on a round edge |
+| Lay a beam | Drag for the length and let go, then drag again for the width |
 
 The color, the width, the square you last used and the way you count a diagonal are yours: the program keeps them and the next stroke takes them.
 

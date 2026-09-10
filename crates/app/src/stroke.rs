@@ -37,8 +37,9 @@ pub enum Ink {
     Burst,
     /// A cone of effect, from its point out to where it ends.
     ///
-    /// A cone the DM did not widen ends as wide as it is long, which is
-    /// the cone of D&D 5e.
+    /// It is as wide at any point along its length as that point stands
+    /// far from the point of origin, and it ends on a round edge. The
+    /// cone of D&D 5e, chapter 10.
     Cone,
     /// A straight run of effect, one cell wide unless the DM widened it.
     Beam,
@@ -53,11 +54,11 @@ const ARC_STEPS: usize = 48;
 impl Ink {
     /// Whether the DM sets the width of this ink with a second drag.
     ///
-    /// A burst has one number, its radius, and one drag gives it. A cone
-    /// and a beam have a length and a width, so the gesture is a drag for
-    /// the one and a drag for the other. Issue #12.
+    /// A burst and a cone have one number each, their radius and their
+    /// length, and one drag gives it. A beam has a length and a width, so
+    /// it takes a drag for the one and a drag for the other. Issue #12.
     pub fn spans(self) -> bool {
-        matches!(self, Self::Cone | Self::Beam)
+        matches!(self, Self::Beam)
     }
 
     /// Whether this ink fills the shape it draws, as an effect does.
@@ -201,7 +202,7 @@ impl Stroke {
             Ink::Rect => vec![*first, (last.0, first.1), *last, (first.0, last.1), *first],
             Ink::Ellipse => ellipse(*first, *last),
             Ink::Burst => burst(*first, *last),
-            Ink::Cone => cone(*first, *last, self.span),
+            Ink::Cone => cone(*first, *last),
             Ink::Beam => beam(*first, *last, self.span),
         }
     }
@@ -244,23 +245,30 @@ fn burst(center: (f64, f64), edge: (f64, f64)) -> Vec<(f64, f64)> {
 
 /// The cone of effect from a point, out to where the drag ended.
 ///
-/// A cone is as wide at its end as it is long, which is the cone of
-/// D&D 5e, chapter 10. So it draws as a triangle with a flat end, and
-/// the end is one length across.
-fn cone(point: (f64, f64), end: (f64, f64), span: f64) -> Vec<(f64, f64)> {
+/// A cone is as wide at any point along its length as that point stands
+/// far from the point of origin. D&D 5e, chapter 10. Every point of the
+/// far edge lies one length from the origin, so that edge is an arc, and
+/// the two sides lie 30 degrees off the middle: a chord of that arc at
+/// distance `d` is `2 * d * sin(30)`, which is `d`.
+fn cone(point: (f64, f64), end: (f64, f64)) -> Vec<(f64, f64)> {
     let (dx, dy) = (end.0 - point.0, end.1 - point.1);
     let length = dx.hypot(dy);
     if length <= f64::EPSILON {
         return vec![point];
     }
-    let half = if span > 0.0 { span / 2.0 } else { length / 2.0 };
-    let side = (-dy / length * half, dx / length * half);
-    vec![
-        point,
-        (end.0 + side.0, end.1 + side.1),
-        (end.0 - side.0, end.1 - side.1),
-        point,
-    ]
+    let heading = dy.atan2(dx);
+    let half = std::f64::consts::FRAC_PI_6;
+    let mut out = vec![point];
+    out.extend((0..=ARC_STEPS).map(|step| {
+        let part = step as f64 / ARC_STEPS as f64;
+        let angle = heading - half + 2.0 * half * part;
+        (
+            point.0 + length * angle.cos(),
+            point.1 + length * angle.sin(),
+        )
+    }));
+    out.push(point);
+    out
 }
 
 /// The straight run of effect between two points, one cell wide.
@@ -434,35 +442,31 @@ mod tests {
     }
 
     #[test]
-    fn a_cone_is_as_wide_as_it_is_long() {
+    fn a_cone_is_as_wide_as_it_is_far_from_its_point() {
         let mark = stroke(Ink::Cone, &[(0.0, 0.0), (4.0, 0.0)]);
         let line = mark.polyline();
-        let across = line
-            .iter()
-            .map(|p| p.1)
-            .fold(0.0_f64, |far, y| far.max(y.abs()));
-        // The end is one length across, so it reaches half a length out
-        // to each side.
-        assert!((across - 2.0).abs() < 1e-9, "the cone reaches {across} out");
         assert_eq!(line.first(), line.last());
+        // Every point of the far edge lies one length from the point.
+        for point in &line[1..line.len() - 1] {
+            let away = point.0.hypot(point.1);
+            assert!((away - 4.0).abs() < 1e-9, "{point:?} lies {away} out");
+        }
+        // The chord across the two sides is one length: as wide as it is
+        // long, and the same at any distance along it.
+        let (first, last) = (line[1], line[line.len() - 2]);
+        let across = (first.0 - last.0).hypot(first.1 - last.1);
+        assert!((across - 4.0).abs() < 1e-9, "the cone ends {across} across");
     }
 
     #[test]
-    fn a_second_drag_sets_the_width_of_a_cone_and_a_beam() {
+    fn a_second_drag_sets_the_width_of_a_beam_alone() {
         let mut mark = stroke(Ink::Beam, &[(0.0, 0.0), (5.0, 0.0)]);
         mark.span = 3.0;
         let line = mark.polyline();
         let width = (line[0].1 - line[3].1).abs();
         assert!((width - 3.0).abs() < 1e-9, "the beam is {width} wide");
-        let mut mark = stroke(Ink::Cone, &[(0.0, 0.0), (4.0, 0.0)]);
-        mark.span = 1.0;
-        let line = mark.polyline();
-        let across = line
-            .iter()
-            .map(|p| p.1)
-            .fold(0.0_f64, |far, y| far.max(y.abs()));
-        assert!((across - 0.5).abs() < 1e-9, "the cone ends {across} out");
-        assert!(Ink::Cone.spans() && Ink::Beam.spans() && !Ink::Burst.spans());
+        assert!(Ink::Beam.spans());
+        assert!(!Ink::Cone.spans() && !Ink::Burst.spans());
     }
 
     #[test]

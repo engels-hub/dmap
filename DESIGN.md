@@ -218,7 +218,9 @@ Rows below: Color as a swatch, Width as a slider, and Measure as a select when t
 
 The ruler measures a distance. A drag draws a line from the press to the pointer, and a label at the pointer gives the distance in cells and in feet. The second button bends the ruler where the pointer stands, so a measure walks a corridor. `Shift` as the drag ends keeps the measure: the line becomes a stroke in the scene, with a row in the Objects list and a place in the project file. A plain end clears the line, and `Escape` gives it up. Measure says how the ruler counts a diagonal: Euclidean, D&D 5e, Pathfinder or Manhattan.
 
-An area of effect fills its shape at a quarter of the alpha the DM picked, and its outline takes the whole of it, so the map reads through it. A burst takes one drag, from its middle to its edge. A cone and a beam take two: the first drag says how far they reach, and the second how wide they end. A label beside the shape says both numbers.
+An area of effect fills its shape at a quarter of the alpha the DM picked, and its outline takes the whole of it, so the map reads through it. A label beside the shape says how far it reaches, in cells and in feet.
+
+A burst takes one drag, from its middle to its edge. A cone takes one as well, from its point out to where it ends: it is as wide at any point along its length as that point stands far from the point, and it ends on a round edge. D&D 5e, chapter 10. A beam takes two drags, one for its length and one for its width. The second begins after the first ends, so no gesture asks for a button and a move at the same time.
 
 The eraser takes a bite out of every stroke it passes over, and it bites its way along the path the pointer took. What is left of a shape is a free line: a box with a bite out of it is no longer a box.
 

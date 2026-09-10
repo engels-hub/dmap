@@ -357,11 +357,14 @@ impl Nib {
 /// The Draw view's state between frames.
 #[derive(Debug, Default)]
 struct Draw {
-    /// Whether the drag that runs sets the width and not the length.
+    /// Whether the DM is on the second drag, the one that sets the width.
     ///
-    /// A cone and a beam take two drags: one for how far they reach, one
-    /// for how wide they end. Issue #12.
+    /// A beam takes two drags: one for how far it runs, one for how wide.
+    /// Neither drag asks for a button and a move at the same time.
+    /// Issue #12.
     spanning: bool,
+    /// Whether that second drag has begun.
+    pulled: bool,
     /// The stroke under the DM's hand, which is in no scene yet.
     live: Option<Stroke>,
     /// Where the eraser stood last frame, so a fast drag bites nothing
@@ -3521,22 +3524,30 @@ fn draw_tool(
             live.points.push(at);
         }
     }
-    // The second drag of a cone or a beam: the pointer sets the width,
-    // and the next press puts the shape in the scene.
+    // The second drag of a beam says how wide it runs. The width follows
+    // the pointer until the DM takes hold of it, and the beam goes into
+    // the scene when they let go, so neither drag ever asks for a button
+    // and a move at the same time. Issue #12.
     if draw.spanning {
-        if let (Some(at), Some(live)) = (at, draw.live.as_mut()) {
-            live.span = span_of(live, at);
-        }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             draw.spanning = false;
+            draw.pulled = false;
             draw.live = None;
             return false;
         }
-        if !pointer.pressed() {
+        if let (Some(at), Some(live)) = (at, draw.live.as_mut()) {
+            live.span = span_of(live, at);
+        }
+        if pointer.down() {
+            draw.pulled = true;
             return false;
         }
-        draw.spanning = false;
-        return keep(draw.live.take(), frame);
+        if draw.pulled {
+            draw.spanning = false;
+            draw.pulled = false;
+            return keep(draw.live.take(), frame);
+        }
+        return false;
     }
     if let (true, true, Some(at)) = (pointer.pressed(), pointer.hovered, at) {
         frame.history.settle();
