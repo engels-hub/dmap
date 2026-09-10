@@ -2504,7 +2504,9 @@ fn grid_tab(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         let mut opacity = f64::from(paper.opacity_of(mode));
         let shown = text::dialog_settings_opacity_value((opacity * 100.0).round());
         if widget::slider(ui, &mut opacity, 0.0..=1.0, 180.0, &shown).changed() {
-            paper.opacity = Some(opacity as f32);
+            // The row shows whole percent, so it keeps whole percent. A
+            // config file a DM opens holds 0.77, not 0.7713873.
+            paper.opacity = Some((opacity * 100.0).round() as f32 / 100.0);
             edited = true;
         }
     });
