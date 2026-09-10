@@ -565,7 +565,7 @@ pub fn ungroup(scene: &mut Scene, id: NodeId) -> bool {
 }
 
 /// Where an asset stood when a drag began.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Placed {
     /// The asset this belongs to.
     pub id: NodeId,

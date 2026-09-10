@@ -67,6 +67,12 @@ const TV_FALLBACK_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 540.0);
 /// The file that holds one scene, inside the scene's own folder.
 const SCENE_FILE: &str = "scene.json";
 
+/// The name of the file that holds the changes, beside the scene file.
+///
+/// It sits in the scene folder, so a scene that moves to another machine
+/// takes its history along, and a scene that goes takes it with it.
+const HISTORY_FILE: &str = "history.json";
+
 /// The scene a first run opens.
 const FIRST_SCENE: &str = "New scene";
 
@@ -162,6 +168,30 @@ fn load_scene(dir: &Path) -> Result<Scene> {
     }
 }
 
+/// Reads the history of a scene, or starts an empty one.
+///
+/// A file that will not parse costs the DM the steps in it and nothing
+/// more, so this says what went wrong and hands back an empty stack. The
+/// scene itself opens either way.
+fn load_history(dir: &Path) -> History {
+    let path = dir.join(HISTORY_FILE);
+    let json = match std::fs::read_to_string(&path) {
+        Ok(json) => json,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return History::default(),
+        Err(error) => {
+            eprintln!("{}: cannot read the history: {error}", path.display());
+            return History::default();
+        }
+    };
+    match History::from_json(&json) {
+        Ok(history) => history,
+        Err(error) => {
+            eprintln!("{}: broken history: {error}", path.display());
+            History::default()
+        }
+    }
+}
+
 /// What one event left for the program to do.
 #[derive(Debug, Default)]
 struct Outcome {
@@ -215,9 +245,10 @@ struct Running {
     scene: Scene,
     /// Every change the DM made to that tree, for undo and redo.
     ///
-    /// The stack belongs to the open scene, not to the files: a save
-    /// leaves it alone, so the DM saves and undoes past the save. Another
-    /// scene on the canvas clears it.
+    /// The stack belongs to the open scene. A save writes it to
+    /// `history.json` in the scene folder and never cuts it, so the DM
+    /// undoes past a save, and past the end of the program. Another scene
+    /// on the canvas brings the stack of its own folder.
     history: History,
     map_layer: MapLayer,
     grid_layer: GridLayer,
@@ -267,6 +298,7 @@ impl Running {
         for asset in scene::assets(scene) {
             loader.request(scene_dir.join(&asset.path));
         }
+        let history = load_history(&scene_dir);
         Ok(Self {
             gpu,
             dm,
@@ -288,7 +320,7 @@ impl Running {
             scene_error: String::new(),
             active_group: scene::ROOT_ID,
             scene: scene.clone(),
-            history: History::default(),
+            history,
             map_layer,
             grid_layer,
             loader,
@@ -540,12 +572,12 @@ impl Running {
     /// The images of the old scene leave the GPU. A scene names its images
     /// by the file beside it, so two scenes can hold a `grid.png` and the
     /// new one must not draw the old one.
-    fn open_scene(&mut self, dir: PathBuf, scene: &Scene) {
+    fn open_scene(&mut self, dir: PathBuf, scene: &Scene, history: History) {
         self.scene_dir = dir;
         self.scene = scene.clone();
         self.scene.tv_box = scene.tv_box.clamped();
-        // The changes belong to the scene that has left the canvas.
-        self.history.clear();
+        // Every scene brings the changes of its own folder.
+        self.history = history;
         self.map_layer.clear();
         self.reload_images();
         self.dm.window.set_title(&window_title(&self.scene_dir));
@@ -670,9 +702,21 @@ fn reveal(dir: &Path) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error when a folder cannot be made or a file cannot be written.
-fn save(config: &Config, scene: &Scene, scene_dir: &Path) -> Result<()> {
+fn save(config: &Config, scene: &Scene, history: &History, scene_dir: &Path) -> Result<()> {
     save_scene(scene, scene_dir)?;
+    save_history(history, scene_dir)?;
     save_config(config)
+}
+
+/// Writes the changes beside the scene file.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be written.
+fn save_history(history: &History, scene_dir: &Path) -> Result<()> {
+    let file = scene_dir.join(HISTORY_FILE);
+    std::fs::write(&file, history.to_json())
+        .with_context(|| format!("{}: cannot save the history", file.display()))
 }
 
 /// Writes the scene file beside its images.
@@ -723,7 +767,7 @@ impl App {
             running.update(&mut self.config, &mut self.scene);
             // A write that fails leaves the session alone. The DM keeps
             // working, and the message says what went wrong.
-            if let Err(error) = save(&self.config, &self.scene, &self.scene_dir) {
+            if let Err(error) = save(&self.config, &self.scene, &running.history, &self.scene_dir) {
                 eprintln!("{error:#}");
                 running.scene_error = format!("{error:#}");
             }
@@ -795,7 +839,7 @@ impl App {
                 self.config.last_scene = Some(self.config.remember(&self.scene_dir));
             }
         }
-        save(&self.config, &self.scene, &self.scene_dir)
+        save(&self.config, &self.scene, &running.history, &self.scene_dir)
     }
 
     /// Saves the open scene, then puts another one on the canvas.
@@ -805,7 +849,7 @@ impl App {
     /// Returns an error when a file cannot be written or read.
     fn open_scene(&mut self, running: &mut Running, name: &str) -> Result<()> {
         running.update(&mut self.config, &mut self.scene);
-        save(&self.config, &self.scene, &self.scene_dir)?;
+        save(&self.config, &self.scene, &running.history, &self.scene_dir)?;
         self.load_scene(running, name)
     }
 
@@ -820,9 +864,10 @@ impl App {
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("{}: cannot make the scene folder", dir.display()))?;
         self.scene = load_scene(&dir)?;
+        let history = load_history(&dir);
         self.scene_dir.clone_from(&dir);
         self.config.last_scene = Some(self.config.remember(&dir));
-        running.open_scene(dir, &self.scene);
+        running.open_scene(dir, &self.scene, history);
         Ok(())
     }
 }

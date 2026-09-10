@@ -18,6 +18,8 @@
 
 use std::collections::VecDeque;
 
+use serde::{Deserialize, Serialize};
+
 use crate::scene::{Asset, Group, Node, NodeId, Placed, Scene, Shown};
 use crate::tvbox::TvBox;
 
@@ -59,7 +61,7 @@ fn maps(count: usize) -> String {
 }
 
 /// Where the TV box stands, and how wide it is.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SetTvBox {
     /// The box as it stood.
     pub before: TvBox,
@@ -85,7 +87,7 @@ impl Command for SetTvBox {
 ///
 /// One change carries every asset the DM holds, so a drag of four maps is
 /// one step.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SetAssets {
     /// The assets as they stood, one for each asset in `after`.
     pub before: Vec<Asset>,
@@ -140,7 +142,7 @@ fn write_assets(scene: &mut Scene, assets: &[Asset]) {
 ///
 /// The change holds where each asset stood, so the revert writes those
 /// values back and the scene takes no rounding from the way out.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Grow {
     /// Where each asset stood, at what size and at what turn.
     pub starts: Vec<Placed>,
@@ -165,7 +167,7 @@ impl Command for Grow {
 }
 
 /// A set of assets turned around one point, from a drag on the turn handle.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Turn {
     /// Where each asset stood, at what size and at what turn.
     pub starts: Vec<Placed>,
@@ -200,7 +202,7 @@ fn write_placed(scene: &mut Scene, starts: &[Placed]) {
 }
 
 /// What the DM calls a group.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SetName {
     /// The group that takes the name.
     pub id: NodeId,
@@ -232,7 +234,7 @@ impl Command for SetName {
 }
 
 /// Which screens a node draws on.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SetShown {
     /// The node whose switches the DM pressed.
     pub id: NodeId,
@@ -265,10 +267,10 @@ impl Command for SetShown {
 /// The change holds the children of each group it rewrote. A group inside
 /// one of those is left out, because the list of the group above already
 /// carries it. Build one with [`reshape`].
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Restructure {
     /// What the DM did, for the history dialog.
-    pub what: &'static str,
+    pub what: String,
     /// The children each group carried, by group.
     pub before: Vec<(NodeId, Vec<Node>)>,
     /// The children each group carries after the change.
@@ -285,7 +287,7 @@ impl Command for Restructure {
     }
 
     fn label(&self) -> String {
-        self.what.to_owned()
+        self.what.clone()
     }
 }
 
@@ -317,7 +319,7 @@ pub fn reshape(
     let mut after = Vec::new();
     collect_lists(&was, &scene.root, &mut before, &mut after);
     (!after.is_empty()).then_some(Restructure {
-        what,
+        what: what.to_owned(),
         before,
         after,
     })
@@ -364,19 +366,142 @@ fn same_row(was: &[Node], now: &[Node]) -> bool {
         })
 }
 
+/// One step of the history, in the form the project file holds.
+///
+/// The stack keeps this and not a boxed [`Command`], because a step has to
+/// go into `history.json` and come back. Every kind of change turns into
+/// one with `into`, so a tool still hands the history the change it built.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "change", rename_all = "snake_case")]
+pub enum Change {
+    /// See [`SetTvBox`].
+    TvBox(SetTvBox),
+    /// See [`SetAssets`].
+    Assets(SetAssets),
+    /// See [`Grow`].
+    Grow(Grow),
+    /// See [`Turn`].
+    Turn(Turn),
+    /// See [`SetName`].
+    Name(SetName),
+    /// See [`SetShown`].
+    Shown(SetShown),
+    /// See [`Restructure`].
+    Restructure(Restructure),
+}
+
+impl Command for Change {
+    fn apply(&self, scene: &mut Scene) {
+        match self {
+            Self::TvBox(change) => change.apply(scene),
+            Self::Assets(change) => change.apply(scene),
+            Self::Grow(change) => change.apply(scene),
+            Self::Turn(change) => change.apply(scene),
+            Self::Name(change) => change.apply(scene),
+            Self::Shown(change) => change.apply(scene),
+            Self::Restructure(change) => change.apply(scene),
+        }
+    }
+
+    fn revert(&self, scene: &mut Scene) {
+        match self {
+            Self::TvBox(change) => change.revert(scene),
+            Self::Assets(change) => change.revert(scene),
+            Self::Grow(change) => change.revert(scene),
+            Self::Turn(change) => change.revert(scene),
+            Self::Name(change) => change.revert(scene),
+            Self::Shown(change) => change.revert(scene),
+            Self::Restructure(change) => change.revert(scene),
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Self::TvBox(change) => change.label(),
+            Self::Assets(change) => change.label(),
+            Self::Grow(change) => change.label(),
+            Self::Turn(change) => change.label(),
+            Self::Name(change) => change.label(),
+            Self::Shown(change) => change.label(),
+            Self::Restructure(change) => change.label(),
+        }
+    }
+}
+
+impl From<SetTvBox> for Change {
+    fn from(change: SetTvBox) -> Self {
+        Self::TvBox(change)
+    }
+}
+
+impl From<SetAssets> for Change {
+    fn from(change: SetAssets) -> Self {
+        Self::Assets(change)
+    }
+}
+
+impl From<Grow> for Change {
+    fn from(change: Grow) -> Self {
+        Self::Grow(change)
+    }
+}
+
+impl From<Turn> for Change {
+    fn from(change: Turn) -> Self {
+        Self::Turn(change)
+    }
+}
+
+impl From<SetName> for Change {
+    fn from(change: SetName) -> Self {
+        Self::Name(change)
+    }
+}
+
+impl From<SetShown> for Change {
+    fn from(change: SetShown) -> Self {
+        Self::Shown(change)
+    }
+}
+
+impl From<Restructure> for Change {
+    fn from(change: Restructure) -> Self {
+        Self::Restructure(change)
+    }
+}
+
+/// The stack as `history.json` gives it back.
+#[derive(Debug, Default, Deserialize)]
+struct Read {
+    /// How many of the steps stand written. The rest the DM took back.
+    #[serde(default)]
+    place: usize,
+    /// Every step, oldest first.
+    #[serde(default)]
+    steps: Vec<Change>,
+}
+
+/// The same, on the way out, so no step is cloned to be written.
+#[derive(Debug, Serialize)]
+struct Written<'a> {
+    place: usize,
+    steps: Vec<&'a Change>,
+}
+
 /// The changes the DM made, and the ones they took back.
 ///
 /// The stack keeps [`STEPS`] changes. An older one falls off the bottom.
-/// A save does not touch the stack, so the DM saves and undoes past the
-/// save. A new scene clears it with [`History::clear`].
+/// It lives beside the scene in `history.json`, so the DM closes the
+/// program and undoes yesterday's work tomorrow. A new scene brings its
+/// own stack.
 #[derive(Debug, Default)]
 pub struct History {
     /// What the DM did, oldest first.
-    done: VecDeque<Box<dyn Command>>,
+    done: VecDeque<Change>,
     /// What the DM took back, the last one last.
-    undone: Vec<Box<dyn Command>>,
+    undone: Vec<Change>,
     /// The change under the DM's hand, which is not a step yet.
-    open: Option<Box<dyn Command>>,
+    open: Option<Change>,
 }
 
 impl History {
@@ -385,10 +510,11 @@ impl History {
     /// The history drops the change it held and keeps this one, so a drag
     /// is one step. Every frame of the drag must carry the same `before`,
     /// because that is the state the undo goes back to.
-    pub fn hold(&mut self, scene: &mut Scene, change: impl Command + 'static) {
+    pub fn hold(&mut self, scene: &mut Scene, change: impl Into<Change>) {
+        let change = change.into();
         change.apply(scene);
         self.undone.clear();
-        self.open = Some(Box::new(change));
+        self.open = Some(change);
     }
 
     /// Closes the change [`History::hold`] wrote, once the drag ends.
@@ -406,7 +532,7 @@ impl History {
     ///
     /// A change the DM still had under their hand becomes a step of its
     /// own first, so a press of a button never swallows the drag before it.
-    pub fn run(&mut self, scene: &mut Scene, change: impl Command + 'static) {
+    pub fn run(&mut self, scene: &mut Scene, change: impl Into<Change>) {
         self.settle();
         self.hold(scene, change);
         self.settle();
@@ -416,10 +542,10 @@ impl History {
     ///
     /// [`reshape`] writes the tree while it reads what moved, so its
     /// result comes in here.
-    pub fn kept(&mut self, change: impl Command + 'static) {
+    pub fn kept(&mut self, change: impl Into<Change>) {
         self.settle();
         self.undone.clear();
-        self.open = Some(Box::new(change));
+        self.open = Some(change.into());
         self.settle();
     }
 
@@ -455,7 +581,7 @@ impl History {
         self.done
             .iter()
             .chain(self.undone.iter().rev())
-            .map(|change| change.label())
+            .map(Command::label)
             .collect()
     }
 
@@ -479,11 +605,38 @@ impl History {
         moved
     }
 
-    /// Drops every change, for a scene that has nothing to do with them.
-    pub fn clear(&mut self) {
-        self.done.clear();
-        self.undone.clear();
-        self.open = None;
+    /// The stack as JSON, for the file beside the scene.
+    ///
+    /// The change under the DM's hand is left out. It is no step yet, and
+    /// the program writes the files only once the DM lets go.
+    ///
+    /// The JSON holds no line breaks. A step carries every value it wrote,
+    /// and a step that reshaped the tree carries whole branches of it, so
+    /// a hundred pretty-printed steps would make a file no one reads
+    /// anyway large.
+    pub fn to_json(&self) -> String {
+        let file = Written {
+            place: self.done.len(),
+            steps: self.done.iter().chain(self.undone.iter().rev()).collect(),
+        };
+        serde_json::to_string(&file).expect("a change has no unserializable field")
+    }
+
+    /// Reads a stack that a run before this one wrote.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the JSON does not hold a stack.
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        let file: Read = serde_json::from_str(json)?;
+        let mut steps = file.steps;
+        let place = file.place.min(steps.len());
+        let taken_back: Vec<Change> = steps.split_off(place).into_iter().rev().collect();
+        Ok(Self {
+            done: steps.into(),
+            undone: taken_back,
+            open: None,
+        })
     }
 }
 
@@ -775,9 +928,17 @@ mod tests {
     }
 
     #[test]
-    fn a_new_scene_clears_the_stack() {
+    fn a_stack_comes_back_from_its_file() {
         let mut scene = scene();
+        let start = scene.clone();
         let mut history = History::default();
+        history.run(
+            &mut scene,
+            SetAssets {
+                before: vec![asset(1, (0.0, 0.0))],
+                after: vec![asset(1, (2.0, 0.0))],
+            },
+        );
         history.run(
             &mut scene,
             SetName {
@@ -786,9 +947,42 @@ mod tests {
                 after: "Cave".to_owned(),
             },
         );
-        history.clear();
+        let change = reshape(&mut scene, "Delete", |scene| {
+            crate::scene::take_node(scene, 2);
+        })
+        .unwrap();
+        history.kept(change);
+        // One step the DM took back must come back as one they can write
+        // again, not as one that is gone.
+        assert!(history.undo(&mut scene));
+        let written = history.to_json();
+        let saved = scene.clone();
+
+        let mut back = History::from_json(&written).unwrap();
+        assert_eq!(back.steps(), history.steps());
+        assert_eq!(back.place(), 2);
+        assert!(back.redo(&mut scene));
+        assert!(back.walk_to(&mut scene, 0));
+        assert_eq!(scene, start);
+        assert!(back.walk_to(&mut scene, 2));
+        assert_eq!(scene, saved);
+    }
+
+    #[test]
+    fn a_file_that_says_more_steps_than_it_holds_stops_at_the_end() {
+        let mut scene = scene();
+        let history = History::from_json(r#"{"place":9,"steps":[]}"#).unwrap();
+        assert_eq!(history.place(), 0);
+        assert!(history.steps().is_empty());
+        let mut history = history;
         assert!(!history.undo(&mut scene));
-        assert!(!history.redo(&mut scene));
+    }
+
+    #[test]
+    fn a_scene_folder_with_no_history_file_reads_as_an_empty_stack() {
+        let history = History::from_json("{}").unwrap();
+        assert_eq!(history.place(), 0);
+        assert!(history.steps().is_empty());
     }
 
     #[test]
@@ -796,7 +990,7 @@ mod tests {
         let mut scene = scene();
         let before = scene.root.children.clone();
         let change = Restructure {
-            what: "Delete",
+            what: "Delete".to_owned(),
             before: vec![(ROOT_ID, before.clone())],
             after: vec![(ROOT_ID, Vec::new())],
         };
