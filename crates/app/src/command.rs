@@ -36,6 +36,26 @@ pub trait Command: std::fmt::Debug {
 
     /// Puts `scene` back the way it stood before [`Command::apply`].
     fn revert(&self, scene: &mut Scene);
+
+    /// What the history dialog calls this change. DESIGN.md 9.6.
+    fn label(&self) -> String;
+}
+
+/// Whether two numbers of the scene stand apart.
+///
+/// The history only asks which field a step wrote, so the smallest step a
+/// number can take is a change.
+fn differs(was: f64, now: f64) -> bool {
+    (was - now).abs() > f64::EPSILON
+}
+
+/// How a step names the assets it touched: one map, or a count of them.
+fn maps(count: usize) -> String {
+    if count == 1 {
+        "a map".to_owned()
+    } else {
+        format!("{count} maps")
+    }
 }
 
 /// Where the TV box stands, and how wide it is.
@@ -54,6 +74,10 @@ impl Command for SetTvBox {
 
     fn revert(&self, scene: &mut Scene) {
         scene.tv_box = self.before;
+    }
+
+    fn label(&self) -> String {
+        "The TV box".to_owned()
     }
 }
 
@@ -76,6 +100,31 @@ impl Command for SetAssets {
 
     fn revert(&self, scene: &mut Scene) {
         write_assets(scene, &self.before);
+    }
+
+    fn label(&self) -> String {
+        let count = maps(self.after.len());
+        let Some((was, now)) = self
+            .before
+            .iter()
+            .zip(&self.after)
+            .find(|(was, now)| was != now)
+        else {
+            return count;
+        };
+        if was.center != now.center {
+            format!("Move {count}")
+        } else if differs(was.rotation, now.rotation) {
+            format!("Turn {count}")
+        } else if differs(was.scale, now.scale) {
+            format!("Size {count}")
+        } else if was.flip_x != now.flip_x || was.flip_y != now.flip_y {
+            format!("Flip {count}")
+        } else if differs(was.grid_px, now.grid_px) {
+            format!("The grid size of {count}")
+        } else {
+            count
+        }
     }
 }
 
@@ -109,6 +158,10 @@ impl Command for Grow {
     fn revert(&self, scene: &mut Scene) {
         write_placed(scene, &self.starts);
     }
+
+    fn label(&self) -> String {
+        format!("Size {}", maps(self.starts.len()))
+    }
 }
 
 /// A set of assets turned around one point, from a drag on the turn handle.
@@ -129,6 +182,10 @@ impl Command for Turn {
 
     fn revert(&self, scene: &mut Scene) {
         write_placed(scene, &self.starts);
+    }
+
+    fn label(&self) -> String {
+        format!("Turn {}", maps(self.starts.len()))
     }
 }
 
@@ -165,6 +222,13 @@ impl Command for SetName {
             group.name.clone_from(&self.before);
         }
     }
+
+    fn label(&self) -> String {
+        if self.after.is_empty() {
+            return "Rename a group".to_owned();
+        }
+        format!("Rename to {}", self.after)
+    }
 }
 
 /// Which screens a node draws on.
@@ -190,6 +254,10 @@ impl Command for SetShown {
             *shown = self.before;
         }
     }
+
+    fn label(&self) -> String {
+        "Show or hide".to_owned()
+    }
 }
 
 /// A new shape for the tree: an add, a delete, a move, an order or a group.
@@ -199,6 +267,8 @@ impl Command for SetShown {
 /// carries it. Build one with [`reshape`].
 #[derive(Debug)]
 pub struct Restructure {
+    /// What the DM did, for the history dialog.
+    pub what: &'static str,
     /// The children each group carried, by group.
     pub before: Vec<(NodeId, Vec<Node>)>,
     /// The children each group carries after the change.
@@ -212,6 +282,10 @@ impl Command for Restructure {
 
     fn revert(&self, scene: &mut Scene) {
         write_children(scene, &self.before);
+    }
+
+    fn label(&self) -> String {
+        self.what.to_owned()
     }
 }
 
@@ -228,17 +302,25 @@ fn write_children(scene: &mut Scene, lists: &[(NodeId, Vec<Node>)]) {
 /// The scene helpers move nodes around in place, and a tool reaches them
 /// through this function: it keeps the tree, runs `change`, and reads the
 /// groups the change rewrote out of the two trees. A `change` that moved
-/// nothing gives `None`.
+/// nothing gives `None`. The name `what` goes to the history dialog.
 ///
 /// The change is in the scene already when this returns, so the result
 /// goes to [`History::kept`], not to [`History::run`].
-pub fn reshape(scene: &mut Scene, change: impl FnOnce(&mut Scene)) -> Option<Restructure> {
+pub fn reshape(
+    scene: &mut Scene,
+    what: &'static str,
+    change: impl FnOnce(&mut Scene),
+) -> Option<Restructure> {
     let was = scene.root.clone();
     change(scene);
     let mut before = Vec::new();
     let mut after = Vec::new();
     collect_lists(&was, &scene.root, &mut before, &mut after);
-    (!after.is_empty()).then_some(Restructure { before, after })
+    (!after.is_empty()).then_some(Restructure {
+        what,
+        before,
+        after,
+    })
 }
 
 /// Walks two versions of one group and keeps the lists that differ.
@@ -364,6 +446,37 @@ impl History {
         change.apply(scene);
         self.done.push_back(change);
         true
+    }
+
+    /// Every step on the stack, oldest first. DESIGN.md 9.6.
+    ///
+    /// The steps past [`History::place`] are the ones the DM took back.
+    pub fn steps(&self) -> Vec<String> {
+        self.done
+            .iter()
+            .chain(self.undone.iter().rev())
+            .map(|change| change.label())
+            .collect()
+    }
+
+    /// How many steps stand written. The rest the DM took back.
+    pub fn place(&self) -> usize {
+        self.done.len()
+    }
+
+    /// Walks the scene to the state after `place` steps.
+    ///
+    /// Returns `true` when the scene moved. A place past the end of the
+    /// stack walks as far as the stack goes.
+    pub fn walk_to(&mut self, scene: &mut Scene, place: usize) -> bool {
+        let mut moved = false;
+        while self.done.len() > place && self.undo(scene) {
+            moved = true;
+        }
+        while self.done.len() < place && self.redo(scene) {
+            moved = true;
+        }
+        moved
     }
 
     /// Drops every change, for a scene that has nothing to do with them.
@@ -548,7 +661,7 @@ mod tests {
     fn a_delete_in_the_root_keeps_only_the_root_list() {
         let mut scene = scene();
         let start = scene.clone();
-        let change = reshape(&mut scene, |scene| {
+        let change = reshape(&mut scene, "Delete", |scene| {
             crate::scene::take_node(scene, 2);
         })
         .unwrap();
@@ -565,7 +678,7 @@ mod tests {
         let mut scene = scene();
         scene.root.children.push(Node::Asset(asset(4, (0.0, 6.0))));
         let start = scene.clone();
-        let change = reshape(&mut scene, |scene| {
+        let change = reshape(&mut scene, "Move", |scene| {
             crate::scene::move_into(scene, 4, 7);
         })
         .unwrap();
@@ -585,7 +698,7 @@ mod tests {
             group.children.push(Node::Asset(asset(5, (9.0, 3.0))));
         }
         let start = scene.clone();
-        let change = reshape(&mut scene, |scene| {
+        let change = reshape(&mut scene, "Order", |scene| {
             crate::scene::reorder_all(scene, &[3], true);
         })
         .unwrap();
@@ -602,11 +715,63 @@ mod tests {
         let mut scene = scene();
         // The group stands on top of the root already.
         assert!(
-            reshape(&mut scene, |scene| {
+            reshape(&mut scene, "Move", |scene| {
                 crate::scene::move_into(scene, 7, ROOT_ID);
             })
             .is_none()
         );
+    }
+
+    #[test]
+    fn the_step_list_reads_oldest_first_and_keeps_what_was_taken_back() {
+        let mut scene = scene();
+        let mut history = History::default();
+        history.run(
+            &mut scene,
+            SetAssets {
+                before: vec![asset(1, (0.0, 0.0))],
+                after: vec![asset(1, (1.0, 0.0))],
+            },
+        );
+        history.run(
+            &mut scene,
+            SetName {
+                id: 7,
+                before: "Group 7".to_owned(),
+                after: "Cave".to_owned(),
+            },
+        );
+        assert_eq!(history.steps(), vec!["Move a map", "Rename to Cave"]);
+        assert_eq!(history.place(), 2);
+        assert!(history.undo(&mut scene));
+        // The step the DM took back stays on the list, behind the place.
+        assert_eq!(history.steps(), vec!["Move a map", "Rename to Cave"]);
+        assert_eq!(history.place(), 1);
+    }
+
+    #[test]
+    fn a_walk_goes_to_the_step_the_dm_picked() {
+        let mut scene = scene();
+        let start = scene.clone();
+        let mut history = History::default();
+        for step in 1..=4 {
+            let frame = f64::from(step);
+            history.run(
+                &mut scene,
+                SetAssets {
+                    before: vec![asset(1, (frame - 1.0, 0.0))],
+                    after: vec![asset(1, (frame, 0.0))],
+                },
+            );
+        }
+        let all = scene.clone();
+        assert!(history.walk_to(&mut scene, 0));
+        assert_eq!(scene, start);
+        assert_eq!(history.place(), 0);
+        assert!(history.walk_to(&mut scene, 4));
+        assert_eq!(scene, all);
+        // The place it stands on already asks for no walk.
+        assert!(!history.walk_to(&mut scene, 4));
     }
 
     #[test]
@@ -631,6 +796,7 @@ mod tests {
         let mut scene = scene();
         let before = scene.root.children.clone();
         let change = Restructure {
+            what: "Delete",
             before: vec![(ROOT_ID, before.clone())],
             after: vec![(ROOT_ID, Vec::new())],
         };

@@ -92,13 +92,15 @@ The canvas takes its controls from Figma.
 | Back to the zoom a project opens with | `Ctrl` with `0` |
 | Put the whole TV box on the screen | `T` |
 | Take the last change back | `Ctrl` with `Z` |
-| Make the change again | `Ctrl` and `Shift` with `Z` |
+| Make the change again | `Ctrl` and `Shift` with `Z`, or `Ctrl` with `Y` |
 
 The DM view is the game master's own. The TV never moves with it.
 
 `Ctrl` with `Z` takes back the last change to the scene. Every change counts: a drag, a key, a field in a panel, a switch in the list, and the TV box. One drag is one step, however many frames it covers. The stack holds a hundred steps. A save leaves the stack alone, so you undo past a save. Another scene on the canvas clears the stack.
 
 A field that holds the keyboard keeps an undo of its own. There `Ctrl` with `Z` works on the text you type.
+
+The **History** button in the bottom right corner opens the list of your changes, the newest first. A click on a step takes the scene to the state after that step. The steps you took back stay on the list, in grey, so one click walks forward again. The last row, "Before the first change", takes the scene to where the stack begins.
 
 Pick a view in the toolbar at the bottom of the window. The toolbar comes in two boxes. The left one holds the views, and one of them is always on. The right one holds Scenes, Add map and Settings, which open something at once and never stay on.
 

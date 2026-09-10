@@ -108,6 +108,12 @@ const ROW_GAP: f32 = 16.0;
 /// The height of the footer of a dialog, in points. DESIGN.md 9.
 const FOOTER: f32 = 48.0;
 
+/// The height of one step row in the history dialog, in points.
+///
+/// DESIGN.md 9.8 gives a step the height of a scene row. A step holds one
+/// line and no control, so the row needs no more room than a name.
+const STEP_ROW: f32 = 34.0;
+
 /// The height of one scene row, in points. DESIGN.md 9.6.
 const SCENE_ROW: f32 = 40.0;
 
@@ -189,6 +195,10 @@ const REDO: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
     egui::Key::Z,
 );
 
+/// The same, for a DM who learned redo in a Windows program.
+const REDO_Y: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
+
 /// Back to the zoom a new project opens with.
 const ZOOM_RESET: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Num0);
@@ -208,6 +218,8 @@ pub struct DmUi {
     tree: Tree,
     /// The settings dialog and the tab it shows.
     dialog: Dialog,
+    /// Whether the history dialog stands. DESIGN.md 9.8.
+    history_open: bool,
     /// The theme the context carries, so a change installs once.
     theme: theme::Mode,
     /// The interface scale the context carries, for the same reason.
@@ -524,6 +536,7 @@ impl DmUi {
             scenes: Scenes::default(),
             tree: Tree::default(),
             dialog: Dialog::default(),
+            history_open: false,
             theme: theme::Mode::default(),
             ui_scale: theme::DEFAULT_SCALE,
             frame_box: false,
@@ -566,6 +579,7 @@ impl DmUi {
         let scenes = &mut self.scenes;
         let tree = &mut self.tree;
         let dialog = &mut self.dialog;
+        let history_open = &mut self.history_open;
         let frame_box = &mut self.frame_box;
         let zoom_goes_to = &mut self.zoom_goes_to;
         let selected_before = select.chosen.clone();
@@ -577,7 +591,7 @@ impl DmUi {
             // floats over it. So the canvas takes the whole rect, and the
             // panels come after it and draw on top.
             let rect = ui.ctx().content_rect();
-            let over = popup_open || scenes.open || dialog.open;
+            let over = popup_open || scenes.open || dialog.open || *history_open;
             if !over {
                 frame_tv_box(ui, &mut frame, rect, viewport, *frame_box);
                 // The ask lives one frame, because the panel that raised it
@@ -603,6 +617,10 @@ impl DmUi {
                 frame_box,
                 tokens,
             );
+            if history_button(ui, tokens) {
+                *history_open = !*history_open;
+            }
+            edited |= history_dialog(ui, history_open, &mut frame, tokens);
             match toolbar(ui, *tool, tokens) {
                 Some(Press::View(view)) => *tool = view,
                 Some(Press::Scenes) => scenes.open = !scenes.open,
@@ -634,15 +652,7 @@ impl DmUi {
             // properties of a new selection need one more frame to show.
             || self.select.chosen != selected_before;
 
-        // A change nobody holds any more becomes one step of the history.
-        // A drag of the canvas closes its own step, so this one catches the
-        // fields of a panel and the keys.
-        let dragging = self.select.drag.is_some() || self.table.drag.is_some();
-        if !dragging && !ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input() {
-            frame.history.settle();
-            self.select.opened = None;
-            self.table.opened = None;
-        }
+        self.settle_history(&ctx, frame.history);
         // Save once a drag is over, not on every frame of it.
         self.dirty |= edited;
         let save = self.dirty && self.select.drag.is_none() && self.table.drag.is_none();
@@ -662,6 +672,20 @@ impl DmUi {
                 repaint,
             },
         }
+    }
+
+    /// Closes a step of the history that nobody holds any more.
+    ///
+    /// A drag of the canvas closes its own step when the button goes up, so
+    /// this catches the fields of a panel and the keys.
+    fn settle_history(&mut self, ctx: &egui::Context, history: &mut History) {
+        let dragging = self.select.drag.is_some() || self.table.drag.is_some();
+        if dragging || ctx.egui_is_using_pointer() || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        history.settle();
+        self.select.opened = None;
+        self.table.opened = None;
     }
 
     /// Draws the canvas through `draw_canvas`, then the UI on top of it.
@@ -876,6 +900,165 @@ fn painter_dashes(ui: &egui::Ui, line: &[egui::Pos2; 2], color: egui::Color32) {
         SEGMENT_DASH,
         SEGMENT_DASH,
     ));
+}
+
+/// The History button in the corner of the window. DESIGN.md 5.7.
+///
+/// It takes the shape of a toolbar entry, because it does the same kind of
+/// work. It stands on its own in the corner, away from the views, because
+/// it belongs to no view: the history holds every change the DM made.
+///
+/// Returns `true` when the DM pressed it.
+fn history_button(ui: &egui::Ui, tokens: Tokens) -> bool {
+    let label = "History";
+    let font = theme::font(theme::SMALL, false);
+    let text = ui.ctx().fonts_mut(|fonts| {
+        fonts
+            .layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    });
+    let width = (text + 2.0 * TOOL_PAD).max(TOOL_WIDTH).ceil();
+    let screen = ui.ctx().content_rect();
+    let left_top = egui::pos2(
+        screen.right() - MARGIN - width,
+        screen.bottom() - MARGIN - TOOL_HEIGHT,
+    );
+    let mut pressed = false;
+    egui::Area::new(egui::Id::new("history button"))
+        .order(egui::Order::Middle)
+        .fixed_pos(left_top)
+        .show(ui.ctx(), |ui| {
+            let (whole, _) =
+                ui.allocate_exact_size(egui::vec2(width, TOOL_HEIGHT), egui::Sense::hover());
+            widget::shadow_box(ui, whole, tokens);
+            pressed = tool_entry(
+                ui,
+                whole,
+                whole.shrink(1.0),
+                label,
+                Icon::Undo,
+                false,
+                tokens,
+            )
+            .clicked();
+        });
+    pressed
+}
+
+/// Every change the DM made, newest first. DESIGN.md 9.8.
+///
+/// A click on a step takes the scene to the state after that step. The
+/// steps the DM took back stay on the list in `mute`, so a walk forward
+/// is a click as well. Returns `true` when the scene moved.
+fn history_dialog(ui: &egui::Ui, open: &mut bool, frame: &mut Frame<'_>, tokens: Tokens) -> bool {
+    if !*open {
+        return false;
+    }
+    // A step the DM is still making is no step yet, and the walk would
+    // write over it.
+    frame.history.settle();
+    let steps = frame.history.steps();
+    let place = frame.history.place();
+    let mut go_to = None;
+    let close = dialog_frame(
+        ui.ctx(),
+        "history",
+        "History",
+        egui::vec2(460.0, 440.0),
+        tokens,
+        |ui, rest| {
+            let footer = egui::Rect::from_min_size(
+                egui::pos2(rest.left(), rest.bottom() - FOOTER),
+                egui::vec2(rest.width(), FOOTER),
+            );
+            let body = egui::Rect::from_min_max(
+                egui::pos2(rest.left() + 20.0, rest.top() + 18.0),
+                egui::pos2(rest.right() - 20.0, footer.top() - 18.0),
+            );
+            let mut body_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(body)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            body_ui.set_clip_rect(body);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(&mut body_ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    // The newest change stands at the top, as the objects
+                    // list puts the top of the pile first.
+                    for (index, label) in steps.iter().enumerate().rev() {
+                        let step = index + 1;
+                        if step_row(ui, label, step == place, step > place, tokens) {
+                            go_to = Some(step);
+                        }
+                    }
+                    if step_row(ui, "Before the first change", place == 0, false, tokens) {
+                        go_to = Some(0);
+                    }
+                });
+            let mut foot = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(footer.shrink2(egui::vec2(20.0, 0.0)))
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            widget::rule_bottom(
+                ui,
+                egui::Rect::from_min_size(
+                    egui::pos2(footer.left(), footer.top()),
+                    egui::vec2(footer.width(), 0.0),
+                ),
+                tokens,
+            );
+            widget::helper(&mut foot, "A click on a step takes the scene there.");
+        },
+    );
+    if close {
+        *open = false;
+    }
+    match go_to {
+        Some(step) => frame.history.walk_to(frame.scene, step),
+        None => false,
+    }
+}
+
+/// One step on the history list. Returns `true` when the DM clicked it.
+///
+/// The step the scene stands on takes the `accent` and the `raised`
+/// background, as a picked row does. A step the DM took back draws in
+/// `mute`, because it says what a walk forward would write again.
+fn step_row(ui: &mut egui::Ui, label: &str, here: bool, undone: bool, tokens: Tokens) -> bool {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), STEP_ROW),
+        egui::Sense::click(),
+    );
+    if here {
+        ui.painter().rect_filled(rect, 0, tokens.raised);
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(rect.left_top(), egui::vec2(widget::BAR, rect.height())),
+            0,
+            tokens.accent,
+        );
+    } else if response.hovered() {
+        ui.painter().rect_filled(rect, 0, tokens.field);
+    }
+    widget::rule_bottom(ui, rect, tokens);
+    let color = if here {
+        tokens.accent
+    } else if undone {
+        tokens.mute
+    } else {
+        tokens.ink
+    };
+    ui.painter().text(
+        egui::pos2(rect.left() + 12.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        theme::font(theme::BODY, here),
+        color,
+    );
+    response.clicked()
 }
 
 /// One entry of the toolbar: the glyph over its label. DESIGN.md 5.2.
@@ -1166,7 +1349,7 @@ fn act_on(frame: &mut Frame<'_>, select: &mut Select, tree: &mut Tree, asked: As
     if let Some(id) = asked.new_group {
         let new = Group::new(id, format!("Group {id}"));
         let into = tree.active;
-        if let Some(change) = reshape(frame.scene, |scene| {
+        if let Some(change) = reshape(frame.scene, "New group", |scene| {
             crate::scene::push_into(scene, into, Node::Group(new));
         }) {
             frame.history.kept(change);
@@ -1178,7 +1361,7 @@ fn act_on(frame: &mut Frame<'_>, select: &mut Select, tree: &mut Tree, asked: As
     if let Some(id) = asked.ungroup {
         // What was in the group stands where it stood.
         let freed = crate::scene::assets_of(frame.scene, id);
-        if let Some(change) = reshape(frame.scene, |scene| {
+        if let Some(change) = reshape(frame.scene, "Ungroup", |scene| {
             crate::scene::ungroup(scene, id);
         }) {
             frame.history.kept(change);
@@ -1187,7 +1370,7 @@ fn act_on(frame: &mut Frame<'_>, select: &mut Select, tree: &mut Tree, asked: As
         }
     }
     if let Some((node, target, into)) = asked.moved
-        && let Some(change) = reshape(frame.scene, |scene| {
+        && let Some(change) = reshape(frame.scene, "Move in the list", |scene| {
             if into {
                 crate::scene::move_into(scene, node, target);
             } else {
@@ -2761,7 +2944,7 @@ fn map_properties(
             }
         });
     if let Some(group) = move_to
-        && let Some(change) = reshape(frame.scene, |scene| {
+        && let Some(change) = reshape(frame.scene, "Another group", |scene| {
             crate::scene::move_into(scene, id, group);
         })
     {
@@ -3040,7 +3223,7 @@ fn selection_popup(
         let name = format!("Group {}", frame.scene.next_id());
         let chosen = select.chosen.clone();
         let mut made = None;
-        let change = reshape(frame.scene, |scene| {
+        let change = reshape(frame.scene, "Group", |scene| {
             made = crate::scene::group_selection(scene, &chosen, name);
         });
         if let (Some(change), Some(id)) = (change, made) {
@@ -3464,7 +3647,7 @@ fn keys(ui: &egui::Ui, select: &mut Select, frame: &mut Frame<'_>) -> bool {
                 }
                 select.note.clear();
                 let toward_top = *key == egui::Key::PageUp;
-                if let Some(change) = reshape(frame.scene, |scene| {
+                if let Some(change) = reshape(frame.scene, "Order", |scene| {
                     crate::scene::reorder_all(scene, &held, toward_top);
                 }) {
                     frame.history.kept(change);
@@ -3518,7 +3701,9 @@ fn undo_keys(ui: &egui::Ui, frame: &mut Frame<'_>) -> bool {
     }
     // Redo goes first. Ctrl and Shift with Z would answer to the undo
     // shortcut as well, and the one that reads the event first takes it.
-    if ui.input_mut(|input| input.consume_shortcut(&REDO)) {
+    let redo =
+        ui.input_mut(|input| input.consume_shortcut(&REDO) || input.consume_shortcut(&REDO_Y));
+    if redo {
         return frame.history.redo(frame.scene);
     }
     if ui.input_mut(|input| input.consume_shortcut(&UNDO)) {

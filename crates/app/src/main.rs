@@ -383,7 +383,7 @@ impl Running {
         let id = self.scene.next_id();
         let asset = Asset::new(id, stored, self.camera.center);
         let into = self.active_group;
-        let Some(change) = reshape(&mut self.scene, |scene| {
+        let Some(change) = reshape(&mut self.scene, "Add a map", |scene| {
             push_into(scene, into, Node::Asset(asset));
         }) else {
             return false;
