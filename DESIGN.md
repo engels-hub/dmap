@@ -160,7 +160,7 @@ Two rules hold for every control:
 | Segmented control | Segments 28 px high, 10 px horizontal padding, 1 px `rule` border, borders overlap by 1 px. The selected segment has `raised` background, `accent` text and a 3 px `accent` bar on its bottom edge. |
 | Checkbox | 18 px square, 1 px border (`ink` when checked, `rule` when not), `field` background, `check` glyph 14 px in `accent`. Label 14 px to the right, gap 8 px. A label too long for its row wraps under itself. |
 | Slider | Track 2 px `rule`, filled part `ink`, knob 14 px square with 1 px `ink` border and `field` background. Value text in `mute` to the right. |
-| Color swatch | 28 px square, 1 px `rule` border, the hex value 14 px to the right. A click opens the color popover. |
+| Color swatch | 28 px square, 1 px `rule` border, the hex value 14 px to the right. A click opens the color popover. The popover gives a hue, a shade and an alpha. It gives no additive mode, because the canvas blends on alpha only. The alpha stays above zero, so a stroke is always visible. |
 | Button | Height 28 px, 10 px horizontal padding, 1 px `ink` border, `field` background, 14 px text. A button in a panel is 26 px high. A button in a row is 24 px high. No button goes under 24 px. |
 | Key chip | Height 22 px, 8 px horizontal padding, 1 px `rule` border, `field` background, 14 px text. |
 | Search field | As text input, with a `search` glyph 16 px on the left and an 8 px gap. |
@@ -210,9 +210,29 @@ Rows: Zoom in percent, with the helper "100 % is true size on the TV"; Move, wit
 
 ### 8.3 Draw panel, in the Draw view
 
-A row of six 28 px squares holds the pen, the line, the rectangle, the ellipse, the eraser and the ruler. The squares share a 1 px `rule` border and overlap by 1 px. The chosen square takes the segmented control treatment. Rows below: Color as a swatch, Width as a slider. The ruler takes the same color and the same width as a stroke.
+A row of six 28 px squares holds the pen, the line, the rectangle, the ellipse, the eraser and the ruler. One 1 px `rule` border holds the whole row, and a dashed 1 px line in `rule` stands between each pair, dash and gap 3 px, as the views do in the toolbar. See 5.2. The chosen square takes the `raised` background and a 3 px `accent` bar on its top edge, and its glyph takes `accent`.
 
-The ruler measures a distance. A drag draws a line from the press to the pointer, and a label at the pointer gives the distance. A click in the drag sets a waypoint, so the line bends. `Shift` as the drag ends keeps the measure: the line becomes an asset in the scene, with a row in the Objects list and a place in the project file. A plain end clears the line.
+Under it stands the label Effects and a second row of three squares: the burst, the cone and the beam. They lie over the map instead of marking it, and a row of nine squares outgrows the panel.
+
+Rows below: Color as a swatch, the checkbox "Start on the grid", Width as a slider, and Measure as a select when the ruler is on. Every one of these is a choice the program keeps, so the next stroke draws as the last one did.
+
+A shape starts on a crossing of the grid while that checkbox is on, because a spell lands on a cell. `Shift` holds the snap off for one drag. The ruler takes `Alt` for that instead, because `Shift` there keeps the measure. A free line from the pen never snaps: it follows the hand.
+
+The ruler measures a distance. A drag draws a line from the press to the pointer, and a label at the pointer gives the distance in cells and in feet. The second button bends the ruler where the pointer stands, so a measure walks a corridor. `Shift` as the drag ends keeps the measure: the line becomes a stroke in the scene, with a row in the Objects list and a place in the project file. A plain end clears the line, and `Escape` gives it up. Measure says how the ruler counts a diagonal: Euclidean, D&D 5e, Pathfinder or Manhattan.
+
+An area of effect fills its shape at a quarter of the alpha the DM picked, and its outline takes the whole of it, so the map reads through it. A label beside the shape says how far it reaches, in cells and in feet.
+
+A burst takes one drag, from its middle to its edge. A cone takes one as well, from its point out to where it ends: it ends as wide as it is long, on a straight edge. D&D 5e, chapter 10. A beam takes two drags, one for its length and one for its width. The second begins after the first ends, so no gesture asks for a button and a move at the same time.
+
+The eraser takes a bite out of every stroke it passes over, and it bites its way along the path the pointer took. What is left of a shape is a free line: a box with a bite out of it is no longer a box. The pieces of one stroke join a group, so the objects list holds them together, and a later bite keeps to that group.
+
+An area of effect and a kept measure come away whole. Each one stands for one thing, a spell over a patch of the map or a distance read off it, and a piece of either says nothing. The eraser takes them from anywhere inside them, not from their line alone.
+
+**The panel of a stroke, in the Select view**
+
+A stroke the DM picked opens a panel of its own, headed with what it is: Pen, Line, Rectangle, Ellipse, Ruler, Burst, Cone or Beam. Rows: Color as a swatch, Width as a slider, Reach in cells for an area of effect, Across in cells for a beam, and Measure as a select for a ruler. A new reach moves the far point along the line the shape already runs on, so the shape keeps its heading.
+
+A press on the canvas takes the stroke under the pointer before it takes a map, because a stroke draws over every map.
 
 ### 8.4 Objects list
 

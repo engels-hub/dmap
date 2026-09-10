@@ -11,12 +11,14 @@ use egui_winit::winit::{event::WindowEvent, monitor::MonitorHandle};
 use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::color;
 use crate::command::{
-    Deed, Grow, History, Note, SetAssets, SetName, SetShown, SetTvBox, Turn, reshape,
+    Deed, Grow, History, Note, Restructure, SetAssets, SetName, SetShown, SetStrokes, SetTvBox,
+    Turn, reshape,
 };
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::icon;
 use crate::icons::Icon;
 use crate::scene::{Asset, Group, Node, NodeId, Placed, ROOT_ID, Scene, Shown};
+use crate::stroke::{Ink, Rule, Stroke};
 use crate::text;
 use crate::theme::{self, Tokens};
 use crate::transform::{
@@ -129,6 +131,56 @@ const SCENE_ROW: f32 = 40.0;
 /// The width of the scenes folder input, in points. DESIGN.md 9.6.
 const PATH_WIDTH: f32 = 360.0;
 
+/// How far the eraser reaches from the pointer, in inches.
+///
+/// A fifth of an inch is a fifth of a grid cell: wide enough to rub a
+/// line out with one pass, narrow enough to take a bite out of one.
+const ERASER_REACH: f64 = 0.2;
+
+/// How many feet a grid cell stands for. PLAN.md 1.
+const FEET_PER_CELL: f64 = 5.0;
+
+/// The gap between a ruler label and the point it belongs to, in points.
+const LABEL_GAP: f32 = 6.0;
+
+/// The padding inside a ruler label, in points.
+const LABEL_PAD: f32 = 4.0;
+
+/// The side of one square in the row of nibs, in points. DESIGN.md 8.3.
+const NIB_SQUARE: f32 = 28.0;
+
+/// How wide the width slider draws in the Draw panel, in points.
+const PANEL_SLIDER: f32 = 150.0;
+
+/// The least a shape may reach before it counts as one, in inches.
+///
+/// A press and a release on one spot is a click, not a drag, and the
+/// hand moves a little between the two. Issue #12.
+const MIN_SHAPE: f64 = 0.2;
+
+/// How far from a stroke a press still takes it, in inches.
+///
+/// A thin line is hard to hit exactly, so the press reaches a tenth of a
+/// cell past the edge of it.
+const PICK_REACH: f64 = 0.1;
+
+/// The shortest and the longest an area of effect may reach, in cells.
+const MIN_REACH: f64 = 0.5;
+const MAX_REACH: f64 = 200.0;
+
+/// The thinnest and the thickest a stroke may draw, in inches.
+///
+/// A fiftieth of an inch is a hair at true size, and half an inch covers
+/// a tenth of a grid cell. Wider than that is a fill, not a mark.
+const MIN_INK_WIDTH: f64 = 0.02;
+const MAX_INK_WIDTH: f64 = 0.5;
+
+/// How far the pointer moves before a pen keeps another point, in inches.
+///
+/// A hundredth of an inch is under a pixel at the zoom a table works at,
+/// so the line reads as smooth and holds a tenth of the points.
+const PEN_STEP: f64 = 0.01;
+
 /// Size of a corner handle in points.
 const HANDLE_SIZE: f32 = 8.0;
 
@@ -222,6 +274,7 @@ pub struct DmUi {
     renderer: egui_wgpu::Renderer,
     tool: Tool,
     select: Select,
+    draw: Draw,
     table: Table,
     scenes: Scenes,
     tree: Tree,
@@ -250,8 +303,102 @@ enum Tool {
     /// Pick a map and move, turn, scale or flip it.
     #[default]
     Select,
+    /// Draw on the canvas with a pen, a shape, an eraser or a ruler.
+    Draw,
     /// Drag the box that decides what the TV shows.
     Table,
+}
+
+/// What the Draw view does with a drag. DESIGN.md 8.3.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Nib {
+    /// A free line that follows the pointer.
+    #[default]
+    Pen,
+    /// A straight line from the press to the pointer.
+    Line,
+    /// A box between the press and the pointer.
+    Rect,
+    /// The ellipse that fills that box.
+    Ellipse,
+    /// Takes a bite out of every stroke it passes over.
+    Eraser,
+    /// Measures a distance, and keeps it when the DM holds Shift.
+    Ruler,
+    /// A round area of effect, dragged from its middle to its edge.
+    Burst,
+    /// A cone of effect, dragged from its point to where it ends.
+    Cone,
+    /// A straight run of effect, one cell wide.
+    Beam,
+}
+
+impl Nib {
+    /// The kind of stroke this nib leaves behind, if it leaves one.
+    fn ink(self) -> Option<Ink> {
+        match self {
+            Self::Pen => Some(Ink::Pen),
+            Self::Line => Some(Ink::Line),
+            Self::Rect => Some(Ink::Rect),
+            Self::Ellipse => Some(Ink::Ellipse),
+            Self::Ruler => Some(Ink::Measure),
+            Self::Burst => Some(Ink::Burst),
+            Self::Cone => Some(Ink::Cone),
+            Self::Beam => Some(Ink::Beam),
+            Self::Eraser => None,
+        }
+    }
+
+    /// What the panel and the history call this nib.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Eraser => text::stroke_eraser(),
+            Self::Ruler => text::stroke_ruler(),
+            _ => self.ink().map_or_else(text::stroke_pen, Ink::name),
+        }
+    }
+
+    /// The glyph of its square in the Draw panel.
+    fn glyph(self) -> Icon {
+        match self {
+            Self::Eraser => Icon::Eraser,
+            Self::Ruler => Icon::Ruler,
+            _ => self.ink().map_or(Icon::Pencil, Ink::glyph),
+        }
+    }
+}
+
+/// The Draw view's state between frames.
+#[derive(Debug, Default)]
+struct Draw {
+    /// Whether the DM is on the second drag, the one that sets the width.
+    ///
+    /// A beam takes two drags: one for how far it runs, one for how wide.
+    /// Neither drag asks for a button and a move at the same time.
+    /// Issue #12.
+    spanning: bool,
+    /// Whether that second drag has begun.
+    pulled: bool,
+    /// The stroke under the DM's hand, which is in no scene yet.
+    live: Option<Stroke>,
+    /// Where the eraser stood last frame, so a fast drag bites nothing
+    /// between one frame and the next.
+    last: Option<(f64, f64)>,
+    /// The tree as it stood when the eraser went down.
+    ///
+    /// The eraser writes the scene while it moves, so the DM watches the
+    /// line go. The whole drag becomes one step out of this.
+    before: Option<Vec<Node>>,
+}
+
+impl Draw {
+    /// Whether the DM has something under their hand.
+    fn busy(&self) -> bool {
+        self.live.is_some() || self.before.is_some()
+    }
 }
 
 impl std::fmt::Debug for DmUi {
@@ -274,6 +421,16 @@ pub struct Settings {
     pub theme: theme::Mode,
     /// The language the window speaks, by the name of its file.
     pub language: String,
+    /// The color the Draw view paints with. Issue #12.
+    pub ink_color: [u8; 4],
+    /// How thick a stroke draws, in inches.
+    pub ink_width: f64,
+    /// Which of the six squares the Draw panel has on.
+    pub ink_nib: Nib,
+    /// How a ruler counts its length.
+    pub ink_rule: Rule,
+    /// Whether a shape starts on a crossing of the grid.
+    pub ink_snap: bool,
     /// What every size of DESIGN.md is multiplied by. DESIGN.md 3.1.
     pub ui_scale: f64,
 }
@@ -331,6 +488,11 @@ struct Select {
     note: String,
     drag: Option<Drag>,
     measure: Option<Measure>,
+    /// The stroke as it stood when the DM took hold of a field.
+    ///
+    /// A drag of a number runs over many frames, and every one of them
+    /// goes back to this one state, so the whole drag is one step.
+    opened_ink: Option<Stroke>,
     /// The map as it stood when the DM took hold of a field in the panel.
     ///
     /// A drag of a number runs over many frames, and every one of them
@@ -545,6 +707,7 @@ impl DmUi {
             renderer,
             tool: Tool::default(),
             select: Select::default(),
+            draw: Draw::default(),
             table: Table::default(),
             scenes: Scenes::default(),
             tree: Tree::default(),
@@ -603,6 +766,7 @@ impl DmUi {
         let mut edited = false;
         let mut scene = None;
         let select = &mut self.select;
+        let draw = &mut self.draw;
         let table = &mut self.table;
         let tool = &mut self.tool;
         let scenes = &mut self.scenes;
@@ -628,25 +792,20 @@ impl DmUi {
                 *frame_box = false;
                 // Undo works in every view, and before the tools, so a
                 // tool never writes over what it put back this frame.
-                let dragging = select.drag.is_some() || table.drag.is_some();
+                let dragging = select.drag.is_some() || table.drag.is_some() || draw.busy();
                 edited |= undo_keys(ui, &mut frame, dragging);
                 edited |= match *tool {
                     Tool::Select => canvas(ui, select, &mut frame, viewport, zoom_goes_to, tokens),
+                    Tool::Draw => draw_tool(ui, draw, &mut frame, viewport, zoom_goes_to),
                     Tool::Table => {
                         table_tool(ui, table, &mut frame, viewport, zoom_goes_to, tokens)
                     }
                 };
+                say_lengths(ui, &frame, draw.live.as_ref(), viewport, tokens);
             }
             edited |= objects_panel(ui.ctx(), &mut frame, select, tree, tokens);
-            edited |= properties_panel(
-                ui.ctx(),
-                &mut frame,
-                select,
-                table,
-                *tool,
-                frame_box,
-                tokens,
-            );
+            let mut views = Views { select, table };
+            edited |= properties_panel(ui.ctx(), &mut frame, &mut views, *tool, frame_box, tokens);
             if history_button(ui, tokens) {
                 *history_open = !*history_open;
             }
@@ -685,11 +844,17 @@ impl DmUi {
         self.settle_history(&ctx, frame.history);
         // Save once a drag is over, not on every frame of it.
         self.dirty |= edited;
-        let save = self.dirty && self.select.drag.is_none() && self.table.drag.is_none();
+        // A rub of the eraser writes the scene on every frame it cuts,
+        // unless the save waits for the hand to come off it.
+        let save = self.dirty
+            && self.select.drag.is_none()
+            && self.table.drag.is_none()
+            && !self.draw.busy();
         if save {
             self.dirty = false;
         }
         UiOutput {
+            live: self.draw.live.clone(),
             add_map,
             edited,
             save,
@@ -709,12 +874,13 @@ impl DmUi {
     /// A drag of the canvas closes its own step when the button goes up, so
     /// this catches the fields of a panel and the keys.
     fn settle_history(&mut self, ctx: &egui::Context, history: &mut History) {
-        let dragging = self.select.drag.is_some() || self.table.drag.is_some();
+        let dragging = self.select.drag.is_some() || self.table.drag.is_some() || self.draw.busy();
         if dragging || ctx.egui_is_using_pointer() || ctx.egui_wants_keyboard_input() {
             return;
         }
         history.settle();
         self.select.opened = None;
+        self.select.opened_ink = None;
         self.table.opened = None;
     }
 
@@ -727,20 +893,42 @@ impl DmUi {
         canvas: egui::Color32,
         draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
     ) -> Result<()> {
+        render_pane(gpu, pane, &mut self.renderer, paint, canvas, draw_canvas)
+    }
+}
+
+/// Draws one window: the canvas first, then what `egui` painted over it.
+///
+/// Both windows go through here. The TV runs an `egui` of its own for the
+/// overlays it shows, and it draws them the same way the DM window draws
+/// its panels. See [`crate::overlay`].
+///
+/// # Errors
+///
+/// Returns an error when the surface has no frame to draw into.
+pub fn render_pane(
+    gpu: &Gpu,
+    pane: &mut Pane,
+    renderer: &mut egui_wgpu::Renderer,
+    paint: Paint,
+    canvas: egui::Color32,
+    draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
+) -> Result<()> {
+    {
         let Paint {
             jobs,
             mut textures_delta,
             pixels_per_point,
             repaint,
         } = paint;
+        let renderer = &mut *renderer;
         let screen = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [pane.config.width, pane.config.height],
             pixels_per_point,
         };
         for (id, deltas) in &textures_delta.set {
             for delta in deltas {
-                self.renderer
-                    .update_texture(&gpu.device, &gpu.queue, *id, delta);
+                renderer.update_texture(&gpu.device, &gpu.queue, *id, delta);
             }
         }
 
@@ -752,12 +940,11 @@ impl DmUi {
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             let buffers =
-                self.renderer
-                    .update_buffers(&gpu.device, &gpu.queue, &mut encoder, &jobs, &screen);
+                renderer.update_buffers(&gpu.device, &gpu.queue, &mut encoder, &jobs, &screen);
             {
                 let mut pass = begin_clear_pass(&mut encoder, &view, color::linear_token(canvas));
                 draw_canvas(&mut pass);
-                self.renderer.render(&mut pass, &jobs, &screen);
+                renderer.render(&mut pass, &jobs, &screen);
             };
             gpu.queue
                 .submit(buffers.into_iter().chain([encoder.finish()]));
@@ -765,7 +952,7 @@ impl DmUi {
         }
 
         for id in &textures_delta.free {
-            self.renderer.free_texture(id);
+            renderer.free_texture(id);
         }
         textures_delta.clear();
         if repaint {
@@ -778,6 +965,10 @@ impl DmUi {
 /// What one UI frame decided.
 #[derive(Debug)]
 pub struct UiOutput {
+    /// The stroke under the DM's hand, which is in no scene yet.
+    ///
+    /// Both windows draw it, so the players watch a line as it is drawn.
+    pub live: Option<Stroke>,
     /// The DM pressed Add map.
     pub add_map: bool,
     /// A map changed this frame; the TV should redraw.
@@ -794,10 +985,14 @@ pub struct UiOutput {
 
 /// The tessellated UI of one frame, ready to draw.
 pub struct Paint {
-    jobs: Vec<egui::ClippedPrimitive>,
-    textures_delta: egui::TexturesDelta,
-    pixels_per_point: f32,
-    repaint: bool,
+    /// What `egui` tessellated for this frame.
+    pub jobs: Vec<egui::ClippedPrimitive>,
+    /// The textures `egui` wants written before the frame draws.
+    pub textures_delta: egui::TexturesDelta,
+    /// How many surface pixels one `egui` point takes.
+    pub pixels_per_point: f32,
+    /// Whether `egui` asked for another frame at once.
+    pub repaint: bool,
 }
 
 impl std::fmt::Debug for Paint {
@@ -831,6 +1026,7 @@ fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
             text::tool_select(),
             Icon::MousePointer,
         ),
+        (Press::View(Tool::Draw), text::tool_draw(), Icon::Pencil),
         (Press::View(Tool::Table), text::tool_table(), Icon::Monitor),
     ];
     let actions = [
@@ -1731,21 +1927,27 @@ fn drag_panel_edge(ctx: &egui::Context, rect: egui::Rect, width: &mut f32, token
 fn properties_panel(
     ctx: &egui::Context,
     frame: &mut Frame<'_>,
-    select: &mut Select,
-    table: &mut Table,
+    views: &mut Views<'_>,
     tool: Tool,
     frame_box: &mut bool,
     tokens: Tokens,
 ) -> bool {
+    let Views { select, table } = views;
     let screen = ctx.content_rect();
     let held = match tool {
         Tool::Table => Held::TvBox,
+        Tool::Draw => Held::Draw,
         Tool::Select => match select
             .only()
             .map(|id| (id, crate::scene::find(frame.scene, id)))
         {
             Some((id, Some(Node::Asset(asset)))) => {
                 Held::Map(id, asset.path.to_string_lossy().into_owned())
+            }
+            // A stroke opens a panel of its own, so the DM changes what
+            // they drew after they drew it. Issue #12.
+            Some((id, Some(Node::Stroke(stroke)))) => {
+                Held::Stroke(id, stroke.ink.name().to_owned())
             }
             // A group has no panel. Its name and its two switches sit on
             // its row, and it carries no size and no turn of its own, so a
@@ -1773,7 +1975,9 @@ fn properties_panel(
                 select.measure = None;
                 box_asked = box_properties(ui, frame.scene.tv_box, frame_box, tokens);
             }
+            Held::Draw => draw_properties(ui, frame.settings, tokens),
             Held::Map(id, _) => edited = map_properties(ui, *id, select, frame, tokens),
+            Held::Stroke(id, _) => edited = stroke_properties(ui, *id, select, frame),
         },
     );
     if let Some(after) = box_asked {
@@ -1789,6 +1993,10 @@ fn properties_panel(
 enum Held {
     /// The box that decides what the TV shows. DESIGN.md 8.2.
     TvBox,
+    /// The pen, the shapes, the eraser and the ruler. DESIGN.md 8.3.
+    Draw,
+    /// One stroke the DM drew, by name, with what it is called.
+    Stroke(NodeId, String),
     /// One map, by id, with the name of its file. DESIGN.md 8.1.
     Map(NodeId, String),
 }
@@ -1798,7 +2006,8 @@ impl Held {
     fn title(&self) -> &str {
         match self {
             Self::TvBox => text::panel_box_title(),
-            Self::Map(_, name) => name,
+            Self::Draw => text::panel_draw_title(),
+            Self::Stroke(_, name) | Self::Map(_, name) => name,
         }
     }
 }
@@ -2696,6 +2905,7 @@ fn tree_rows(
                     );
                 }
             }
+            Node::Stroke(stroke) => stroke_row(ui, stroke, select, depth, asked, tokens),
             Node::Asset(asset) => {
                 let id = asset.id;
                 let picked = select.holds(id);
@@ -2725,6 +2935,41 @@ fn tree_rows(
             }
         }
     }
+}
+
+/// One row of the objects list for a stroke. DESIGN.md 8.4.
+fn stroke_row(
+    ui: &mut egui::Ui,
+    stroke: &Stroke,
+    select: &mut Select,
+    depth: usize,
+    asked: &mut Asked,
+    tokens: Tokens,
+) {
+    let id = stroke.id;
+    let picked = select.holds(id);
+    let row = tree_row(
+        ui,
+        RowLook {
+            depth,
+            picked,
+            twist: None,
+            glyph: stroke.ink.glyph(),
+            accent_glyph: false,
+            tokens,
+        },
+    );
+    if row.body.clicked() {
+        select.take(id, ui.input(|i| i.modifiers.ctrl));
+    }
+    if row.body.drag_started() {
+        egui::DragAndDrop::set_payload(ui.ctx(), id);
+    }
+    row_name(ui, row.name, stroke.ink.name(), picked, tokens);
+    if let Some(after) = switches(ui, row.switches, stroke.shown, tokens) {
+        asked.shown = Some((id, stroke.shown, after));
+    }
+    dropped_on(ui, &row.whole, id, false, &mut asked.moved, tokens);
 }
 
 /// What one row of the objects list looks like. DESIGN.md 8.4.
@@ -3119,6 +3364,736 @@ fn group_field(ui: &mut egui::Ui, id: NodeId, scene: &Scene) -> Option<NodeId> {
     picked
 }
 
+/// The state of the views the panel draws for.
+///
+/// The Draw view keeps its choices in the settings, so it brings nothing
+/// of its own here.
+#[derive(Debug)]
+struct Views<'a> {
+    select: &'a mut Select,
+    table: &'a mut Table,
+}
+
+/// Writes what every measure and every area of effect says about itself.
+///
+/// It draws in each view, because a shape the DM laid over the map keeps
+/// its number whatever they do next. The TV says the same over its own
+/// canvas, from the same code. Issue #12.
+fn say_lengths(
+    ui: &egui::Ui,
+    frame: &Frame<'_>,
+    live: Option<&Stroke>,
+    viewport: (u32, u32),
+    tokens: Tokens,
+) {
+    let mut ink = crate::scene::ink_order(frame.scene, crate::scene::Audience::Dm);
+    if let Some(live) = live {
+        ink.push(live);
+    }
+    let painter = ui.ctx().layer_painter(egui::LayerId::background());
+    let ppp = f64::from(ui.ctx().pixels_per_point());
+    measure_overlay(
+        &painter,
+        &ink,
+        frame.camera,
+        viewport,
+        ppp,
+        tokens,
+        theme::SMALL,
+    );
+}
+
+/// The Draw panel: the six squares, the color and the width. DESIGN.md 8.3.
+fn draw_properties(ui: &mut egui::Ui, settings: &mut Settings, tokens: Tokens) {
+    nib_row(
+        ui,
+        &mut settings.ink_nib,
+        &[
+            Nib::Pen,
+            Nib::Line,
+            Nib::Rect,
+            Nib::Ellipse,
+            Nib::Eraser,
+            Nib::Ruler,
+        ],
+        tokens,
+    );
+    // The areas of effect take a row of their own. They lie over the map
+    // instead of marking it, and a row of nine squares outgrows the panel.
+    widget::row_label(ui, text::panel_draw_effects());
+    nib_row(
+        ui,
+        &mut settings.ink_nib,
+        &[Nib::Burst, Nib::Cone, Nib::Beam],
+        tokens,
+    );
+    widget::row_label(ui, text::panel_draw_color());
+    widget::color_swatch(ui, &mut settings.ink_color);
+    if settings.ink_nib == Nib::Ruler {
+        widget::row_label(ui, text::ruler_rule());
+        let field = widget::select_field(ui, settings.ink_rule.name(), ui.available_width());
+        egui::Popup::menu(&field)
+            .gap(-1.0)
+            .width(ui.available_width())
+            .show(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for rule in Rule::all() {
+                    if widget::select_row(ui, rule.name(), rule == settings.ink_rule).clicked() {
+                        settings.ink_rule = rule;
+                    }
+                }
+            });
+    }
+    let mut snap = settings.ink_snap;
+    if widget::checkbox(ui, &mut snap, text::panel_draw_snap()).clicked() {
+        settings.ink_snap = snap;
+    }
+    widget::row_label(ui, text::panel_draw_width());
+    let mut width = settings.ink_width;
+    let shown = text::panel_draw_width_value(format_args!("{width:.2}"));
+    if widget::slider(
+        ui,
+        &mut width,
+        MIN_INK_WIDTH..=MAX_INK_WIDTH,
+        PANEL_SLIDER,
+        &shown,
+    )
+    .is_pointer_button_down_on()
+    {
+        settings.ink_width = width;
+    }
+}
+
+/// The row of six squares that says what a drag draws. DESIGN.md 8.3.
+fn nib_row(ui: &mut egui::Ui, nib: &mut Nib, nibs: &[Nib], tokens: Tokens) {
+    // One border holds the whole row and a dashed line stands between
+    // each pair, as the views do in the toolbar. DESIGN.md 8.3 and 5.2.
+    let width = NIB_SQUARE * nibs.len() as f32;
+    let (whole, _) = ui.allocate_exact_size(egui::vec2(width, NIB_SQUARE), egui::Sense::hover());
+    let inside = whole.shrink(1.0);
+    for (place, one) in nibs.iter().copied().enumerate() {
+        let square = egui::Rect::from_min_size(
+            egui::pos2(whole.left() + place as f32 * NIB_SQUARE, whole.top()),
+            egui::Vec2::splat(NIB_SQUARE),
+        )
+        .intersect(inside);
+        // The name of the nib, not its place, or the same square in two
+        // rows would take the same id.
+        let response = ui.interact(square, ui.id().with(("nib", one)), egui::Sense::click());
+        let on = *nib == one;
+        if on {
+            ui.painter().rect_filled(square, 0, tokens.raised);
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(
+                    square.left_top(),
+                    egui::vec2(square.width(), widget::BAR),
+                ),
+                0,
+                tokens.accent,
+            );
+        } else if response.hovered() {
+            ui.painter().rect_filled(square, 0, tokens.field);
+        }
+        let response = response.on_hover_text(one.name());
+        icon::paint(
+            ui.painter(),
+            one.glyph(),
+            square.center(),
+            widget::SMALL_ICON,
+            if on { tokens.accent } else { tokens.ink },
+        );
+        if response.clicked() {
+            *nib = one;
+        }
+        // The dash tells one square from the next without cutting the row
+        // into six controls. DESIGN.md 5.2.
+        if place + 1 < nibs.len() {
+            let edge = whole.left() + (place + 1) as f32 * NIB_SQUARE;
+            let line = [
+                egui::pos2(edge, inside.top()),
+                egui::pos2(edge, inside.bottom()),
+            ];
+            painter_dashes(ui, &line, tokens.rule);
+        }
+    }
+    ui.painter().rect(
+        whole,
+        0,
+        egui::Color32::TRANSPARENT,
+        egui::Stroke::new(1.0, tokens.rule),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// The Draw view on the canvas: the pen and the shapes. DESIGN.md 8.3.
+///
+/// Returns `true` when the scene changed.
+fn draw_tool(
+    ui: &mut egui::Ui,
+    draw: &mut Draw,
+    frame: &mut Frame<'_>,
+    viewport: (u32, u32),
+    zoom_goes_to: &mut Option<bool>,
+) -> bool {
+    let (_, view, pointer) = canvas_area(ui, frame.camera, viewport, false, zoom_goes_to);
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    let at = pointer.pos.map(|pos| view.to_world(pos));
+    let nib = frame.settings.ink_nib;
+    // A DM who picks another square in the middle of a gesture leaves the
+    // last one behind. Without this the stroke stands under their hand for
+    // ever: it draws on both screens, and the history waits on a hand that
+    // has let go. Issue #12.
+    if draw
+        .live
+        .as_ref()
+        .is_some_and(|live| nib.ink() != Some(live.ink))
+    {
+        draw.live = None;
+        draw.spanning = false;
+        draw.pulled = false;
+    }
+    let Some(ink) = nib.ink() else {
+        return erase(draw, frame, at, pointer);
+    };
+    // A shape starts on a crossing of the grid, because a spell lands on
+    // a cell. `Shift` holds that off for one drag. The ruler takes `Alt`
+    // instead, because `Shift` there keeps the measure. Issue #12.
+    let off = ui.input(|i| {
+        if ink == Ink::Measure {
+            i.modifiers.alt
+        } else {
+            i.modifiers.shift
+        }
+    });
+    let snap = frame.settings.ink_snap != off && ink != Ink::Pen;
+    // A measure lands on the grid at both ends. Every other shape starts
+    // on it and reaches wherever the DM pulls.
+    let at = at.map(|at| {
+        if snap && ink == Ink::Measure {
+            on_grid(at)
+        } else {
+            at
+        }
+    });
+    if ink == Ink::Measure {
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            draw.live = None;
+            return false;
+        }
+        // The second button bends the ruler where the pointer stands.
+        if let (true, Some(at), Some(live)) = (
+            ui.input(|i| i.pointer.secondary_pressed()),
+            at,
+            draw.live.as_mut(),
+        ) {
+            live.points.push(at);
+        }
+    }
+    // The second drag of a beam says how wide it runs. The width follows
+    // the pointer until the DM takes hold of it, and the beam goes into
+    // the scene when they let go, so neither drag ever asks for a button
+    // and a move at the same time. Issue #12.
+    if draw.spanning {
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            draw.spanning = false;
+            draw.pulled = false;
+            draw.live = None;
+            return false;
+        }
+        if let (Some(at), Some(live)) = (at, draw.live.as_mut()) {
+            live.span = span_of(live, at);
+        }
+        if pointer.down() {
+            draw.pulled = true;
+            return false;
+        }
+        if draw.pulled {
+            draw.spanning = false;
+            draw.pulled = false;
+            return keep(draw.live.take(), frame);
+        }
+        return false;
+    }
+    if let (true, true, Some(at)) = (pointer.pressed(), pointer.hovered, at) {
+        frame.history.settle();
+        draw.live = Some(Stroke {
+            // The name comes at the end, in `join_scene`, because a map
+            // the DM adds while they draw would take the same one.
+            id: ROOT_ID,
+            shown: crate::scene::Shown::default(),
+            ink,
+            points: vec![if snap { on_grid(at) } else { at }],
+            color: frame.settings.ink_color,
+            width: frame.settings.ink_width,
+            span: 0.0,
+            rule: frame.settings.ink_rule,
+        });
+    }
+    if let (true, Some(at), Some(live)) = (pointer.down(), at, draw.live.as_mut()) {
+        grow(live, at);
+        return false;
+    }
+    // A cone and a beam are not done: the hand lets go, and the next
+    // drag says how wide they are.
+    if draw.live.as_ref().is_some_and(|live| live.ink.spans()) {
+        draw.spanning = true;
+        return false;
+    }
+    let live = draw.live.take();
+    // A measure is gone when the DM lets go, unless they held Shift.
+    if live.as_ref().is_some_and(|live| live.ink == Ink::Measure)
+        && !ui.input(|i| i.modifiers.shift)
+    {
+        return false;
+    }
+    keep(live, frame)
+}
+
+/// Puts the stroke the DM finished into the scene. Issue #12.
+///
+/// A press that never moved leaves a dot for the pen and nothing for a
+/// shape, which would have no size at all.
+fn keep(live: Option<Stroke>, frame: &mut Frame<'_>) -> bool {
+    let Some(live) = live else {
+        return false;
+    };
+    if live.ink != Ink::Pen {
+        // A twitch of the hand between the press and the release is not a
+        // shape. A shape has to reach at least a little way.
+        let (Some(from), Some(to)) = (live.points.first(), live.points.last()) else {
+            return false;
+        };
+        if (to.0 - from.0).hypot(to.1 - from.1) < MIN_SHAPE {
+            return false;
+        }
+    }
+    let Some(change) = join_scene(frame.scene, live) else {
+        return false;
+    };
+    frame.history.kept(change);
+    true
+}
+
+/// Puts a finished stroke in the group the Draw view fills, as one change.
+///
+/// The group is made inside the change and not before it, or the first
+/// stroke of a scene would leave the group behind when the DM takes that
+/// stroke back. The stroke takes its name here as well, so a map added
+/// while the DM drew cannot have taken the same one. Issue #12.
+fn join_scene(scene: &mut Scene, live: Stroke) -> Option<Restructure> {
+    let name = live.ink.name().to_owned();
+    reshape(scene, Deed::Draw, name, |scene| {
+        let into = crate::scene::ink_group(scene, text::panel_objects_drawings().to_owned());
+        let mut live = live;
+        live.id = scene.next_id();
+        crate::scene::push_into(scene, into, Node::Stroke(live));
+    })
+}
+
+/// How wide the pointer makes a cone or a beam, in cells.
+///
+/// The width is twice the distance from the pointer to the line the
+/// shape runs along, so the shape grows to either side as the DM pulls
+/// away from it.
+fn span_of(live: &Stroke, at: (f64, f64)) -> f64 {
+    let (Some(from), Some(to)) = (live.points.first(), live.points.last()) else {
+        return 0.0;
+    };
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    let length = dx.hypot(dy);
+    if length <= f64::EPSILON {
+        return 0.0;
+    }
+    // The distance from a point to the line, by the cross product.
+    let away = ((at.0 - from.0) * dy - (at.1 - from.1) * dx).abs() / length;
+    2.0 * away
+}
+
+/// Draws the labels of every measure the screen shows. Issue #12.
+///
+/// A kept measure carries its length as the live one does, so the DM and
+/// the players read the same numbers off the same line.
+pub fn measure_overlay(
+    painter: &egui::Painter,
+    strokes: &[&Stroke],
+    camera: &Camera,
+    viewport: (u32, u32),
+    ppp: f64,
+    tokens: Tokens,
+    size: f32,
+) {
+    let view = View {
+        camera: *camera,
+        viewport,
+        ppp,
+    };
+    for stroke in strokes {
+        if stroke.ink == Ink::Measure {
+            measure_labels(painter, stroke, &view, tokens, size);
+        } else if let (Some(reach), Some(last)) =
+            (stroke.ink.reach(&stroke.points), stroke.points.last())
+        {
+            let says = if stroke.span > 0.0 {
+                // The width says cells alone. The length beside it
+                // already carries the feet.
+                let across = text::ruler_cells(format_args!("{:.1}", stroke.span));
+                text::ruler_span(length(reach), across)
+            } else {
+                length(reach)
+            };
+            label(painter, view.to_screen(*last), &says, tokens, true, size);
+        }
+    }
+}
+
+/// Draws the labels of a measure, one for each leg and one for the whole.
+///
+/// The label sits beside the middle of its leg, and the total stands at
+/// the end, where the pointer is. Issue #12.
+fn measure_labels(painter: &egui::Painter, live: &Stroke, view: &View, tokens: Tokens, size: f32) {
+    let mut whole = 0.0;
+    for pair in live.points.windows(2) {
+        let leg = live.rule.cells(pair[0], pair[1]);
+        whole += leg;
+        let middle = (
+            f64::midpoint(pair[0].0, pair[1].0),
+            f64::midpoint(pair[0].1, pair[1].1),
+        );
+        label(
+            painter,
+            view.to_screen(middle),
+            &length(leg),
+            tokens,
+            false,
+            size,
+        );
+    }
+    if live.points.len() > 2
+        && let Some(last) = live.points.last()
+    {
+        label(
+            painter,
+            view.to_screen(*last),
+            &length(whole),
+            tokens,
+            true,
+            size,
+        );
+    }
+}
+
+/// One label of the ruler, in a box that reads over any map.
+fn label(
+    painter: &egui::Painter,
+    at: egui::Pos2,
+    text: &str,
+    tokens: Tokens,
+    whole: bool,
+    size: f32,
+) {
+    let font = theme::font(size, whole);
+    let galley = painter.layout_no_wrap(text.to_owned(), font, tokens.ink);
+    let box_rect = egui::Rect::from_min_size(
+        at + egui::vec2(LABEL_GAP, -galley.size().y - LABEL_GAP),
+        galley.size() + egui::Vec2::splat(2.0 * LABEL_PAD),
+    );
+    painter.rect(
+        box_rect,
+        0,
+        tokens.surface,
+        egui::Stroke::new(1.0, tokens.ink),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(
+        box_rect.min + egui::Vec2::splat(LABEL_PAD),
+        galley,
+        tokens.ink,
+    );
+}
+
+/// How far a leg runs, in cells and in feet. Issue #12.
+fn length(cells: f64) -> String {
+    text::ruler_length(
+        format_args!("{cells:.1}"),
+        format_args!("{:.0}", cells * FEET_PER_CELL),
+    )
+}
+
+/// The nearest crossing of the grid, in inches.
+fn on_grid(at: (f64, f64)) -> (f64, f64) {
+    (at.0.round(), at.1.round())
+}
+
+/// Takes a bite out of every stroke the eraser passes over.
+///
+/// The scene changes while the eraser moves, so the DM watches the line
+/// go. The whole drag becomes one step when the hand lets go.
+fn erase(draw: &mut Draw, frame: &mut Frame<'_>, at: Option<(f64, f64)>, pointer: Pointer) -> bool {
+    if let (true, true, Some(at)) = (pointer.pressed(), pointer.hovered, at) {
+        frame.history.settle();
+        draw.before = Some(frame.scene.root.children.clone());
+        draw.last = Some(at);
+    }
+    if let (true, Some(at), true) = (pointer.down(), at, draw.before.is_some()) {
+        // The pointer jumps from frame to frame, and a stroke between two
+        // of those places would come through a drag untouched. So the
+        // eraser bites its way along the path it took.
+        let from = draw.last.unwrap_or(at);
+        draw.last = Some(at);
+        let far = (at.0 - from.0).hypot(at.1 - from.1);
+        let steps = (far / ERASER_REACH).ceil().max(1.0);
+        let mut cut_one = false;
+        for step in 0..=(steps as usize) {
+            let part = step as f64 / steps;
+            let here = (
+                from.0 + (at.0 - from.0) * part,
+                from.1 + (at.1 - from.1) * part,
+            );
+            cut_one |= bite(frame.scene, here, ERASER_REACH);
+        }
+        return cut_one;
+    }
+    draw.last = None;
+    let Some(before) = draw.before.take() else {
+        return false;
+    };
+    if before == frame.scene.root.children {
+        return false;
+    }
+    frame.history.kept(Restructure {
+        what: Deed::Erase,
+        subject: text::stroke_eraser().to_owned(),
+        before: vec![(ROOT_ID, before)],
+        after: vec![(ROOT_ID, frame.scene.root.children.clone())],
+    });
+    true
+}
+
+/// Cuts every stroke a disc reaches. Returns `true` when one gave way.
+///
+/// An area of effect and a kept measure come away whole: a piece of
+/// either one says nothing. Paint comes off in parts, and the parts of
+/// one stroke join a group of their own, so the objects list holds them
+/// together and the DM moves or hides them as one. Issue #12.
+fn bite(scene: &mut Scene, at: (f64, f64), radius: f64) -> bool {
+    let hit: Vec<NodeId> = crate::scene::ink_order(scene, crate::scene::Audience::Dm)
+        .into_iter()
+        .filter(|stroke| stroke.touches(at, radius))
+        .map(|stroke| stroke.id)
+        .collect();
+    let mut cut_one = false;
+    for id in hit {
+        let Some((parent, place)) = crate::scene::parent_of(scene, id) else {
+            continue;
+        };
+        let Some(Node::Stroke(stroke)) = crate::scene::take_node(scene, id) else {
+            continue;
+        };
+        cut_one = true;
+        if stroke.ink.whole() {
+            // It is gone, and nothing goes back in its place.
+            continue;
+        }
+        let runs = crate::stroke::cut(&stroke.polyline(), at, radius + stroke.width / 2.0);
+        let Some(runs) = runs else {
+            // The disc reached the stroke and cut nothing out of it, so
+            // the stroke goes back where it was.
+            put_back(scene, parent, place, Node::Stroke(stroke));
+            continue;
+        };
+        // A stroke that came apart before is already in a group of its
+        // own, and the new pieces stay in it. Only the first cut makes
+        // one, or a long rub would build a tower of groups.
+        let holder = if runs.len() > 1 && !pieces_group(scene, parent) {
+            let id = scene.next_id();
+            let mut group = Group::new(id, text::panel_objects_pieces().to_owned());
+            group.shown = stroke.shown;
+            put_back(scene, parent, place, Node::Group(group));
+            id
+        } else {
+            parent
+        };
+        for (step, run) in runs.into_iter().enumerate() {
+            let id = scene.next_id();
+            let piece = Stroke {
+                id,
+                // What is left of a shape is a free line: a box with a
+                // bite out of it is no longer a box.
+                ink: Ink::Pen,
+                points: run,
+                ..stroke.clone()
+            };
+            let place = if holder == parent { place + step } else { step };
+            put_back(scene, holder, place, Node::Stroke(piece));
+        }
+    }
+    cut_one
+}
+
+/// Puts a node back into a group, at the place it had or at the end.
+fn put_back(scene: &mut Scene, parent: NodeId, place: usize, node: Node) {
+    if let Some(group) = crate::scene::group_mut(scene, parent) {
+        let place = place.min(group.children.len());
+        group.children.insert(place, node);
+    }
+}
+
+/// Whether this group already holds the pieces of a stroke.
+///
+/// The group the Draw view fills is not one of those, and neither is the
+/// root, so the first cut inside either one makes a group.
+fn pieces_group(scene: &Scene, id: NodeId) -> bool {
+    id != ROOT_ID
+        && crate::scene::find(scene, id)
+            .and_then(Node::group)
+            .is_some_and(|group| !group.ink)
+}
+
+/// Takes the stroke under the DM's hand to where the pointer stands.
+fn grow(live: &mut Stroke, at: (f64, f64)) {
+    if live.ink == Ink::Pen {
+        // A point that lands on the one before it says nothing, and a pen
+        // drags out thousands of them.
+        let far = live
+            .points
+            .last()
+            .is_none_or(|last| (last.0 - at.0).hypot(last.1 - at.1) > PEN_STEP);
+        if far {
+            live.points.push(at);
+        }
+        return;
+    }
+    if live.ink == Ink::Measure {
+        // Every waypoint stays. The last point follows the pointer.
+        if live.points.len() < 2 {
+            live.points.push(at);
+        } else if let Some(last) = live.points.last_mut() {
+            *last = at;
+        }
+        return;
+    }
+    // A shape stands between the press and the pointer.
+    live.points.truncate(1);
+    live.points.push(at);
+}
+
+/// The panel of one stroke: what it is drawn in, and how far it reaches.
+///
+/// The DM changes what they drew after they drew it, and every field
+/// goes through the history as one step. Issue #12.
+fn stroke_properties(
+    ui: &mut egui::Ui,
+    id: NodeId,
+    select: &mut Select,
+    frame: &mut Frame<'_>,
+) -> bool {
+    let Some(mark) = crate::scene::find(frame.scene, id)
+        .and_then(Node::stroke)
+        .cloned()
+    else {
+        return false;
+    };
+    let mut after = mark.clone();
+    let mut changed = false;
+    widget::row_label(ui, text::panel_draw_color());
+    if widget::color_swatch(ui, &mut after.color) {
+        changed = true;
+    }
+    widget::row_label(ui, text::panel_draw_width());
+    let mut width = mark.width;
+    let shown = text::panel_draw_width_value(format_args!("{width:.2}"));
+    if widget::slider(
+        ui,
+        &mut width,
+        MIN_INK_WIDTH..=MAX_INK_WIDTH,
+        PANEL_SLIDER,
+        &shown,
+    )
+    .is_pointer_button_down_on()
+    {
+        after.width = width;
+        changed = true;
+    }
+    changed |= reach_row(ui, &mark, &mut after);
+    if mark.ink == Ink::Measure {
+        widget::row_label(ui, text::ruler_rule());
+        let field = widget::select_field(ui, mark.rule.name(), ui.available_width());
+        egui::Popup::menu(&field)
+            .gap(-1.0)
+            .width(ui.available_width())
+            .show(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for rule in Rule::all() {
+                    if widget::select_row(ui, rule.name(), rule == mark.rule).clicked() {
+                        after.rule = rule;
+                        changed = true;
+                    }
+                }
+            });
+    }
+    if !changed {
+        return false;
+    }
+    let before = select
+        .opened_ink
+        .clone()
+        .filter(|held| held.id == id)
+        .unwrap_or(mark);
+    select.opened_ink = Some(before.clone());
+    frame.history.hold(
+        frame.scene,
+        SetStrokes {
+            before: vec![before],
+            after: vec![after],
+        },
+    );
+    true
+}
+
+/// The rows that say how far an area of effect reaches. DESIGN.md 8.3.
+///
+/// A reach moves the far point along the line the shape already runs on,
+/// so the shape keeps its heading and takes a new size.
+fn reach_row(ui: &mut egui::Ui, mark: &Stroke, after: &mut Stroke) -> bool {
+    let Some(reach) = mark.ink.reach(&mark.points) else {
+        return false;
+    };
+    let mut changed = false;
+    widget::row_label(ui, text::panel_stroke_reach());
+    let mut cells = reach;
+    if widget::input(
+        ui,
+        &mut cells,
+        text::unit_cells(),
+        100.0,
+        MIN_REACH..=MAX_REACH,
+        0.5,
+    )
+    .changed()
+    {
+        after.points = mark.reached(cells);
+        changed = true;
+    }
+    if mark.ink.spans() {
+        widget::row_label(ui, text::panel_stroke_across());
+        let mut span = if mark.span > 0.0 { mark.span } else { 1.0 };
+        if widget::input(
+            ui,
+            &mut span,
+            text::unit_cells(),
+            100.0,
+            MIN_REACH..=MAX_REACH,
+            0.5,
+        )
+        .changed()
+        {
+            after.span = span;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// The properties of the selected map. DESIGN.md 8.1.
 ///
 /// The grid size decides the true size of the map: one grid cell is one
@@ -3448,6 +4423,7 @@ fn selection_popup(
                 let name = match crate::scene::find(frame.scene, *id) {
                     Some(Node::Group(group)) => group.name.clone(),
                     Some(Node::Asset(asset)) => asset.path.to_string_lossy().into_owned(),
+                    Some(Node::Stroke(stroke)) => stroke.ink.name().to_owned(),
                     None => continue,
                 };
                 let (rect, _) = ui.allocate_exact_size(
@@ -3763,6 +4739,12 @@ fn held_corners(select: &Select, frame: &Frame<'_>) -> Option<[(f64, f64); 4]> {
             let (min, max) = crate::scene::bounds(group, frame.size_of)?;
             Some([min, (max.0, min.1), max, (min.0, max.1)])
         }
+        // A stroke turns and grows with no handles of its own yet, so the
+        // box says where it stands and nothing more.
+        Node::Stroke(stroke) => {
+            let (min, max) = stroke.bounds()?;
+            Some([min, (max.0, min.1), max, (min.0, max.1)])
+        }
     }
 }
 
@@ -3815,20 +4797,23 @@ fn press(
         });
         return;
     }
-    // The box of a group takes the press first. Inside the box, the press
-    // goes on to the asset under the pointer.
-    let aimed = group_at(frame, view, pos).or_else(|| {
-        // The topmost asset under the pointer takes the press. The tree
-        // draws the bottom one first, so the search runs the other way.
-        crate::scene::assets(frame.scene)
-            .iter()
-            .rev()
-            .find(|asset| {
-                (frame.size_of)(&asset.path)
-                    .is_some_and(|size| hit_test(cursor, &asset.corners(size)))
-            })
-            .map(|asset| asset.id)
-    });
+    // The box of a group takes the press first, then a stroke, because a
+    // stroke draws over every map. Inside the box, the press goes on to
+    // the asset under the pointer.
+    let aimed = group_at(frame, view, pos)
+        .or_else(|| ink_at(frame, cursor))
+        .or_else(|| {
+            // The topmost asset under the pointer takes the press. The tree
+            // draws the bottom one first, so the search runs the other way.
+            crate::scene::assets(frame.scene)
+                .iter()
+                .rev()
+                .find(|asset| {
+                    (frame.size_of)(&asset.path)
+                        .is_some_and(|size| hit_test(cursor, &asset.corners(size)))
+                })
+                .map(|asset| asset.id)
+        });
     let Some(id) = aimed else {
         // A press on bare canvas starts a band that picks what it covers.
         if !add {
@@ -3847,6 +4832,18 @@ fn press(
         was: standing(frame.scene, &select.chosen),
         start_cursor: cursor,
     });
+}
+
+/// The stroke under the pointer, if the pointer is on one.
+///
+/// The strokes draw over the maps, and the topmost one takes the press,
+/// so the DM picks what they see. Issue #12.
+fn ink_at(frame: &Frame<'_>, cursor: (f64, f64)) -> Option<NodeId> {
+    crate::scene::ink_order(frame.scene, crate::scene::Audience::Dm)
+        .iter()
+        .rev()
+        .find(|stroke| stroke.touches(cursor, PICK_REACH))
+        .map(|stroke| stroke.id)
 }
 
 /// Every asset the DM holds, as it stands now.
@@ -4336,7 +5333,138 @@ fn draw_selection(painter: &egui::Painter, handles: &[egui::Pos2], tokens: Token
 
 #[cfg(test)]
 mod tests {
-    use super::{ROW_HEIGHT, Settings, row_parts, theme};
+    use super::{ROW_HEIGHT, Settings, bite, join_scene, row_parts, theme};
+    use crate::command::Command as _;
+    use crate::scene::{Group, Node, Scene, Shown};
+    use crate::stroke::{Ink, Rule, Stroke};
+
+    /// A stroke of this ink, through these points.
+    fn stroke(id: u64, ink: Ink, points: &[(f64, f64)]) -> Stroke {
+        Stroke {
+            id,
+            shown: Shown::default(),
+            ink,
+            points: points.to_vec(),
+            color: [0, 0, 0, 255],
+            width: 0.1,
+            span: 0.0,
+            rule: Rule::default(),
+        }
+    }
+
+    /// A scene whose Drawings group holds these strokes.
+    fn drawn(strokes: Vec<Stroke>) -> Scene {
+        let mut scene = Scene::default();
+        let mut group = Group::new(9, "Drawings".to_owned());
+        group.ink = true;
+        group.children = strokes.into_iter().map(Node::Stroke).collect();
+        scene.root.children.push(Node::Group(group));
+        scene
+    }
+
+    /// What the Drawings group holds now, as names and depths.
+    fn inside(scene: &Scene) -> Vec<(usize, String)> {
+        fn walk(nodes: &[Node], depth: usize, found: &mut Vec<(usize, String)>) {
+            for node in nodes {
+                match node {
+                    Node::Group(group) => {
+                        found.push((depth, group.name.clone()));
+                        walk(&group.children, depth + 1, found);
+                    }
+                    Node::Stroke(stroke) => found.push((depth, format!("{:?}", stroke.ink))),
+                    Node::Asset(_) => {}
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&scene.root.children, 0, &mut found);
+        found
+    }
+
+    #[test]
+    fn taking_back_the_first_stroke_takes_its_group_with_it() {
+        let mut scene = Scene::default();
+        let mark = stroke(0, Ink::Pen, &[(0.0, 0.0), (1.0, 0.0)]);
+        let change = join_scene(&mut scene, mark).expect("the stroke joins the tree");
+        assert_eq!(
+            inside(&scene),
+            vec![(0, "Drawings".to_owned()), (1, "Pen".to_owned())]
+        );
+        // The group was made inside the change, so the change takes it
+        // back as well and no empty group stands behind.
+        change.revert(&mut scene);
+        assert!(inside(&scene).is_empty(), "{:?}", inside(&scene));
+    }
+
+    #[test]
+    fn a_stroke_takes_its_name_where_it_joins_the_tree() {
+        let mut scene = drawn(vec![stroke(9000, Ink::Pen, &[(0.0, 0.0), (1.0, 0.0)])]);
+        // The stroke comes in with the name a press would have left on
+        // it, which is no name at all.
+        let mark = stroke(crate::scene::ROOT_ID, Ink::Line, &[(2.0, 2.0), (3.0, 3.0)]);
+        join_scene(&mut scene, mark).expect("the stroke joins the tree");
+        let names: Vec<u64> = crate::scene::ink_order(&scene, crate::scene::Audience::Dm)
+            .iter()
+            .map(|stroke| stroke.id)
+            .collect();
+        assert_eq!(names.len(), 2);
+        assert_ne!(names[0], names[1], "two strokes took one name");
+        assert!(names.iter().all(|id| *id != crate::scene::ROOT_ID));
+    }
+
+    #[test]
+    fn the_eraser_takes_a_whole_effect_and_leaves_no_line_behind() {
+        let mut scene = drawn(vec![stroke(1, Ink::Beam, &[(0.0, 0.0), (10.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 0.2));
+        // The beam is gone, and no piece of its outline stands in for it.
+        assert_eq!(inside(&scene), vec![(0, "Drawings".to_owned())]);
+    }
+
+    #[test]
+    fn the_eraser_takes_a_kept_measure_whole_as_well() {
+        let mut scene = drawn(vec![stroke(1, Ink::Measure, &[(0.0, 0.0), (10.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 0.2));
+        assert_eq!(inside(&scene), vec![(0, "Drawings".to_owned())]);
+    }
+
+    #[test]
+    fn the_pieces_of_a_cut_line_join_a_group() {
+        let mut scene = drawn(vec![stroke(1, Ink::Pen, &[(0.0, 0.0), (10.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 1.0));
+        assert_eq!(
+            inside(&scene),
+            vec![
+                (0, "Drawings".to_owned()),
+                (1, "Pieces".to_owned()),
+                (2, "Pen".to_owned()),
+                (2, "Pen".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_second_cut_stays_in_the_group_the_first_one_made() {
+        let mut scene = drawn(vec![stroke(1, Ink::Pen, &[(0.0, 0.0), (20.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 1.0));
+        assert!(bite(&mut scene, (12.0, 0.0), 1.0));
+        // Three pieces, and one group holding all of them.
+        let held = inside(&scene);
+        let groups = held.iter().filter(|(_, name)| name == "Pieces").count();
+        let pieces = held.iter().filter(|(_, name)| name == "Pen").count();
+        assert_eq!((groups, pieces), (1, 3), "{held:?}");
+        assert!(held.iter().all(|(depth, _)| *depth <= 2), "{held:?}");
+    }
+
+    #[test]
+    fn a_bite_that_cuts_nothing_leaves_the_stroke_where_it_stood() {
+        let mut scene = drawn(vec![stroke(1, Ink::Pen, &[(0.0, 0.0), (10.0, 0.0)])]);
+        // The disc reaches the line but takes no part of it away.
+        assert!(!bite(&mut scene, (5.0, 4.0), 0.2));
+        assert_eq!(
+            inside(&scene),
+            vec![(0, "Drawings".to_owned()), (1, "Pen".to_owned())]
+        );
+    }
 
     /// One row of the objects list, the size the panel gives it.
     fn row() -> egui::Rect {
@@ -4391,6 +5519,11 @@ mod tests {
         Settings {
             theme: theme::Mode::default(),
             language: crate::text::DEFAULT.to_owned(),
+            ink_color: [0, 0, 0, 255],
+            ink_width: 0.1,
+            ink_nib: super::Nib::default(),
+            ink_rule: crate::stroke::Rule::default(),
+            ink_snap: true,
             ui_scale: theme::DEFAULT_SCALE,
             tv_display: Some(1),
             swap_windows: false,

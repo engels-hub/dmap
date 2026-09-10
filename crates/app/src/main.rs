@@ -21,9 +21,12 @@ mod grid;
 mod icon;
 mod icons;
 mod images;
+mod ink;
 mod maps;
+mod overlay;
 mod pointer;
 mod scene;
+mod stroke;
 mod text;
 mod theme;
 mod transform;
@@ -51,7 +54,9 @@ use crate::config::Config;
 use crate::gpu::{Gpu, Pane};
 use crate::grid::GridLayer;
 use crate::images::Loader;
+use crate::ink::InkLayer;
 use crate::maps::{MapLayer, relative_path};
+use crate::overlay::Overlay;
 use crate::pointer::PointerDisc;
 use crate::scene::copy_into_scene;
 use crate::scene::{Asset, Audience, Node, Scene, draw_order, push_into};
@@ -261,6 +266,11 @@ struct Running {
     history: History,
     map_layer: MapLayer,
     grid_layer: GridLayer,
+    ink_layer: InkLayer,
+    /// The `egui` of the TV window, for the labels of a measure.
+    overlay: Overlay,
+    /// The stroke the DM is drawing, which is in no scene yet.
+    live: Option<crate::stroke::Stroke>,
     loader: Loader,
     camera: Camera,
 }
@@ -300,6 +310,8 @@ impl Running {
         let pointer = PointerDisc::new(&gpu.device, tv.config.format);
         let map_layer = MapLayer::new(&gpu.device, dm.config.format);
         let grid_layer = GridLayer::new(&gpu.device, dm.config.format);
+        let ink_layer = InkLayer::new(&gpu.device, dm.config.format);
+        let overlay = Overlay::new(&gpu, &tv);
         let wake_window = Arc::clone(&dm.window);
         let loader = Loader::spawn(gpu.device.limits().max_texture_dimension_2d, move || {
             wake_window.request_redraw();
@@ -321,6 +333,11 @@ impl Running {
                 snap_percent: clamp_snap_percent(config.snap_percent),
                 theme: config.theme,
                 language: config.language.clone(),
+                ink_color: config.ink_color,
+                ink_width: config.ink_width,
+                ink_nib: config.ink_nib,
+                ink_rule: config.ink_rule,
+                ink_snap: config.ink_snap,
                 ui_scale: crate::theme::clamp_scale(config.ui_scale),
             },
             placed: false,
@@ -334,6 +351,9 @@ impl Running {
             history,
             map_layer,
             grid_layer,
+            ink_layer,
+            overlay,
+            live: None,
             loader,
             camera: DM_CAMERA,
         })
@@ -372,26 +392,35 @@ impl Running {
                 let viewport = (pane.config.width, pane.config.height);
                 let (device, queue) = (&self.gpu.device, &self.gpu.queue);
                 let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
-                let canvas = self.settings.theme.tokens().canvas;
                 let tv_camera = self.scene.tv_box.camera(viewport);
                 // The TV draws what it shows, and every map at full strength.
                 let shown: Vec<(&Asset, f32)> = draw_order(&self.scene, Audience::Tv)
                     .into_iter()
                     .map(|asset| (asset, maps::FULL_STRENGTH))
                     .collect();
+                // The strokes draw over every map and over the grid, and
+                // what the DM has under their hand draws with them.
+                let mut ink = scene::ink_order(&self.scene, Audience::Tv);
+                if let Some(live) = self.live.as_ref() {
+                    ink.push(live);
+                }
                 let map_layer = &mut self.map_layer;
                 let grid_layer = &self.grid_layer;
+                let ink_layer = &mut self.ink_layer;
                 let line = self.settings.theme.tokens().grid_line();
                 let width = pane.window.scale_factor() as f32;
-                self.gpu.clear(pane, color::linear_token(canvas), |pass| {
-                    map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
-                    // DESIGN.md 5.1: one grid covers the canvas and it
-                    // lies over every map, on both screens.
-                    grid_layer.draw(queue, pass, &tv_camera, viewport, line, width);
-                    if let Some(center) = tv_pointer {
-                        pointer.draw(queue, pass, center, viewport);
-                    }
-                })?;
+                let mode = self.settings.theme;
+                self.overlay
+                    .render(&self.gpu, pane, &ink, &tv_camera, mode, |pass| {
+                        map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
+                        // DESIGN.md 5.1: one grid covers the canvas and it
+                        // lies over every map, on both screens.
+                        grid_layer.draw(queue, pass, &tv_camera, viewport, line, width);
+                        ink_layer.draw(device, queue, pass, &ink, &tv_camera, viewport);
+                        if let Some(center) = tv_pointer {
+                            pointer.draw(queue, pass, center, viewport);
+                        }
+                    })?;
             }
             WindowEvent::CursorMoved { position, .. } if !is_dm => {
                 self.tv_pointer = Some((position.x as f32, position.y as f32));
@@ -506,8 +535,17 @@ impl Running {
                 (asset, strength)
             })
             .collect();
+        // What the DM is drawing right now is in no scene, so it travels
+        // beside the scene until the hand lets go.
+        let drawing = self.live != output.live;
+        self.live.clone_from(&output.live);
+        let mut ink = scene::ink_order(&self.scene, Audience::Dm);
+        if let Some(live) = self.live.as_ref() {
+            ink.push(live);
+        }
         let (map_layer, camera) = (&mut self.map_layer, &self.camera);
         let grid_layer = &self.grid_layer;
+        let ink_layer = &mut self.ink_layer;
         let tokens = self.settings.theme.tokens();
         let line = tokens.grid_line();
         let width = self.dm.window.scale_factor() as f32;
@@ -519,9 +557,10 @@ impl Running {
             |pass| {
                 map_layer.draw(device, queue, pass, &shown, camera, viewport);
                 grid_layer.draw(queue, pass, camera, viewport, line, width);
+                ink_layer.draw(device, queue, pass, &ink, camera, viewport);
             },
         )?;
-        if output.edited {
+        if output.edited || drawing {
             self.tv.window.request_redraw();
         }
         self.active_group = output.active_group;
@@ -634,6 +673,11 @@ impl Running {
         config.snap_percent = self.settings.snap_percent;
         config.theme = self.settings.theme;
         config.language.clone_from(&self.settings.language);
+        config.ink_color = self.settings.ink_color;
+        config.ink_width = self.settings.ink_width;
+        config.ink_nib = self.settings.ink_nib;
+        config.ink_rule = self.settings.ink_rule;
+        config.ink_snap = self.settings.ink_snap;
         config.ui_scale = self.settings.ui_scale;
         scene.clone_from(&self.scene);
     }
