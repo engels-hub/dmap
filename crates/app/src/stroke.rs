@@ -37,9 +37,8 @@ pub enum Ink {
     Burst,
     /// A cone of effect, from its point out to where it ends.
     ///
-    /// It is as wide at any point along its length as that point stands
-    /// far from the point of origin, and it ends on a round edge. The
-    /// cone of D&D 5e, chapter 10.
+    /// It ends as wide as it is long, on a straight edge. The cone of
+    /// D&D 5e, chapter 10.
     Cone,
     /// A straight run of effect, one cell wide unless the DM widened it.
     Beam,
@@ -245,30 +244,23 @@ fn burst(center: (f64, f64), edge: (f64, f64)) -> Vec<(f64, f64)> {
 
 /// The cone of effect from a point, out to where the drag ended.
 ///
-/// A cone is as wide at any point along its length as that point stands
-/// far from the point of origin. D&D 5e, chapter 10. Every point of the
-/// far edge lies one length from the origin, so that edge is an arc, and
-/// the two sides lie 30 degrees off the middle: a chord of that arc at
-/// distance `d` is `2 * d * sin(30)`, which is `d`.
+/// A cone is as wide across its end as it is long, and its end is
+/// straight. D&D 5e, chapter 10. So it draws as a triangle, and the two
+/// far corners stand half a length to each side of where the drag ended.
 fn cone(point: (f64, f64), end: (f64, f64)) -> Vec<(f64, f64)> {
     let (dx, dy) = (end.0 - point.0, end.1 - point.1);
     let length = dx.hypot(dy);
     if length <= f64::EPSILON {
         return vec![point];
     }
-    let heading = dy.atan2(dx);
-    let half = std::f64::consts::FRAC_PI_6;
-    let mut out = vec![point];
-    out.extend((0..=ARC_STEPS).map(|step| {
-        let part = step as f64 / ARC_STEPS as f64;
-        let angle = heading - half + 2.0 * half * part;
-        (
-            point.0 + length * angle.cos(),
-            point.1 + length * angle.sin(),
-        )
-    }));
-    out.push(point);
-    out
+    let half = length / 2.0;
+    let side = (-dy / length * half, dx / length * half);
+    vec![
+        point,
+        (end.0 + side.0, end.1 + side.1),
+        (end.0 - side.0, end.1 - side.1),
+        point,
+    ]
 }
 
 /// The straight run of effect between two points, one cell wide.
@@ -442,19 +434,14 @@ mod tests {
     }
 
     #[test]
-    fn a_cone_is_as_wide_as_it_is_far_from_its_point() {
+    fn a_cone_ends_as_wide_as_it_is_long() {
         let mark = stroke(Ink::Cone, &[(0.0, 0.0), (4.0, 0.0)]);
         let line = mark.polyline();
         assert_eq!(line.first(), line.last());
-        // Every point of the far edge lies one length from the point.
-        for point in &line[1..line.len() - 1] {
-            let away = point.0.hypot(point.1);
-            assert!((away - 4.0).abs() < 1e-9, "{point:?} lies {away} out");
-        }
-        // The chord across the two sides is one length: as wide as it is
-        // long, and the same at any distance along it.
-        let (first, last) = (line[1], line[line.len() - 2]);
-        let across = (first.0 - last.0).hypot(first.1 - last.1);
+        // The end is straight, and one length across.
+        let (left, right) = (line[1], line[2]);
+        assert!((left.0 - 4.0).abs() < 1e-9 && (right.0 - 4.0).abs() < 1e-9);
+        let across = (left.0 - right.0).hypot(left.1 - right.1);
         assert!((across - 4.0).abs() < 1e-9, "the cone ends {across} across");
     }
 
