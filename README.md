@@ -48,21 +48,25 @@ The first build takes some minutes. The DM window opens on your display. If a se
 
 ### Where your work lives
 
-A scene is a folder. The folder holds one `scene.json` and the map images beside it. Nothing in it points outside the folder. Copy a scene to a USB stick or to another machine, and it opens there.
+A scene is a folder. The folder holds one `scene.json`, one `history.json` and the map images beside them. Nothing in it points outside the folder. Copy a scene to a USB stick or to another machine, and it opens there.
 
 ```text
 ~/dmap/scenes/
   The Crypt/
     scene.json      the maps, where they sit, and the TV box
+    history.json    the changes you can take back
     crypt.png       the images themselves
   Sosnovka/
     scene.json
+    history.json
     village.jpg
 ```
 
 The program keeps its own file in `~/.config/dmap/config.json`. It holds the folder your scenes live in and the scene you had open last. It also holds the settings of this table: the TV display, swap mode and the snap window. A scene carries none of those, so your TV does not travel with a scene you give away.
 
-Both files hold plain JSON. Read them, and edit them by hand if you like.
+These files hold plain JSON. Read them, and edit them by hand if you like.
+
+Caution: a change you make to `scene.json` by hand leaves `history.json` behind. The steps in it go back to a scene that no longer stands there. Delete `history.json` after such an edit. A scene with no history file opens with an empty stack.
 
 Start the program with no argument and it opens the scene you had open last. Give it a scene folder to open that one:
 
@@ -91,8 +95,16 @@ The canvas takes its controls from Figma.
 | Zoom the DM view | `Ctrl` with the wheel, `Ctrl` with `+` or `-`, or a pinch on a touchpad |
 | Back to the zoom a project opens with | `Ctrl` with `0` |
 | Put the whole TV box on the screen | `T` |
+| Take the last change back | `Ctrl` with `Z` |
+| Make the change again | `Ctrl` and `Shift` with `Z`, or `Ctrl` with `Y` |
 
 The DM view is the game master's own. The TV never moves with it.
+
+`Ctrl` with `Z` takes back the last change to the scene. Every change counts: a drag, a key, a field in a panel, a switch in the list, and the TV box. One drag is one step, however many frames it covers. The stack holds a hundred steps. It lives in `history.json` beside the scene, so you close the program and take back yesterday's work tomorrow. Another scene on the canvas brings the stack of its own folder.
+
+A field that holds the keyboard keeps an undo of its own. There `Ctrl` with `Z` works on the text you type.
+
+The **History** button in the bottom right corner opens the list of your changes, the newest first. A click on a step takes the scene to the state after that step. The steps you took back stay on the list, in grey, so one click walks forward again. The last row, "Before the first change", takes the scene to where the stack begins.
 
 Pick a view in the toolbar at the bottom of the window. The toolbar comes in two boxes. The left one holds the views, and one of them is always on. The right one holds Scenes, Add map and Settings, which open something at once and never stay on.
 

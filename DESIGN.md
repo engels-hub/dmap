@@ -127,6 +127,13 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - A picked group has a 2 px dashed `accent` box. A 1 px dash is too thin to read at a zoom that shows the whole canvas. The root group has no box.
 - A map the TV does not show draws at half strength on the DM screen. A group that is off for the TV takes every map under it to half strength. The TV draws every map it shows at full strength.
 
+### 5.7 History button
+
+- The button floats 12 px from the right edge and 12 px from the bottom edge. It stands level with the toolbar.
+- It takes the shape of a toolbar entry: 44 px high, the `undo` glyph 18 px over the label 13 px, on a `surface` box with a 1 px `ink` border and the hard shadow.
+- It sits apart from the toolbar, because it belongs to no view. Every view writes to the history.
+- A press opens the History dialog. A second press closes it.
+
 ## 6. Controls
 
 All controls have square corners.
@@ -308,6 +315,18 @@ The release archive keeps the same three files beside the program. This tab is t
 - Row: The file holds, with one checkbox for each thing the importer found. Each checkbox starts on.
 - Row: Foundry folder, with the path and the Change button. Helper: "A Foundry scene needs this. A Universal VTT file does not".
 - The footer holds Import on the left and Cancel on the right.
+
+### 9.8 History
+
+- Size 520 x 460 px.
+- Each step is a row 46 px high with a 1 px `rule` bottom border, and 12 px of padding on each side.
+- A row holds two lines. The first line 14 px names what the DM did and the file or the group it happened to, such as "Move ivan.jpg". The time stands at the right end of that line, 13 px in `mute`, and reads "just now", "4 min ago", "2 h ago" or "3 days ago".
+- The second line 13 px in `mute` holds the numbers the step wrote: two spots in inches for a move, two angles for a turn, two sizes in percent, the two pixel counts of a grid size, or the two pairs of screens of a switch.
+- The newest step stands at the top. The last row reads "Before the first change" and carries no second line.
+- The step the scene stands on takes the `raised` background, a 3 px `accent` bar on its left edge, and `accent` bold text.
+- A step the DM took back draws in `mute`. It stays on the list, so a walk forward is one click.
+- A click on a row takes the scene to the state after that step.
+- The footer holds the helper "A click on a step takes the scene there".
 
 ## 10. Other overlays
 

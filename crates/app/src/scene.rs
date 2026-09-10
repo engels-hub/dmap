@@ -565,7 +565,7 @@ pub fn ungroup(scene: &mut Scene, id: NodeId) -> bool {
 }
 
 /// Where an asset stood when a drag began.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Placed {
     /// The asset this belongs to.
     pub id: NodeId,
@@ -819,6 +819,21 @@ fn find_in(nodes: &[Node], id: NodeId) -> Option<&Node> {
     None
 }
 
+/// What the DM sees a node called: a group name, or a file name.
+///
+/// The history list and the panels both name a node this way, so a step
+/// reads as the row the DM pressed.
+pub fn name_of(scene: &Scene, id: NodeId) -> String {
+    match find(scene, id) {
+        Some(Node::Group(group)) => group.name.clone(),
+        Some(Node::Asset(asset)) => asset.path.file_name().map_or_else(
+            || asset.path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        ),
+        None => String::new(),
+    }
+}
+
 /// The asset of this name, ready to change.
 pub fn asset_mut(scene: &mut Scene, id: NodeId) -> Option<&mut Asset> {
     find_asset(&mut scene.root.children, id)
@@ -837,6 +852,17 @@ fn find_asset(nodes: &mut [Node], id: NodeId) -> Option<&mut Asset> {
         }
     }
     None
+}
+
+/// The screens of this node, ready to change.
+///
+/// A group and an asset both carry the pair, so a switch in the list
+/// reaches either one through this.
+pub fn shown_mut(scene: &mut Scene, id: NodeId) -> Option<&mut Shown> {
+    if has_group(scene, id) {
+        return group_mut(scene, id).map(|group| &mut group.shown);
+    }
+    asset_mut(scene, id).map(|asset| &mut asset.shown)
 }
 
 /// The group of this name, ready to change.
