@@ -3845,6 +3845,11 @@ fn erase(draw: &mut Draw, frame: &mut Frame<'_>, at: Option<(f64, f64)>, pointer
 }
 
 /// Cuts every stroke a disc reaches. Returns `true` when one gave way.
+///
+/// An area of effect and a kept measure come away whole: a piece of
+/// either one says nothing. Paint comes off in parts, and the parts of
+/// one stroke join a group of their own, so the objects list holds them
+/// together and the DM moves or hides them as one. Issue #12.
 fn bite(scene: &mut Scene, at: (f64, f64), radius: f64) -> bool {
     let hit: Vec<NodeId> = crate::scene::ink_order(scene, crate::scene::Audience::Dm)
         .into_iter()
@@ -3860,16 +3865,28 @@ fn bite(scene: &mut Scene, at: (f64, f64), radius: f64) -> bool {
             continue;
         };
         cut_one = true;
+        if stroke.ink.whole() {
+            // It is gone, and nothing goes back in its place.
+            continue;
+        }
         let runs = crate::stroke::cut(&stroke.polyline(), at, radius + stroke.width / 2.0);
         let Some(runs) = runs else {
             // The disc reached the stroke and cut nothing out of it, so
             // the stroke goes back where it was.
-            if let Some(group) = crate::scene::group_mut(scene, parent) {
-                group
-                    .children
-                    .insert(place.min(group.children.len()), Node::Stroke(stroke));
-            }
+            put_back(scene, parent, place, Node::Stroke(stroke));
             continue;
+        };
+        // A stroke that came apart before is already in a group of its
+        // own, and the new pieces stay in it. Only the first cut makes
+        // one, or a long rub would build a tower of groups.
+        let holder = if runs.len() > 1 && !pieces_group(scene, parent) {
+            let id = scene.next_id();
+            let mut group = Group::new(id, text::panel_objects_pieces().to_owned());
+            group.shown = stroke.shown;
+            put_back(scene, parent, place, Node::Group(group));
+            id
+        } else {
+            parent
         };
         for (step, run) in runs.into_iter().enumerate() {
             let id = scene.next_id();
@@ -3881,13 +3898,30 @@ fn bite(scene: &mut Scene, at: (f64, f64), radius: f64) -> bool {
                 points: run,
                 ..stroke.clone()
             };
-            if let Some(group) = crate::scene::group_mut(scene, parent) {
-                let place = (place + step).min(group.children.len());
-                group.children.insert(place, Node::Stroke(piece));
-            }
+            let place = if holder == parent { place + step } else { step };
+            put_back(scene, holder, place, Node::Stroke(piece));
         }
     }
     cut_one
+}
+
+/// Puts a node back into a group, at the place it had or at the end.
+fn put_back(scene: &mut Scene, parent: NodeId, place: usize, node: Node) {
+    if let Some(group) = crate::scene::group_mut(scene, parent) {
+        let place = place.min(group.children.len());
+        group.children.insert(place, node);
+    }
+}
+
+/// Whether this group already holds the pieces of a stroke.
+///
+/// The group the Draw view fills is not one of those, and neither is the
+/// root, so the first cut inside either one makes a group.
+fn pieces_group(scene: &Scene, id: NodeId) -> bool {
+    id != ROOT_ID
+        && crate::scene::find(scene, id)
+            .and_then(Node::group)
+            .is_some_and(|group| !group.ink)
 }
 
 /// Takes the stroke under the DM's hand to where the pointer stands.
@@ -5281,7 +5315,106 @@ fn draw_selection(painter: &egui::Painter, handles: &[egui::Pos2], tokens: Token
 
 #[cfg(test)]
 mod tests {
-    use super::{ROW_HEIGHT, Settings, row_parts, theme};
+    use super::{ROW_HEIGHT, Settings, bite, row_parts, theme};
+    use crate::scene::{Group, Node, Scene, Shown};
+    use crate::stroke::{Ink, Rule, Stroke};
+
+    /// A stroke of this ink, through these points.
+    fn stroke(id: u64, ink: Ink, points: &[(f64, f64)]) -> Stroke {
+        Stroke {
+            id,
+            shown: Shown::default(),
+            ink,
+            points: points.to_vec(),
+            color: [0, 0, 0, 255],
+            width: 0.1,
+            span: 0.0,
+            rule: Rule::default(),
+        }
+    }
+
+    /// A scene whose Drawings group holds these strokes.
+    fn drawn(strokes: Vec<Stroke>) -> Scene {
+        let mut scene = Scene::default();
+        let mut group = Group::new(9, "Drawings".to_owned());
+        group.ink = true;
+        group.children = strokes.into_iter().map(Node::Stroke).collect();
+        scene.root.children.push(Node::Group(group));
+        scene
+    }
+
+    /// What the Drawings group holds now, as names and depths.
+    fn inside(scene: &Scene) -> Vec<(usize, String)> {
+        fn walk(nodes: &[Node], depth: usize, found: &mut Vec<(usize, String)>) {
+            for node in nodes {
+                match node {
+                    Node::Group(group) => {
+                        found.push((depth, group.name.clone()));
+                        walk(&group.children, depth + 1, found);
+                    }
+                    Node::Stroke(stroke) => found.push((depth, format!("{:?}", stroke.ink))),
+                    Node::Asset(_) => {}
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&scene.root.children, 0, &mut found);
+        found
+    }
+
+    #[test]
+    fn the_eraser_takes_a_whole_effect_and_leaves_no_line_behind() {
+        let mut scene = drawn(vec![stroke(1, Ink::Beam, &[(0.0, 0.0), (10.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 0.2));
+        // The beam is gone, and no piece of its outline stands in for it.
+        assert_eq!(inside(&scene), vec![(0, "Drawings".to_owned())]);
+    }
+
+    #[test]
+    fn the_eraser_takes_a_kept_measure_whole_as_well() {
+        let mut scene = drawn(vec![stroke(1, Ink::Measure, &[(0.0, 0.0), (10.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 0.2));
+        assert_eq!(inside(&scene), vec![(0, "Drawings".to_owned())]);
+    }
+
+    #[test]
+    fn the_pieces_of_a_cut_line_join_a_group() {
+        let mut scene = drawn(vec![stroke(1, Ink::Pen, &[(0.0, 0.0), (10.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 1.0));
+        assert_eq!(
+            inside(&scene),
+            vec![
+                (0, "Drawings".to_owned()),
+                (1, "Pieces".to_owned()),
+                (2, "Pen".to_owned()),
+                (2, "Pen".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_second_cut_stays_in_the_group_the_first_one_made() {
+        let mut scene = drawn(vec![stroke(1, Ink::Pen, &[(0.0, 0.0), (20.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 1.0));
+        assert!(bite(&mut scene, (12.0, 0.0), 1.0));
+        // Three pieces, and one group holding all of them.
+        let held = inside(&scene);
+        let groups = held.iter().filter(|(_, name)| name == "Pieces").count();
+        let pieces = held.iter().filter(|(_, name)| name == "Pen").count();
+        assert_eq!((groups, pieces), (1, 3), "{held:?}");
+        assert!(held.iter().all(|(depth, _)| *depth <= 2), "{held:?}");
+    }
+
+    #[test]
+    fn a_bite_that_cuts_nothing_leaves_the_stroke_where_it_stood() {
+        let mut scene = drawn(vec![stroke(1, Ink::Pen, &[(0.0, 0.0), (10.0, 0.0)])]);
+        // The disc reaches the line but takes no part of it away.
+        assert!(!bite(&mut scene, (5.0, 4.0), 0.2));
+        assert_eq!(
+            inside(&scene),
+            vec![(0, "Drawings".to_owned()), (1, "Pen".to_owned())]
+        );
+    }
 
     /// One row of the objects list, the size the panel gives it.
     fn row() -> egui::Rect {

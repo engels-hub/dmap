@@ -8,6 +8,7 @@
   "tool.settings": "Settings",
   "tool.history": "History",
 
+  "panel.objects.pieces": "Pieces",
   "panel.objects.title": "Objects",
   "panel.objects.new_group": "New group",
   "panel.objects.ungroup": "Ungroup",

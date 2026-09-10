@@ -224,7 +224,9 @@ An area of effect fills its shape at a quarter of the alpha the DM picked, and i
 
 A burst takes one drag, from its middle to its edge. A cone takes one as well, from its point out to where it ends: it ends as wide as it is long, on a straight edge. D&D 5e, chapter 10. A beam takes two drags, one for its length and one for its width. The second begins after the first ends, so no gesture asks for a button and a move at the same time.
 
-The eraser takes a bite out of every stroke it passes over, and it bites its way along the path the pointer took. What is left of a shape is a free line: a box with a bite out of it is no longer a box.
+The eraser takes a bite out of every stroke it passes over, and it bites its way along the path the pointer took. What is left of a shape is a free line: a box with a bite out of it is no longer a box. The pieces of one stroke join a group, so the objects list holds them together, and a later bite keeps to that group.
+
+An area of effect and a kept measure come away whole. Each one stands for one thing, a spell over a patch of the map or a distance read off it, and a piece of either says nothing. The eraser takes them from anywhere inside them, not from their line alone.
 
 **The panel of a stroke, in the Select view**
 

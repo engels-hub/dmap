@@ -60,6 +60,17 @@ impl Ink {
         matches!(self, Self::Beam)
     }
 
+    /// Whether the eraser takes this ink whole instead of cutting it.
+    ///
+    /// An area of effect and a kept measure each stand for one thing: a
+    /// spell that covers a patch of the map, a distance the DM read off
+    /// it. A piece of either one says nothing, so the eraser takes the
+    /// whole of it. A pen or a shape is paint, and paint comes off in
+    /// parts. Issue #12.
+    pub fn whole(self) -> bool {
+        self.filled() || matches!(self, Self::Measure)
+    }
+
     /// Whether this ink fills the shape it draws, as an effect does.
     pub fn filled(self) -> bool {
         matches!(self, Self::Burst | Self::Cone | Self::Beam)
@@ -242,11 +253,20 @@ impl Stroke {
     }
 
     /// Whether a disc of `radius` inches around `at` reaches this stroke.
+    ///
+    /// A filled shape counts from anywhere inside it, not from its line
+    /// alone: the DM sees an area, and the whole of that area is the
+    /// shape. Issue #12.
     pub fn touches(&self, at: (f64, f64), radius: f64) -> bool {
         let reach = radius + self.width / 2.0;
         let line = self.polyline();
-        line.windows(2)
+        if line
+            .windows(2)
             .any(|pair| near_segment(at, pair[0], pair[1]) <= reach)
+        {
+            return true;
+        }
+        self.ink.filled() && inside(&line, at)
     }
 }
 
@@ -319,6 +339,26 @@ fn ellipse(first: (f64, f64), last: (f64, f64)) -> Vec<(f64, f64)> {
             )
         })
         .collect()
+}
+
+/// Whether a point lies inside a shape.
+///
+/// A ray runs from the point out to the right, and the shape holds the
+/// point when the ray crosses the outline an odd number of times.
+fn inside(line: &[(f64, f64)], at: (f64, f64)) -> bool {
+    let mut held = false;
+    for pair in line.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        // Only a side that stands across the ray can cross it.
+        if (from.1 > at.1) == (to.1 > at.1) {
+            continue;
+        }
+        let part = (at.1 - from.1) / (to.1 - from.1);
+        if at.0 < from.0 + part * (to.0 - from.0) {
+            held = !held;
+        }
+    }
+    held
 }
 
 /// How far `point` lies from the segment between `from` and `to`.
@@ -515,6 +555,28 @@ mod tests {
                 "a beam to {to:?} is {width} wide"
             );
         }
+    }
+
+    #[test]
+    fn a_filled_shape_counts_from_anywhere_inside_it() {
+        let beam = stroke(Ink::Beam, &[(0.0, 0.0), (10.0, 0.0)]);
+        // The middle of the beam, half a cell from either long side.
+        assert!(beam.touches((5.0, 0.0), 0.01));
+        assert!(!beam.touches((5.0, 2.0), 0.01));
+        let burst = stroke(Ink::Burst, &[(0.0, 0.0), (4.0, 0.0)]);
+        assert!(burst.touches((1.0, 1.0), 0.01));
+        assert!(!burst.touches((4.0, 4.0), 0.01));
+        // A line that fills nothing keeps to itself.
+        let box_mark = stroke(Ink::Rect, &[(0.0, 0.0), (10.0, 10.0)]);
+        assert!(!box_mark.touches((5.0, 5.0), 0.01));
+        assert!(box_mark.touches((0.0, 5.0), 0.01));
+    }
+
+    #[test]
+    fn the_eraser_takes_an_effect_and_a_measure_whole() {
+        assert!(Ink::Burst.whole() && Ink::Cone.whole() && Ink::Beam.whole());
+        assert!(Ink::Measure.whole());
+        assert!(!Ink::Pen.whole() && !Ink::Line.whole() && !Ink::Rect.whole());
     }
 
     #[test]

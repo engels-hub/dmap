@@ -8,6 +8,7 @@
   "tool.settings": "Настройки",
   "tool.history": "История",
 
+  "panel.objects.pieces": "Части",
   "panel.objects.title": "Объекты",
   "panel.objects.new_group": "Новая группа",
   "panel.objects.ungroup": "Разгруппировать",

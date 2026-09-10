@@ -142,7 +142,8 @@ Pick a view in the toolbar at the bottom of the window. The toolbar comes in two
 |---|---|
 | Pick a pen, a shape, the eraser or the ruler | The squares at the top of the Draw panel |
 | Draw | Drag on the canvas |
-| Take a bite out of a stroke | Drag the eraser over it. What is left of a shape is a free line |
+| Take a bite out of a stroke | Drag the eraser over it. What is left of a shape is a free line, and the pieces join a group |
+| Rub out an effect or a kept measure | Drag the eraser anywhere over it. It goes whole |
 | Measure a distance | Drag the ruler. The label gives cells and feet |
 | Bend the measure | The second button, while you drag |
 | Keep the measure | `Shift` as you let go. Without it the line goes |
