@@ -6,3 +6,6 @@ Cargo.lock.bak
 
 # Python leaves this beside tools/icons.py.
 __pycache__/
+
+# The folder tools/fonts.py asks for, which holds fontTools.
+/.venv

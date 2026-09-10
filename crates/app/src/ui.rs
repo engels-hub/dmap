@@ -2208,6 +2208,8 @@ enum License {
     Program,
     /// Atkinson Hyperlegible, which DESIGN.md 3 gives the window.
     Font,
+    /// Fira Sans, which holds the letters Atkinson lacks. DESIGN.md 3.
+    Fallback,
     /// The Lucide glyphs of DESIGN.md 4.
     Icons,
 }
@@ -2217,6 +2219,9 @@ const GPL: &str = include_str!("../../../LICENSE");
 
 /// The text of the SIL Open Font License, which the font comes under.
 const OFL: &str = include_str!("../assets/fonts/LICENSE-OFL.txt");
+
+/// The same license again, as the second font carries its own copy.
+const OFL_FALLBACK: &str = include_str!("../assets/fonts/LICENSE-OFL-FiraSans.txt");
 
 /// The text of the ISC license, which the glyphs come under.
 const ISC: &str = include_str!("../assets/icons/LICENSE-ISC.txt");
@@ -2239,6 +2244,11 @@ impl License {
                 "SIL Open Font License 1.1",
                 "https://github.com/googlefonts/atkinson-hyperlegible",
             ),
+            Self::Fallback => (
+                "Fira Sans",
+                "SIL Open Font License 1.1",
+                "https://github.com/mozilla/Fira",
+            ),
             Self::Icons => (
                 "Lucide",
                 "ISC License",
@@ -2252,6 +2262,7 @@ impl License {
         match self {
             Self::Program => GPL,
             Self::Font => OFL,
+            Self::Fallback => OFL_FALLBACK,
             Self::Icons => ISC,
         }
     }
@@ -2270,9 +2281,16 @@ fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
     ui.spacing_mut().item_spacing.y = 6.0;
     widget::row_label(ui, &text::dialog_about_version(env!("CARGO_PKG_VERSION")));
     widget::helper(ui, text::dialog_about_tagline());
-    for one in [License::Program, License::Font, License::Icons] {
+    for one in [
+        License::Program,
+        License::Font,
+        License::Fallback,
+        License::Icons,
+    ] {
         let (name, terms, url) = one.about();
-        ui.horizontal(|ui| {
+        // A language whose words run long takes the link to the next
+        // line instead of past the edge of the dialog.
+        ui.horizontal_wrapped(|ui| {
             widget::row_label(ui, &text::dialog_about_licensed(name, terms));
             ui.hyperlink_to(
                 egui::RichText::new(text::dialog_about_source())
@@ -2291,7 +2309,7 @@ fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
         .collect();
     widget::helper(ui, &names.join(", "));
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         widget::helper(ui, text::dialog_about_free());
         ui.hyperlink_to(
             egui::RichText::new(text::dialog_about_bring())
@@ -2301,10 +2319,13 @@ fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
         );
     });
     ui.add_space(4.0);
+    // Every one of these is a name, and a name reads the same in every
+    // language, so no key stands behind them.
     let choices = [
         (License::Program, "dmap"),
-        (License::Font, text::dialog_about_font()),
-        (License::Icons, text::dialog_about_glyphs()),
+        (License::Font, "Atkinson"),
+        (License::Fallback, "Fira"),
+        (License::Icons, "Lucide"),
     ];
     widget::segmented(ui, picked, &choices);
     // The text takes the room that is left, so the tab needs no scroll of

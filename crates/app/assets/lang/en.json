@@ -82,8 +82,6 @@
   "dialog.about.tagline": "Map display for a tabletop RPG table with a TV.",
   "dialog.about.licensed": "{name}, under the {terms}.",
   "dialog.about.source": "Source",
-  "dialog.about.font": "Font",
-  "dialog.about.glyphs": "Glyphs",
   "dialog.about.built_by": "Built by",
   "dialog.about.free": "dmap is free software, and it is not finished.",
   "dialog.about.bring": "Bring a bug, a story or a patch",

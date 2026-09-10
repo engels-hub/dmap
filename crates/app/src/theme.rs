@@ -14,6 +14,17 @@ const REGULAR: &[u8] = include_bytes!("../assets/fonts/AtkinsonHyperlegible-Regu
 /// Atkinson Hyperlegible in weight 700, with tabular figures.
 const BOLD: &[u8] = include_bytes!("../assets/fonts/AtkinsonHyperlegible-Bold.ttf");
 
+/// Fira Sans in weight 400, cut down to the letters Atkinson lacks.
+///
+/// Atkinson Hyperlegible holds the Latin alphabet and no more, so a
+/// Russian or a Greek window would draw in whatever face the machine
+/// happened to carry. This one stands behind it in every family, in both
+/// weights, so those alphabets read and their bold reads bold.
+const FALLBACK: &[u8] = include_bytes!("../assets/fonts/FiraSans-Regular.ttf");
+
+/// Fira Sans in weight 700, cut down the same way.
+const FALLBACK_BOLD: &[u8] = include_bytes!("../assets/fonts/FiraSans-Bold.ttf");
+
 /// The name the bold family takes in `egui`.
 const BOLD_FAMILY: &str = "bold";
 
@@ -258,35 +269,40 @@ pub fn font(size: f32, bold: bool) -> FontId {
     }
 }
 
-/// Puts Atkinson Hyperlegible in front of every family.
+/// Puts Atkinson Hyperlegible in front of every family, Fira Sans behind.
+///
+/// A letter is drawn by the first face in the list that holds it. So the
+/// window draws Latin in Atkinson Hyperlegible, every other alphabet in
+/// Fira Sans, and anything neither one holds in the faces egui carries.
+/// DESIGN.md 3.
 fn fonts(ctx: &egui::Context) {
     let mut definitions = FontDefinitions::default();
-    definitions.font_data.insert(
-        "atkinson".to_owned(),
-        std::sync::Arc::new(FontData::from_static(REGULAR)),
-    );
-    definitions.font_data.insert(
-        "atkinson-bold".to_owned(),
-        std::sync::Arc::new(FontData::from_static(BOLD)),
-    );
-    for family in [FontFamily::Proportional, FontFamily::Monospace] {
-        definitions
-            .families
-            .entry(family)
-            .or_default()
-            .insert(0, "atkinson".to_owned());
+    for (name, bytes) in [
+        ("atkinson", REGULAR),
+        ("atkinson-bold", BOLD),
+        ("fira", FALLBACK),
+        ("fira-bold", FALLBACK_BOLD),
+    ] {
+        definitions.font_data.insert(
+            name.to_owned(),
+            std::sync::Arc::new(FontData::from_static(bytes)),
+        );
     }
-    // Atkinson Hyperlegible covers the Latin alphabet and no more. The
-    // faces egui carries stand behind it in every family, so a language
-    // in another alphabet reads. The bold family is built here, so it
-    // takes that same list behind its own face.
+    // What egui carries, before our faces go in front of it. The bold
+    // family is built from scratch, and it takes this same list at its
+    // back.
     let behind = definitions
         .families
         .get(&FontFamily::Proportional)
         .cloned()
         .unwrap_or_default();
-    let mut bold = vec!["atkinson-bold".to_owned()];
-    bold.extend(behind.into_iter().filter(|face| face != "atkinson"));
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        let list = definitions.families.entry(family).or_default();
+        list.insert(0, "fira".to_owned());
+        list.insert(0, "atkinson".to_owned());
+    }
+    let mut bold = vec!["atkinson-bold".to_owned(), "fira-bold".to_owned()];
+    bold.extend(behind);
     definitions
         .families
         .insert(FontFamily::Name(BOLD_FAMILY.into()), bold);

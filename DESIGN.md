@@ -35,7 +35,7 @@ The light theme is warm: cream surfaces, dark brown ink, vermilion accent. The d
 
 ## 3. Typography
 
-- Font: Atkinson Hyperlegible, weights 400 and 700. Fallback: Helvetica Neue, Arial, sans-serif.
+- Font: Atkinson Hyperlegible, weights 400 and 700, for the Latin alphabet. Fira Sans, the same weights, for Greek and Cyrillic. See 3.2.
 - Numbers use tabular figures.
 - Sizes:
 
@@ -66,7 +66,7 @@ Caution: a scale under 100 % takes a button under the 24 px floor of section 6. 
 - A key says where the word belongs, such as `panel.objects.title`. A place for a number or a name stands in braces, such as `{count}`, and a language puts it where it wants it.
 - Every other file in that folder is a translation, and the program carries them all. A key a translation lacks falls back to English, so the window never shows a bare key.
 - The DM picks the language in Settings, and the window takes it at once. DESIGN.md 9.1.
-- Atkinson Hyperlegible holds the Latin alphabet. The faces egui carries stand behind it in every family, so a language in another alphabet reads.
+- Atkinson Hyperlegible holds the Latin alphabet and no more. Fira Sans stands behind it in every family, in both weights, and holds Greek and Cyrillic. A letter neither one holds falls to the faces egui carries. `tools/fonts.py` cuts Fira down to the letters Atkinson lacks, so the program carries each alphabet once.
 - A language whose words run longer than the English ones costs a line, never a control. A label wraps, a row of buttons takes a second row, and a body that outgrows its dialog scrolls. DESIGN.md 1.
 
 ## 4. Icons

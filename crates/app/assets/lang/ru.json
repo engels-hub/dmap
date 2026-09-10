@@ -82,8 +82,6 @@
   "dialog.about.tagline": "Показ карт для настольной ролевой игры с телевизором.",
   "dialog.about.licensed": "{name}, на условиях {terms}.",
   "dialog.about.source": "Исходники",
-  "dialog.about.font": "Шрифт",
-  "dialog.about.glyphs": "Значки",
   "dialog.about.built_by": "Сделали",
   "dialog.about.free": "dmap — свободная программа, и она не закончена.",
   "dialog.about.bring": "Присылайте ошибку, историю или патч",
