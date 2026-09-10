@@ -60,6 +60,15 @@ Every size in this document is a size at scale 1. The DM picks a scale between 7
 
 Caution: a scale under 100 % takes a button under the 24 px floor of section 6. That is the DM's choice, and the floor holds for the design itself.
 
+### 3.2 The words
+
+- One file holds every word the window shows: `crates/app/assets/lang/en.json`. No screen writes a word of its own.
+- A key says where the word belongs, such as `panel.objects.title`. A place for a number or a name stands in braces, such as `{count}`, and a language puts it where it wants it.
+- Every other file in that folder is a translation, and the program carries them all. A key a translation lacks falls back to English, so the window never shows a bare key.
+- The DM picks the language in Settings, and the window takes it at once. DESIGN.md 9.1.
+- Atkinson Hyperlegible holds the Latin alphabet. The faces egui carries stand behind it in every family, so a language in another alphabet reads.
+- A language whose words run longer than the English ones costs a line, never a control. A label wraps, a row of buttons takes a second row, and a body that outgrows its dialog scrolls. DESIGN.md 1.
+
 ## 4. Icons
 
 - Set: Lucide (ISC license). Keep the license text in the repository.
@@ -238,7 +247,7 @@ A scene of a hundred thousand assets branches deep. Three things keep the list i
 
 **The footer**
 
-The footer holds Group and New group, and a helper line that names the picked nodes.
+The footer holds Group and New group, and a helper line that names the picked nodes. Two buttons that do not fit one row take a second row, and the list above them gives up the height. A language whose words run long never loses the end of one.
 
 ## 9. Dialogs
 
@@ -247,6 +256,7 @@ The footer holds Group and New group, and a helper line that names the picked no
 - Header 42 px: title 16 px bold at 20 px from the left, close icon in a 28 px square at 12 px from the right, 1 px `rule` bottom border.
 - Navigation column 168 px wide, 1 px `rule` right border, 10 px vertical padding. Each entry is 32 px high: icon 18 px, label 14 px, gap 8 px, padding 12 px on the left. The active entry has `raised` background and a 3 px `accent` bar on its left edge.
 - Body: padding 18 px 20 px, rows with a 16 px gap. Each row has a label column 140 px wide (14 px, 6 px top padding) and a control column with a 6 px gap between stacked controls. A dialog is wide enough for a label column, and a panel is not.
+- A label that outgrows its column wraps inside it, and the row grows. The column keeps its width, so the controls of every row stay in line. The body scrolls when the rows outgrow it.
 - Footer, where a dialog has one: 48 px high, 1 px `rule` top border, padding 0 20 px, buttons with a 10 px gap. The last button sits on the right.
 
 ### 9.1 Settings, Table tab
@@ -257,7 +267,8 @@ The footer holds Group and New group, and a helper line that names the picked no
 4. Windows: checkbox "Swap the two windows instead of moving the DM window".
 5. Check: checkbox "Show a 1 inch grid and a 6 inch ruler on the TV".
 6. Theme: segmented control (Light, Dark). See section 2.
-7. Interface scale: slider with the percent to its right. Helper: "How big the toolbar, the panels and the dialogs draw. The maps keep their size". See section 3.1.
+7. Language: select with the name of each language in its own words.
+8. Interface scale: slider with the percent to its right. Helper: "How big the toolbar, the panels and the dialogs draw. The maps keep their size". See section 3.1.
 
 ### 9.2 Settings, Grid tab
 

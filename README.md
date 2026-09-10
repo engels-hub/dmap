@@ -82,6 +82,12 @@ Pick the TV display in the Settings dialog. The program keeps the choice in the 
 
 The window has a light theme and a dark theme. The light one is the default. Pick the other one under **Theme** in the Settings dialog, and the program keeps that choice too.
 
+**Language** in the same dialog holds every language the program carries. The window takes a new one at once, with no restart, and the program keeps the choice. A first run takes the language of your system when a file matches it, and English when none does.
+
+To add a language, write one file. Copy `crates/app/assets/lang/en.json`, name the copy for your language, such as `ru.json`, and translate the right-hand side of each line. A key you leave out falls back to English, so a part of a translation is a translation. The program says in its log which language it took and which keys fell back. Send the file as a pull request, and the next build carries it.
+
+A place for a number or a name stands in braces, such as `{count}`. Put it where your language wants it. The line `"panel.picked.title": "{count} picked"` reads `"Выбрано: {count}"` in Russian, and both are right.
+
 **Interface scale** in the same dialog sets how big the toolbar, the panels and the dialogs draw. The range is 75 % to 175 %, in steps of 5 %. The maps keep their size, and one grid cell stays one inch, so a change here never moves what the players see.
 
 ## Controls

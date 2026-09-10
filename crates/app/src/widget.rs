@@ -114,8 +114,7 @@ pub fn row_label(ui: &mut Ui, text: &str) {
 pub fn button(ui: &mut Ui, text: &str, glyph: Option<Icon>, height: Height) -> Response {
     let tokens = theme::of(ui.ctx());
     let font = theme::font(theme::BODY, false);
-    let width =
-        text_width(ui, text, &font) + 2.0 * PAD + glyph.map_or(0.0, |_| SMALL_ICON + ICON_GAP);
+    let width = button_width(ui, text, glyph);
     let (rect, response) = ui.allocate_exact_size(vec2(width, height.points()), Sense::click());
     let fill = if response.is_pointer_button_down_on() || response.hovered() {
         tokens.raised
@@ -461,6 +460,31 @@ pub fn slider(
 }
 
 /// How wide `text` runs in `font`.
+/// How wide a button of these words stands, in points.
+///
+/// A panel that has to know whether two buttons fit beside one another
+/// asks this first. A language whose words run longer than the English
+/// ones then takes another row instead of losing the end of a word.
+pub fn button_width(ui: &Ui, text: &str, glyph: Option<Icon>) -> f32 {
+    let font = theme::font(theme::BODY, false);
+    text_width(ui, text, &font) + 2.0 * PAD + glyph.map_or(0.0, |_| SMALL_ICON + ICON_GAP)
+}
+
+/// How tall these words stand once they wrap to `width`, in points.
+pub fn helper_height(ui: &Ui, text: &str, width: f32) -> f32 {
+    ui.ctx().fonts_mut(|fonts| {
+        fonts
+            .layout(
+                text.to_owned(),
+                theme::font(theme::SMALL, false),
+                egui::Color32::PLACEHOLDER,
+                width,
+            )
+            .size()
+            .y
+    })
+}
+
 fn text_width(ui: &Ui, text: &str, font: &egui::FontId) -> f32 {
     ui.ctx().fonts_mut(|fonts| {
         fonts

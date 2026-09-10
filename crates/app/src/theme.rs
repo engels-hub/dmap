@@ -78,8 +78,8 @@ impl Mode {
     /// The name of the theme, for a segmented control.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Light => "Light",
-            Self::Dark => "Dark",
+            Self::Light => crate::text::theme_light(),
+            Self::Dark => crate::text::theme_dark(),
         }
     }
 }
@@ -276,10 +276,20 @@ fn fonts(ctx: &egui::Context) {
             .or_default()
             .insert(0, "atkinson".to_owned());
     }
-    definitions.families.insert(
-        FontFamily::Name(BOLD_FAMILY.into()),
-        vec!["atkinson-bold".to_owned()],
-    );
+    // Atkinson Hyperlegible covers the Latin alphabet and no more. The
+    // faces egui carries stand behind it in every family, so a language
+    // in another alphabet reads. The bold family is built here, so it
+    // takes that same list behind its own face.
+    let behind = definitions
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    let mut bold = vec!["atkinson-bold".to_owned()];
+    bold.extend(behind.into_iter().filter(|face| face != "atkinson"));
+    definitions
+        .families
+        .insert(FontFamily::Name(BOLD_FAMILY.into()), bold);
     ctx.set_fonts(definitions);
 }
 
