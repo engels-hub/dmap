@@ -22,6 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::scene::{Asset, Group, Node, NodeId, Placed, Scene, Shown};
+use crate::text;
 use crate::tvbox::TvBox;
 
 /// How many changes the stack keeps.
@@ -86,7 +87,7 @@ fn now() -> u64 {
 /// no time, and reads as `earlier`.
 fn ago(at: u64, now: u64) -> String {
     if at == 0 {
-        return "earlier".to_owned();
+        return text::history_ago_earlier().to_owned();
     }
     // A clock that went back leaves a step in the future. It happened, so
     // it reads as the newest thing that happened.
@@ -94,36 +95,36 @@ fn ago(at: u64, now: u64) -> String {
     // Under three quarters of a minute reads as no time at all, as it
     // does in a chat window.
     if gap < 45 {
-        return "just now".to_owned();
+        return text::history_ago_now().to_owned();
     }
     let minutes = (gap + 30) / 60;
     if minutes < 90 {
-        return format!("{} min ago", minutes.max(1));
+        return text::history_ago_minutes(minutes.max(1));
     }
     let hours = (gap + 1800) / 3600;
     if hours < 24 {
-        return format!("{hours} h ago");
+        return text::history_ago_hours(hours);
     }
     // A day and a half still reads as a day. The DM wants to know which
     // session a step belongs to, not the hour of it.
     if gap < 2 * 86400 {
-        return "a day ago".to_owned();
+        return text::history_ago_day().to_owned();
     }
-    format!("{} days ago", gap / 86400)
+    text::history_ago_days(gap / 86400)
 }
 
 /// The name of a spot on the canvas, in inches.
 fn spot(at: (f64, f64)) -> String {
-    format!("{:.1}, {:.1}", at.0, at.1)
+    text::history_spot(format_args!("{:.1}", at.0), format_args!("{:.1}", at.1))
 }
 
 /// Which screens a pair of switches says yes to.
 fn screens(shown: Shown) -> &'static str {
     match (shown.dm, shown.tv) {
-        (true, true) => "both screens",
-        (true, false) => "the DM screen",
-        (false, true) => "the TV",
-        (false, false) => "no screen",
+        (true, true) => text::history_screens_both(),
+        (true, false) => text::history_screens_dm(),
+        (false, true) => text::history_screens_tv(),
+        (false, false) => text::history_screens_none(),
     }
 }
 
@@ -138,9 +139,9 @@ fn differs(was: f64, now: f64) -> bool {
 /// How a step names the assets it touched: the file, or a count of them.
 fn maps(assets: &[Asset]) -> String {
     match assets {
-        [] => "a map".to_owned(),
+        [] => text::history_maps_one().to_owned(),
         [one] => file_name(one),
-        many => format!("{} maps", many.len()),
+        many => text::history_maps_many(many.len()),
     }
 }
 
@@ -155,9 +156,9 @@ fn file_name(asset: &Asset) -> String {
 /// How a step names the group lists it rewrote.
 fn lists(count: usize) -> String {
     if count == 1 {
-        "one list".to_owned()
+        text::history_lists_one().to_owned()
     } else {
-        format!("{count} lists")
+        text::history_lists_many(count)
     }
 }
 
@@ -181,12 +182,11 @@ impl Command for SetTvBox {
 
     fn note(&self) -> Note {
         Note::new(
-            "The TV box",
+            text::history_deed_tv_box(),
             String::new(),
-            format!(
-                "{:.1} in wide at {}",
-                self.after.width,
-                spot(self.after.center)
+            text::history_detail_tv_box(
+                format_args!("{:.1}", self.after.width),
+                spot(self.after.center),
             ),
         )
     }
@@ -221,38 +221,49 @@ impl Command for SetAssets {
             .zip(&self.after)
             .find(|(was, now)| was != now)
         else {
-            return Note::new("Change", subject, String::new());
+            return Note::new(text::history_deed_change(), subject, String::new());
         };
         let (what, detail) = if was.center != now.center {
             (
-                "Move",
-                format!("{} to {} in", spot(was.center), spot(now.center)),
+                text::history_deed_move(),
+                text::history_detail_move(spot(was.center), spot(now.center)),
             )
         } else if differs(was.rotation, now.rotation) {
             (
-                "Turn",
-                format!(
-                    "{:.0}\u{b0} to {:.0}\u{b0}",
-                    was.rotation.to_degrees(),
-                    now.rotation.to_degrees()
+                text::history_deed_turn(),
+                text::history_detail_turn(
+                    format_args!("{:.0}", was.rotation.to_degrees()),
+                    format_args!("{:.0}", now.rotation.to_degrees()),
                 ),
             )
         } else if differs(was.scale, now.scale) {
             (
-                "Size",
-                format!("{:.0} % to {:.0} %", was.scale * 100.0, now.scale * 100.0),
+                text::history_deed_size(),
+                text::history_detail_size(
+                    format_args!("{:.0}", was.scale * 100.0),
+                    format_args!("{:.0}", now.scale * 100.0),
+                ),
             )
         } else if was.flip_x != now.flip_x {
-            ("Flip", "left to right".to_owned())
+            (
+                text::history_deed_flip(),
+                text::history_detail_flip_x().to_owned(),
+            )
         } else if was.flip_y != now.flip_y {
-            ("Flip", "top to bottom".to_owned())
+            (
+                text::history_deed_flip(),
+                text::history_detail_flip_y().to_owned(),
+            )
         } else if differs(was.grid_px, now.grid_px) {
             (
-                "The grid size",
-                format!("{:.0} px to {:.0} px per cell", was.grid_px, now.grid_px),
+                text::history_deed_grid_px(),
+                text::history_detail_grid_px(
+                    format_args!("{:.0}", was.grid_px),
+                    format_args!("{:.0}", now.grid_px),
+                ),
             )
         } else {
-            ("Change", String::new())
+            (text::history_deed_change(), String::new())
         };
         Note::new(what, subject, detail)
     }
@@ -294,9 +305,12 @@ impl Command for Grow {
     fn note(&self) -> Note {
         let was = self.starts.first().map_or(1.0, |first| first.scale);
         Note::new(
-            "Size",
+            text::history_deed_size(),
             self.subject.clone(),
-            format!("{:.0} % to {:.0} %", was * 100.0, was * self.factor * 100.0),
+            text::history_detail_size(
+                format_args!("{:.0}", was * 100.0),
+                format_args!("{:.0}", was * self.factor * 100.0),
+            ),
         )
     }
 }
@@ -326,12 +340,11 @@ impl Command for Turn {
     fn note(&self) -> Note {
         let was = self.starts.first().map_or(0.0, |first| first.rotation);
         Note::new(
-            "Turn",
+            text::history_deed_turn(),
             self.subject.clone(),
-            format!(
-                "{:.0}\u{b0} to {:.0}\u{b0}",
-                was.to_degrees(),
-                (was + self.angle).to_degrees()
+            text::history_detail_turn(
+                format_args!("{:.0}", was.to_degrees()),
+                format_args!("{:.0}", (was + self.angle).to_degrees()),
             ),
         )
     }
@@ -372,7 +385,11 @@ impl Command for SetName {
     }
 
     fn note(&self) -> Note {
-        Note::new("Rename", self.before.clone(), format!("to {}", self.after))
+        Note::new(
+            text::history_deed_rename(),
+            self.before.clone(),
+            text::history_detail_rename(&self.after),
+        )
     }
 }
 
@@ -404,10 +421,49 @@ impl Command for SetShown {
 
     fn note(&self) -> Note {
         Note::new(
-            "Show",
+            text::history_deed_show(),
             self.subject.clone(),
-            format!("{} to {}", screens(self.before), screens(self.after)),
+            text::history_detail_screens(screens(self.before), screens(self.after)),
         )
+    }
+}
+
+/// What a change to the shape of the tree did.
+///
+/// The step keeps the deed and not the word for it. The word comes from
+/// the language the DM reads, and `history.json` holds the same file
+/// whichever language wrote it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Deed {
+    /// A map joined the scene.
+    AddMap,
+    /// A group joined the tree.
+    NewGroup,
+    /// A group went, and what it held stayed.
+    Ungroup,
+    /// A node took another place in the list.
+    MoveInList,
+    /// A map went into another group, from its panel.
+    AnotherGroup,
+    /// A selection became a group.
+    Group,
+    /// A node moved up or down the stack.
+    Order,
+}
+
+impl Deed {
+    /// What the history list calls this deed.
+    fn word(self) -> &'static str {
+        match self {
+            Self::AddMap => text::history_deed_add_map(),
+            Self::NewGroup => text::history_deed_new_group(),
+            Self::Ungroup => text::history_deed_ungroup(),
+            Self::MoveInList => text::history_deed_move_in_list(),
+            Self::AnotherGroup => text::history_deed_another_group(),
+            Self::Group => text::history_deed_group(),
+            Self::Order => text::history_deed_order(),
+        }
     }
 }
 
@@ -419,7 +475,7 @@ impl Command for SetShown {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Restructure {
     /// What the DM did, for the history dialog.
-    pub what: String,
+    pub what: Deed,
     /// The file or the group it happened to.
     pub subject: String,
     /// The children each group carried, by group.
@@ -439,9 +495,9 @@ impl Command for Restructure {
 
     fn note(&self) -> Note {
         Note::new(
-            &self.what,
+            self.what.word(),
             self.subject.clone(),
-            format!("{} in the tree", lists(self.after.len())),
+            text::history_detail_tree(lists(self.after.len())),
         )
     }
 }
@@ -466,7 +522,7 @@ fn write_children(scene: &mut Scene, lists: &[(NodeId, Vec<Node>)]) {
 /// goes to [`History::kept`], not to [`History::run`].
 pub fn reshape(
     scene: &mut Scene,
-    what: &str,
+    what: Deed,
     subject: String,
     change: impl FnOnce(&mut Scene),
 ) -> Option<Restructure> {
@@ -476,7 +532,7 @@ pub fn reshape(
     let mut after = Vec::new();
     collect_lists(&was, &scene.root, &mut before, &mut after);
     (!after.is_empty()).then_some(Restructure {
-        what: what.to_owned(),
+        what,
         subject,
         before,
         after,
@@ -842,8 +898,8 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::{
-        Command as _, Grow, History, Restructure, SetAssets, SetName, SetShown, SetTvBox, Turn,
-        reshape,
+        Command as _, Deed, Grow, History, Restructure, SetAssets, SetName, SetShown, SetTvBox,
+        Turn, reshape,
     };
     use crate::scene::{Asset, Group, Node, ROOT_ID, Scene, Shown};
 
@@ -1016,7 +1072,7 @@ mod tests {
     fn a_delete_in_the_root_keeps_only_the_root_list() {
         let mut scene = scene();
         let start = scene.clone();
-        let change = reshape(&mut scene, "Delete", "the map".to_owned(), |scene| {
+        let change = reshape(&mut scene, Deed::Ungroup, "the map".to_owned(), |scene| {
             crate::scene::take_node(scene, 2);
         })
         .unwrap();
@@ -1033,9 +1089,14 @@ mod tests {
         let mut scene = scene();
         scene.root.children.push(Node::Asset(asset(4, (0.0, 6.0))));
         let start = scene.clone();
-        let change = reshape(&mut scene, "Move", "the map".to_owned(), |scene| {
-            crate::scene::move_into(scene, 4, 7);
-        })
+        let change = reshape(
+            &mut scene,
+            Deed::MoveInList,
+            "the map".to_owned(),
+            |scene| {
+                crate::scene::move_into(scene, 4, 7);
+            },
+        )
         .unwrap();
         // The root list carries the group, so one list says it all.
         assert_eq!(change.after.len(), 1);
@@ -1053,7 +1114,7 @@ mod tests {
             group.children.push(Node::Asset(asset(5, (9.0, 3.0))));
         }
         let start = scene.clone();
-        let change = reshape(&mut scene, "Order", "the map".to_owned(), |scene| {
+        let change = reshape(&mut scene, Deed::Order, "the map".to_owned(), |scene| {
             crate::scene::reorder_all(scene, &[3], true);
         })
         .unwrap();
@@ -1070,9 +1131,14 @@ mod tests {
         let mut scene = scene();
         // The group stands on top of the root already.
         assert!(
-            reshape(&mut scene, "Move", "the map".to_owned(), |scene| {
-                crate::scene::move_into(scene, 7, ROOT_ID);
-            })
+            reshape(
+                &mut scene,
+                Deed::MoveInList,
+                "the map".to_owned(),
+                |scene| {
+                    crate::scene::move_into(scene, 7, ROOT_ID);
+                }
+            )
             .is_none()
         );
     }
@@ -1209,7 +1275,7 @@ mod tests {
                 after: "Cave".to_owned(),
             },
         );
-        let change = reshape(&mut scene, "Delete", "the map".to_owned(), |scene| {
+        let change = reshape(&mut scene, Deed::Ungroup, "the map".to_owned(), |scene| {
             crate::scene::take_node(scene, 2);
         })
         .unwrap();
@@ -1222,7 +1288,7 @@ mod tests {
 
         let mut back = History::from_json(&written).unwrap();
         assert_eq!(back.steps(), history.steps());
-        assert_eq!(back.steps()[2].what, "Delete");
+        assert_eq!(back.steps()[2].what, "Ungroup");
         assert_eq!(back.place(), 2);
         assert!(back.redo(&mut scene));
         assert!(back.walk_to(&mut scene, 0));
@@ -1253,7 +1319,7 @@ mod tests {
         let mut scene = scene();
         let before = scene.root.children.clone();
         let change = Restructure {
-            what: "Delete".to_owned(),
+            what: Deed::Ungroup,
             subject: "the map".to_owned(),
             before: vec![(ROOT_ID, before.clone())],
             after: vec![(ROOT_ID, Vec::new())],

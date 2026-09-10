@@ -10,11 +10,14 @@ use egui_winit::winit::{event::WindowEvent, monitor::MonitorHandle};
 
 use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::color;
-use crate::command::{Grow, History, Note, SetAssets, SetName, SetShown, SetTvBox, Turn, reshape};
+use crate::command::{
+    Deed, Grow, History, Note, SetAssets, SetName, SetShown, SetTvBox, Turn, reshape,
+};
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::icon;
 use crate::icons::Icon;
 use crate::scene::{Asset, Group, Node, NodeId, Placed, ROOT_ID, Scene, Shown};
+use crate::text;
 use crate::theme::{self, Tokens};
 use crate::transform::{
     MAX_GRID_PX, MIN_GRID_PX, corner_offset, edge_midpoint, grid_px_from_measure, hit_test,
@@ -228,6 +231,8 @@ pub struct DmUi {
     history_open: bool,
     /// The theme the context carries, so a change installs once.
     theme: theme::Mode,
+    /// The language the catalog holds, for the same reason.
+    language: String,
     /// The interface scale the context carries, for the same reason.
     ui_scale: f64,
     /// The DM asked to see the whole TV box. The next frame acts on it.
@@ -267,6 +272,8 @@ pub struct Settings {
     pub snap_percent: f64,
     /// The theme the window draws. DESIGN.md 2.
     pub theme: theme::Mode,
+    /// The language the window speaks, by the name of its file.
+    pub language: String,
     /// What every size of DESIGN.md is multiplied by. DESIGN.md 3.1.
     pub ui_scale: f64,
 }
@@ -544,10 +551,36 @@ impl DmUi {
             dialog: Dialog::default(),
             history_open: false,
             theme: theme::Mode::default(),
+            language: text::DEFAULT.to_owned(),
             ui_scale: theme::DEFAULT_SCALE,
             frame_box: false,
             zoom_goes_to: None,
             dirty: false,
+        }
+    }
+
+    /// Takes the theme, the language and the scale the DM asked for.
+    ///
+    /// Each one costs something to install, so it is installed once and
+    /// not on every frame that reads it.
+    fn install(&mut self, ctx: &egui::Context, settings: &Settings) {
+        if self.theme != settings.theme {
+            theme::install(ctx, settings.theme);
+            self.theme = settings.theme;
+        }
+        // The window takes a language the moment the DM picks it. Every
+        // word comes from the catalog while the frame draws, so no panel
+        // has to be built again.
+        if self.language != settings.language {
+            text::use_language(&settings.language);
+            self.language.clone_from(&settings.language);
+        }
+        // egui multiplies the scale into `pixels_per_point`, so the chrome
+        // grows and the canvas math, which reads that value, stays true.
+        let scale = theme::clamp_scale(settings.ui_scale);
+        if (self.ui_scale - scale).abs() > f64::EPSILON {
+            ctx.set_zoom_factor(scale as f32);
+            self.ui_scale = scale;
         }
     }
 
@@ -565,17 +598,7 @@ impl DmUi {
         let raw_input = self.state.take_egui_input(&pane.window);
         let ctx = self.state.egui_ctx().clone();
         let viewport = (pane.config.width, pane.config.height);
-        if self.theme != frame.settings.theme {
-            theme::install(&ctx, frame.settings.theme);
-            self.theme = frame.settings.theme;
-        }
-        // egui multiplies the scale into `pixels_per_point`, so the chrome
-        // grows and the canvas math, which reads that value, stays true.
-        let scale = theme::clamp_scale(frame.settings.ui_scale);
-        if (self.ui_scale - scale).abs() > f64::EPSILON {
-            ctx.set_zoom_factor(scale as f32);
-            self.ui_scale = scale;
-        }
+        self.install(&ctx, frame.settings);
         let mut add_map = false;
         let mut edited = false;
         let mut scene = None;
@@ -803,13 +826,21 @@ enum Press {
 /// what the program cannot do.
 fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
     let views = [
-        (Press::View(Tool::Select), "Select", Icon::MousePointer),
-        (Press::View(Tool::Table), "Table", Icon::Monitor),
+        (
+            Press::View(Tool::Select),
+            text::tool_select(),
+            Icon::MousePointer,
+        ),
+        (Press::View(Tool::Table), text::tool_table(), Icon::Monitor),
     ];
     let actions = [
-        (Press::Scenes, "Scenes", Icon::Layers),
-        (Press::AddMap, "Add map", Icon::Plus),
-        (Press::Settings, "Settings", Icon::SlidersHorizontal),
+        (Press::Scenes, text::tool_scenes(), Icon::Layers),
+        (Press::AddMap, text::tool_add_map(), Icon::Plus),
+        (
+            Press::Settings,
+            text::tool_settings(),
+            Icon::SlidersHorizontal,
+        ),
     ];
     let font = theme::font(theme::SMALL, false);
     let width_of = |label: &str| {
@@ -917,7 +948,7 @@ fn painter_dashes(ui: &egui::Ui, line: &[egui::Pos2; 2], color: egui::Color32) {
 ///
 /// Returns `true` when the DM pressed it.
 fn history_button(ui: &egui::Ui, tokens: Tokens) -> bool {
-    let label = "History";
+    let label = text::tool_history();
     let font = theme::font(theme::SMALL, false);
     let text = ui.ctx().fonts_mut(|fonts| {
         fonts
@@ -971,7 +1002,7 @@ fn history_dialog(ui: &egui::Ui, open: &mut bool, frame: &mut Frame<'_>, tokens:
     let close = dialog_frame(
         ui.ctx(),
         "history",
-        "History",
+        text::dialog_history_title(),
         egui::vec2(520.0, 460.0),
         tokens,
         |ui, rest| {
@@ -1002,7 +1033,7 @@ fn history_dialog(ui: &egui::Ui, open: &mut bool, frame: &mut Frame<'_>, tokens:
                         }
                     }
                     let first = Note {
-                        what: "Before the first change".to_owned(),
+                        what: text::dialog_history_start().to_owned(),
                         ..Note::default()
                     };
                     if step_row(ui, &first, place == 0, false, tokens) {
@@ -1022,7 +1053,7 @@ fn history_dialog(ui: &egui::Ui, open: &mut bool, frame: &mut Frame<'_>, tokens:
                 ),
                 tokens,
             );
-            widget::helper(&mut foot, "A click on a step takes the scene there.");
+            widget::helper(&mut foot, text::dialog_history_helper());
         },
     );
     if close {
@@ -1074,7 +1105,7 @@ fn step_row(ui: &mut egui::Ui, note: &Note, here: bool, undone: bool, tokens: To
     let headline = if note.subject.is_empty() {
         note.what.clone()
     } else {
-        format!("{} {}", note.what, note.subject)
+        text::history_row(&note.what, &note.subject)
     };
     painter.text(
         egui::pos2(left, middle - STEP_LINE),
@@ -1314,7 +1345,7 @@ fn objects_panel(
     panel(
         ctx,
         "objects",
-        "Objects",
+        text::panel_objects_title(),
         Place {
             left_top: rect.min,
             width: tree.width,
@@ -1329,7 +1360,7 @@ fn objects_panel(
                 tree.scope = up;
                 tree.open.insert(up);
             }
-            let footer = 2.0 * Height::Panel.points() + 3.0 * PANEL_PAD;
+            let footer = footer_height(ui, &select.note);
             let list = ui.available_height() - footer;
             egui::ScrollArea::vertical()
                 .max_height(list.max(ROW_HEIGHT))
@@ -1347,23 +1378,34 @@ fn objects_panel(
                 ),
                 tokens,
             );
-            ui.horizontal(|ui| {
+            // A language whose words run long takes a second row instead
+            // of losing the end of one. `footer_height` reads the same
+            // widths, so the list above leaves the room for it.
+            ui.horizontal_wrapped(|ui| {
                 // The DM can only take apart the one group they hold.
                 let group = select.only().filter(|id| *id != ROOT_ID).filter(|id| {
                     crate::scene::find(scene, *id)
                         .and_then(Node::group)
                         .is_some()
                 });
-                if widget::button(ui, "New group", Some(Icon::Plus), Height::Panel).clicked() {
+                if widget::button(
+                    ui,
+                    text::panel_objects_new_group(),
+                    Some(Icon::Plus),
+                    Height::Panel,
+                )
+                .clicked()
+                {
                     asked.new_group = Some(scene.next_id());
                 }
-                let ungroup = widget::button(ui, "Ungroup", None, Height::Panel);
+                let ungroup =
+                    widget::button(ui, text::panel_objects_ungroup(), None, Height::Panel);
                 if group.is_some() && ungroup.clicked() {
                     asked.ungroup = group;
                 }
             });
             if select.note.is_empty() {
-                widget::helper(ui, "A new asset joins the marked group.");
+                widget::helper(ui, text::panel_objects_helper());
             } else {
                 ui.label(
                     egui::RichText::new(&select.note)
@@ -1378,6 +1420,28 @@ fn objects_panel(
     edited
 }
 
+/// How much room the foot of the objects list needs, in points.
+///
+/// The two buttons take one row when they fit beside one another and two
+/// when they do not. The line under them holds the note, or the helper
+/// when there is no note, and wraps to the width of the panel.
+fn footer_height(ui: &egui::Ui, note: &str) -> f32 {
+    let width = ui.available_width();
+    let buttons = widget::button_width(ui, text::panel_objects_new_group(), Some(Icon::Plus))
+        + ui.spacing().item_spacing.x
+        + widget::button_width(ui, text::panel_objects_ungroup(), None);
+    let rows = if buttons <= width { 1.0 } else { 2.0 };
+    let words = if note.is_empty() {
+        text::panel_objects_helper()
+    } else {
+        note
+    };
+    // Each row of buttons carries the gap under it, and the words below
+    // them take as many lines as they need.
+    let step = Height::Panel.points() + ui.spacing().item_spacing.y;
+    rows * step + widget::helper_height(ui, words, width) + 3.0 * PANEL_PAD
+}
+
 /// Turns what the objects list asked for into changes. DESIGN.md 8.4.
 ///
 /// The rows hold the tree while they draw, so nothing there can reach the
@@ -1386,10 +1450,10 @@ fn objects_panel(
 fn act_on(frame: &mut Frame<'_>, select: &mut Select, tree: &mut Tree, asked: Asked) -> bool {
     let mut edited = false;
     if let Some(id) = asked.new_group {
-        let new = Group::new(id, format!("Group {id}"));
+        let new = Group::new(id, text::panel_objects_group_name(id));
         let name = new.name.clone();
         let into = tree.active;
-        if let Some(change) = reshape(frame.scene, "New group", name, |scene| {
+        if let Some(change) = reshape(frame.scene, Deed::NewGroup, name, |scene| {
             crate::scene::push_into(scene, into, Node::Group(new));
         }) {
             frame.history.kept(change);
@@ -1402,7 +1466,7 @@ fn act_on(frame: &mut Frame<'_>, select: &mut Select, tree: &mut Tree, asked: As
         // What was in the group stands where it stood.
         let freed = crate::scene::assets_of(frame.scene, id);
         let name = crate::scene::name_of(frame.scene, id);
-        if let Some(change) = reshape(frame.scene, "Ungroup", name, |scene| {
+        if let Some(change) = reshape(frame.scene, Deed::Ungroup, name, |scene| {
             crate::scene::ungroup(scene, id);
         }) {
             frame.history.kept(change);
@@ -1413,7 +1477,7 @@ fn act_on(frame: &mut Frame<'_>, select: &mut Select, tree: &mut Tree, asked: As
     if let Some((node, target, into)) = asked.moved
         && let Some(change) = reshape(
             frame.scene,
-            "Move in the list",
+            Deed::MoveInList,
             crate::scene::name_of(frame.scene, node),
             |scene| {
                 if into {
@@ -1733,7 +1797,7 @@ impl Held {
     /// The title the panel takes.
     fn title(&self) -> &str {
         match self {
-            Self::TvBox => "TV box",
+            Self::TvBox => text::panel_box_title(),
             Self::Map(_, name) => name,
         }
     }
@@ -1759,11 +1823,11 @@ impl Tab {
     /// The name and the glyph of the navigation entry.
     fn entry(self) -> (&'static str, Icon) {
         match self {
-            Self::Table => ("Table", Icon::Monitor),
-            Self::Grid => ("Grid", Icon::Grid3x3),
-            Self::Light => ("Light", Icon::Sun),
-            Self::Shortcuts => ("Shortcuts", Icon::Keyboard),
-            Self::About => ("About", Icon::Info),
+            Self::Table => (text::dialog_settings_tab_table(), Icon::Monitor),
+            Self::Grid => (text::dialog_settings_tab_grid(), Icon::Grid3x3),
+            Self::Light => (text::dialog_settings_tab_light(), Icon::Sun),
+            Self::Shortcuts => (text::dialog_settings_tab_shortcuts(), Icon::Keyboard),
+            Self::About => (text::dialog_settings_tab_about(), Icon::Info),
         }
     }
 }
@@ -1866,7 +1930,8 @@ fn settings_dialog(
         return false;
     }
     let mut edited = false;
-    let close = dialog_frame(ctx, "settings", "Settings", DIALOG, tokens, |ui, rest| {
+    let title = text::dialog_settings_title();
+    let close = dialog_frame(ctx, "settings", title, DIALOG, tokens, |ui, rest| {
         let nav = egui::Rect::from_min_size(rest.left_top(), egui::vec2(DIALOG_NAV, rest.height()));
         dialog_nav(ui, nav, &mut dialog.tab, tokens);
         let body = egui::Rect::from_min_max(
@@ -1889,20 +1954,14 @@ fn settings_dialog(
                         edited = table_tab(body_ui, frame, &mut dialog.scale_drag, tokens);
                     }
                     Tab::Grid => {
-                        not_built(body_ui, "The grid settings arrive with the hex grid (#15).");
+                        not_built(body_ui, text::dialog_settings_grid_soon());
                     }
                     Tab::Light => {
-                        not_built(
-                            body_ui,
-                            "The light settings arrive with the darkness slider (#20).",
-                        );
+                        not_built(body_ui, text::dialog_settings_light_soon());
                     }
                     Tab::About => about_tab(body_ui, &mut dialog.license, tokens),
                     Tab::Shortcuts => {
-                        not_built(
-                            body_ui,
-                            "The key list arrives with the shortcuts story (#36).",
-                        );
+                        not_built(body_ui, text::dialog_settings_shortcuts_soon());
                     }
                 }
             });
@@ -1976,17 +2035,27 @@ fn dialog_nav(ui: &egui::Ui, rect: egui::Rect, tab: &mut Tab, tokens: Tokens) {
 fn dialog_row(ui: &mut egui::Ui, label: &str, controls: impl FnOnce(&mut egui::Ui)) {
     let tokens = theme::of(ui.ctx());
     ui.horizontal_top(|ui| {
-        let (rect, _) = ui.allocate_exact_size(
+        // DESIGN.md 9 gives the label a column 140 points wide. A language
+        // whose word does not fit that column wraps inside it and the row
+        // grows, so a label never runs into the control beside it.
+        ui.allocate_ui_with_layout(
             egui::vec2(LABEL_COLUMN, widget::CONTROL),
-            egui::Sense::hover(),
-        );
-        ui.painter().text(
-            // DESIGN.md 9: the label sits 6 points below the top of the row.
-            egui::pos2(rect.left(), rect.top() + 6.0),
-            egui::Align2::LEFT_TOP,
-            label,
-            theme::font(theme::BODY, false),
-            tokens.ink,
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                // The column keeps its width whatever the label needs, so
+                // the controls of every row line up.
+                ui.set_min_width(LABEL_COLUMN);
+                // DESIGN.md 9: the label sits 6 points below the top.
+                ui.add_space(6.0);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(label)
+                            .font(theme::font(theme::BODY, false))
+                            .color(tokens.ink),
+                    )
+                    .wrap(),
+                );
+            },
         );
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
@@ -2009,11 +2078,11 @@ fn table_tab(
         let size = display.size();
         display_label(display.name().as_deref(), size.width, size.height)
     };
-    dialog_row(ui, "Display", |ui| {
+    dialog_row(ui, text::dialog_settings_display(), |ui| {
         let shown = frame
             .settings
             .tv_display
-            .map_or_else(|| "Window".to_owned(), &label);
+            .map_or_else(|| text::dialog_settings_display_window().to_owned(), &label);
         let field = widget::select_field(ui, &shown, widget::SELECT_WIDTH);
         let popup = egui::Popup::menu(&field)
             .gap(-1.0)
@@ -2021,7 +2090,9 @@ fn table_tab(
         popup.show(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             let picked = frame.settings.tv_display;
-            if widget::select_row(ui, "Window", picked.is_none()).clicked() {
+            if widget::select_row(ui, text::dialog_settings_display_window(), picked.is_none())
+                .clicked()
+            {
                 frame.settings.tv_display = None;
                 edited = true;
             }
@@ -2033,34 +2104,34 @@ fn table_tab(
             }
         });
     });
-    dialog_row(ui, "Size", |ui| {
-        widget::helper(
-            ui,
-            "The TV diagonal, its pixels per inch and its width arrive with story #6.",
-        );
+    dialog_row(ui, text::dialog_settings_size(), |ui| {
+        widget::helper(ui, text::dialog_settings_size_helper());
     });
-    dialog_row(ui, "Snap to true size", |ui| {
+    dialog_row(ui, text::dialog_settings_snap(), |ui| {
         let mut percent = frame.settings.snap_percent;
-        if widget::input(ui, &mut percent, "%", 90.0, 0.0..=MAX_SNAP_PERCENT, 0.1).changed() {
+        if widget::input(
+            ui,
+            &mut percent,
+            text::unit_percent(),
+            90.0,
+            0.0..=MAX_SNAP_PERCENT,
+            0.1,
+        )
+        .changed()
+        {
             frame.settings.snap_percent = percent;
             edited = true;
         }
-        widget::helper(ui, "either side of 100 %");
+        widget::helper(ui, text::dialog_settings_snap_helper());
     });
-    dialog_row(ui, "Windows", |ui| {
+    dialog_row(ui, text::dialog_settings_windows(), |ui| {
         let mut swap = frame.settings.swap_windows;
-        if widget::checkbox(
-            ui,
-            &mut swap,
-            "Swap the two windows instead of moving the DM window",
-        )
-        .clicked()
-        {
+        if widget::checkbox(ui, &mut swap, text::dialog_settings_swap()).clicked() {
             frame.settings.swap_windows = swap;
             edited = true;
         }
     });
-    dialog_row(ui, "Theme", |ui| {
+    dialog_row(ui, text::dialog_settings_theme(), |ui| {
         // DESIGN.md 2 gives two themes and no place to pick one, so the
         // choice sits here, beside the other settings about the screens.
         let mut mode = frame.settings.theme;
@@ -2074,9 +2145,12 @@ fn table_tab(
         }
         let _ = tokens;
     });
-    dialog_row(ui, "Interface scale", |ui| {
+    dialog_row(ui, text::dialog_settings_language(), |ui| {
+        edited |= language_field(ui, &mut frame.settings.language);
+    });
+    dialog_row(ui, text::dialog_settings_scale(), |ui| {
         let mut scale = scale_drag.unwrap_or(frame.settings.ui_scale);
-        let percent = format!("{} %", (scale * 100.0).round());
+        let percent = text::dialog_settings_scale_value((scale * 100.0).round());
         let response = widget::slider(
             ui,
             &mut scale,
@@ -2096,12 +2170,34 @@ fn table_tab(
             frame.settings.ui_scale = picked;
             edited = true;
         }
-        widget::helper(
-            ui,
-            "How big the toolbar, the panels and the dialogs draw. The maps keep their size.",
-        );
+        widget::helper(ui, text::dialog_settings_scale_helper());
     });
     edited
+}
+
+/// The Language row of the Table tab. DESIGN.md 9.1.
+///
+/// Every language the program carries names itself in its own words, so a
+/// DM finds their own without reading English first. Returns `true` when
+/// the DM picked another one.
+fn language_field(ui: &mut egui::Ui, picked: &mut String) -> bool {
+    let shown = text::language(picked).map_or(text::DEFAULT, |language| language.name);
+    let field = widget::select_field(ui, shown, widget::SELECT_WIDTH);
+    let mut changed = false;
+    egui::Popup::menu(&field)
+        .gap(-1.0)
+        .width(widget::SELECT_WIDTH)
+        .show(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for language in text::LANGUAGES {
+                let here = language.code == picked;
+                if widget::select_row(ui, language.name, here).clicked() {
+                    language.code.clone_into(picked);
+                    changed = true;
+                }
+            }
+        });
+    changed
 }
 
 /// What dmap carries, and the terms it comes under. DESIGN.md 9.5.
@@ -2112,6 +2208,8 @@ enum License {
     Program,
     /// Atkinson Hyperlegible, which DESIGN.md 3 gives the window.
     Font,
+    /// Fira Sans, which holds the letters Atkinson lacks. DESIGN.md 3.
+    Fallback,
     /// The Lucide glyphs of DESIGN.md 4.
     Icons,
 }
@@ -2121,6 +2219,9 @@ const GPL: &str = include_str!("../../../LICENSE");
 
 /// The text of the SIL Open Font License, which the font comes under.
 const OFL: &str = include_str!("../assets/fonts/LICENSE-OFL.txt");
+
+/// The same license again, as the second font carries its own copy.
+const OFL_FALLBACK: &str = include_str!("../assets/fonts/LICENSE-OFL-FiraSans.txt");
 
 /// The text of the ISC license, which the glyphs come under.
 const ISC: &str = include_str!("../assets/icons/LICENSE-ISC.txt");
@@ -2143,6 +2244,11 @@ impl License {
                 "SIL Open Font License 1.1",
                 "https://github.com/googlefonts/atkinson-hyperlegible",
             ),
+            Self::Fallback => (
+                "Fira Sans",
+                "SIL Open Font License 1.1",
+                "https://github.com/mozilla/Fira",
+            ),
             Self::Icons => (
                 "Lucide",
                 "ISC License",
@@ -2156,6 +2262,7 @@ impl License {
         match self {
             Self::Program => GPL,
             Self::Font => OFL,
+            Self::Fallback => OFL_FALLBACK,
             Self::Icons => ISC,
         }
     }
@@ -2172,14 +2279,21 @@ fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
     // lines sit closer together than the `ROW_GAP` of DESIGN.md 9. The
     // whole of it has to fit over the license text.
     ui.spacing_mut().item_spacing.y = 6.0;
-    widget::row_label(ui, &format!("dmap {}", env!("CARGO_PKG_VERSION")));
-    widget::helper(ui, "Map display for a tabletop RPG table with a TV.");
-    for one in [License::Program, License::Font, License::Icons] {
+    widget::row_label(ui, &text::dialog_about_version(env!("CARGO_PKG_VERSION")));
+    widget::helper(ui, text::dialog_about_tagline());
+    for one in [
+        License::Program,
+        License::Font,
+        License::Fallback,
+        License::Icons,
+    ] {
         let (name, terms, url) = one.about();
-        ui.horizontal(|ui| {
-            widget::row_label(ui, &format!("{name}, under the {terms}."));
+        // A language whose words run long takes the link to the next
+        // line instead of past the edge of the dialog.
+        ui.horizontal_wrapped(|ui| {
+            widget::row_label(ui, &text::dialog_about_licensed(name, terms));
             ui.hyperlink_to(
-                egui::RichText::new("Source")
+                egui::RichText::new(text::dialog_about_source())
                     .font(theme::font(theme::SMALL, false))
                     .color(tokens.accent),
                 url,
@@ -2187,7 +2301,7 @@ fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
         });
     }
     ui.add_space(4.0);
-    widget::row_label(ui, "Built by");
+    widget::row_label(ui, text::dialog_about_built_by());
     let names: Vec<&str> = CONTRIBUTORS
         .lines()
         .map(str::trim)
@@ -2195,20 +2309,23 @@ fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
         .collect();
     widget::helper(ui, &names.join(", "));
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        widget::helper(ui, "dmap is free software, and it is not finished.");
+    ui.horizontal_wrapped(|ui| {
+        widget::helper(ui, text::dialog_about_free());
         ui.hyperlink_to(
-            egui::RichText::new("Bring a bug, a story or a patch")
+            egui::RichText::new(text::dialog_about_bring())
                 .font(theme::font(theme::SMALL, false))
                 .color(tokens.accent),
             ISSUES,
         );
     });
     ui.add_space(4.0);
+    // Every one of these is a name, and a name reads the same in every
+    // language, so no key stands behind them.
     let choices = [
         (License::Program, "dmap"),
-        (License::Font, "Font"),
-        (License::Icons, "Glyphs"),
+        (License::Font, "Atkinson"),
+        (License::Fallback, "Fira"),
+        (License::Icons, "Lucide"),
     ];
     widget::segmented(ui, picked, &choices);
     // The text takes the room that is left, so the tab needs no scroll of
@@ -2228,8 +2345,8 @@ fn about_tab(ui: &mut egui::Ui, picked: &mut License, tokens: Tokens) {
 }
 
 /// One line that says a tab waits for its story. DESIGN.md 9.
-fn not_built(ui: &mut egui::Ui, text: &str) {
-    widget::helper(ui, text);
+fn not_built(ui: &mut egui::Ui, line: &str) {
+    widget::helper(ui, line);
 }
 
 /// The scenes dialog of DESIGN.md 9.6.
@@ -2249,7 +2366,7 @@ fn scenes_dialog(
     let close = dialog_frame(
         ui.ctx(),
         "scenes",
-        "Scenes",
+        text::dialog_scenes_title(),
         egui::vec2(660.0, 440.0),
         tokens,
         |ui, rest| {
@@ -2269,7 +2386,7 @@ fn scenes_dialog(
             body_ui.set_clip_rect(body);
             body_ui.spacing_mut().item_spacing.y = 10.0;
             body_ui.horizontal(|ui| {
-                widget::row_label(ui, "Scenes folder");
+                widget::row_label(ui, text::dialog_scenes_folder());
                 let path = frame.scenes_dir.display().to_string();
                 let (rect, response) = ui.allocate_exact_size(
                     egui::vec2(PATH_WIDTH, widget::CONTROL),
@@ -2284,7 +2401,7 @@ fn scenes_dialog(
                 );
                 row_name(ui, rect.shrink2(egui::vec2(8.0, 0.0)), &path, false, tokens);
                 let _ = response;
-                if widget::button(ui, "Change", None, Height::Full).clicked() {
+                if widget::button(ui, text::dialog_scenes_change(), None, Height::Full).clicked() {
                     command = Some(SceneCommand::ScenesFolder);
                 }
             });
@@ -2320,7 +2437,14 @@ fn scenes_dialog(
                 ),
                 tokens,
             );
-            if widget::button(&mut foot, "New scene", Some(Icon::Plus), Height::Full).clicked() {
+            if widget::button(
+                &mut foot,
+                text::dialog_scenes_new(),
+                Some(Icon::Plus),
+                Height::Full,
+            )
+            .clicked()
+            {
                 command = Some(SceneCommand::New);
             }
         },
@@ -2362,14 +2486,21 @@ fn scene_row(
     );
     if scenes.deleting.as_deref() == Some(name) {
         row.label(
-            egui::RichText::new(format!("Delete {name} and its maps?"))
+            egui::RichText::new(text::dialog_scenes_delete_ask(name))
                 .font(theme::font(theme::BODY, false))
                 .color(tokens.accent),
         );
-        if widget::button(&mut row, "Delete", Some(Icon::Trash), Height::Row).clicked() {
+        if widget::button(
+            &mut row,
+            text::dialog_scenes_delete(),
+            Some(Icon::Trash),
+            Height::Row,
+        )
+        .clicked()
+        {
             *command = Some(SceneCommand::Delete(name.to_owned()));
         }
-        if widget::button(&mut row, "Keep", None, Height::Row).clicked() {
+        if widget::button(&mut row, text::dialog_scenes_keep(), None, Height::Row).clicked() {
             scenes.deleting = None;
         }
         return;
@@ -2382,13 +2513,14 @@ fn scene_row(
         );
         let done = field.lost_focus() && row.input(|i| i.key_pressed(egui::Key::Enter));
         field.request_focus();
-        if done || widget::button(&mut row, "Save", None, Height::Row).clicked() {
+        if done || widget::button(&mut row, text::dialog_scenes_save(), None, Height::Row).clicked()
+        {
             *command = Some(SceneCommand::Rename {
                 from: from.clone(),
                 to: typed.clone(),
             });
         }
-        if widget::button(&mut row, "Cancel", None, Height::Row).clicked() {
+        if widget::button(&mut row, text::dialog_scenes_cancel(), None, Height::Row).clicked() {
             scenes.renaming = None;
         }
         return;
@@ -2408,22 +2540,22 @@ fn scene_row(
             .color(color),
     );
     row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |row| {
-        if widget::button(row, "Delete", None, Height::Row).clicked() {
+        if widget::button(row, text::dialog_scenes_delete(), None, Height::Row).clicked() {
             scenes.deleting = Some(name.to_owned());
         }
-        if widget::button(row, "Folder", None, Height::Row).clicked() {
+        if widget::button(row, text::dialog_scenes_reveal(), None, Height::Row).clicked() {
             *command = Some(SceneCommand::Reveal(name.to_owned()));
         }
-        if widget::button(row, "Rename", None, Height::Row).clicked() {
+        if widget::button(row, text::dialog_scenes_rename(), None, Height::Row).clicked() {
             scenes.renaming = Some((name.to_owned(), name.to_owned()));
         }
         if open {
             row.label(
-                egui::RichText::new("Open now")
+                egui::RichText::new(text::dialog_scenes_open_now())
                     .font(theme::font(theme::BODY, false))
                     .color(tokens.mute),
             );
-        } else if widget::button(row, "Open", None, Height::Row).clicked() {
+        } else if widget::button(row, text::dialog_scenes_open(), None, Height::Row).clicked() {
             *command = Some(SceneCommand::Open(name.to_owned()));
         }
     });
@@ -2938,11 +3070,11 @@ fn box_properties(
     let _ = tokens;
     let mut percent = tv_box.zoom(TV_WIDTH_INCHES) * 100.0;
     let mut asked = None;
-    widget::row_label(ui, "Zoom");
+    widget::row_label(ui, text::panel_box_zoom());
     if widget::input(
         ui,
         &mut percent,
-        "%",
+        text::unit_percent(),
         100.0,
         MIN_ZOOM_PERCENT..=MAX_ZOOM_PERCENT,
         0.1,
@@ -2953,11 +3085,11 @@ fn box_properties(
         after.width = clamp_width(TV_WIDTH_INCHES / (percent / 100.0));
         asked = Some(after);
     }
-    widget::helper(ui, "100 % is true size on the TV");
-    widget::row_label(ui, "Move");
-    widget::helper(ui, "The arrow keys move the box one cell");
-    widget::row_label(ui, "Frame");
-    *frame_box = widget::button(ui, "Show the whole box", None, Height::Panel).clicked();
+    widget::helper(ui, text::panel_box_zoom_helper());
+    widget::row_label(ui, text::panel_box_move());
+    widget::helper(ui, text::panel_box_move_helper());
+    widget::row_label(ui, text::panel_box_frame());
+    *frame_box = widget::button(ui, text::panel_box_frame_button(), None, Height::Panel).clicked();
     asked
 }
 
@@ -3002,12 +3134,12 @@ fn map_properties(
     let mut edited = false;
     // DESIGN.md 8.1 gives the file name a row of its own. The title of the
     // panel carries it now, so the row would say it twice.
-    widget::row_label(ui, "Group");
+    widget::row_label(ui, text::panel_map_group());
     let move_to = group_field(ui, id, frame.scene);
     if let Some(group) = move_to
         && let Some(change) = reshape(
             frame.scene,
-            "Another group",
+            Deed::AnotherGroup,
             crate::scene::name_of(frame.scene, id),
             |scene| {
                 crate::scene::move_into(scene, id, group);
@@ -3027,53 +3159,46 @@ fn map_properties(
     // carries whatever they wrote.
     let mut after = map.clone();
     let mut changed = false;
-    widget::row_label(ui, "Pixels per cell");
-    let mut grid_px = map.grid_px;
-    if widget::input(
+    changed |= map_numbers(ui, &map, &mut after);
+    if widget::button(
         ui,
-        &mut grid_px,
-        "px",
-        100.0,
-        MIN_GRID_PX..=MAX_GRID_PX,
-        1.0,
+        text::panel_map_measure(),
+        Some(Icon::Ruler),
+        Height::Panel,
     )
-    .changed()
+    .clicked()
     {
-        after.grid_px = grid_px;
-        changed = true;
-    }
-    // The size sits next to the grid size because the two multiply: a map
-    // with the right grid size draws at true size only at 100 percent.
-    let mut percent = map.scale * 100.0;
-    widget::row_label(ui, "Size");
-    if widget::input(ui, &mut percent, "%", 100.0, MIN_PERCENT..=MAX_PERCENT, 0.5).changed() {
-        after.scale = percent / 100.0;
-        changed = true;
-    }
-    let mut degrees = map.rotation.to_degrees();
-    widget::row_label(ui, "Turn");
-    if widget::input(ui, &mut degrees, "\u{b0}", 100.0, -360.0..=360.0, 0.5).changed() {
-        after.rotation = degrees.to_radians();
-        changed = true;
-    }
-    if widget::button(ui, "Measure a cell", Some(Icon::Ruler), Height::Panel).clicked() {
         select.measure = Some(Measure::Start);
     }
     if select.measure.is_some() {
-        widget::helper(ui, "Click two corners of one cell. Escape gives it up.");
+        widget::helper(ui, text::panel_map_measure_helper());
     }
     // DESIGN.md 8.1 puts the turn and the flip in the footer of the panel.
-    ui.horizontal(|ui| {
-        if widget::button(ui, "Turn", Some(Icon::RotateCw), Height::Row).clicked() {
+    ui.horizontal_wrapped(|ui| {
+        if widget::button(
+            ui,
+            text::panel_map_turn_button(),
+            Some(Icon::RotateCw),
+            Height::Row,
+        )
+        .clicked()
+        {
             after.rotation += std::f64::consts::FRAC_PI_2;
             changed = true;
         }
-        if widget::button(ui, "Flip", Some(Icon::FlipHorizontal2), Height::Row).clicked() {
+        if widget::button(
+            ui,
+            text::panel_map_flip(),
+            Some(Icon::FlipHorizontal2),
+            Height::Row,
+        )
+        .clicked()
+        {
             after.flip_x = !map.flip_x;
             changed = true;
         }
     });
-    widget::helper(ui, "Shift with F flips the map the other way.");
+    widget::helper(ui, text::panel_map_flip_helper());
     let _ = tokens;
     if changed {
         // A drag of a number runs over many frames. Every one of them goes
@@ -3095,6 +3220,62 @@ fn map_properties(
         edited = true;
     }
     edited
+}
+
+/// The grid size, the size and the turn of a map. DESIGN.md 8.1.
+///
+/// The three write into `after`, which the panel hands to the history as
+/// one change. Returns `true` when the DM moved one of them.
+fn map_numbers(ui: &mut egui::Ui, map: &Asset, after: &mut Asset) -> bool {
+    let mut changed = false;
+    widget::row_label(ui, text::panel_map_grid_px());
+    let mut grid_px = map.grid_px;
+    if widget::input(
+        ui,
+        &mut grid_px,
+        text::unit_px(),
+        100.0,
+        MIN_GRID_PX..=MAX_GRID_PX,
+        1.0,
+    )
+    .changed()
+    {
+        after.grid_px = grid_px;
+        changed = true;
+    }
+    // The size sits next to the grid size because the two multiply: a map
+    // with the right grid size draws at true size only at 100 percent.
+    let mut percent = map.scale * 100.0;
+    widget::row_label(ui, text::panel_map_size());
+    if widget::input(
+        ui,
+        &mut percent,
+        text::unit_percent(),
+        100.0,
+        MIN_PERCENT..=MAX_PERCENT,
+        0.5,
+    )
+    .changed()
+    {
+        after.scale = percent / 100.0;
+        changed = true;
+    }
+    let mut degrees = map.rotation.to_degrees();
+    widget::row_label(ui, text::panel_map_turn());
+    if widget::input(
+        ui,
+        &mut degrees,
+        text::unit_degrees(),
+        100.0,
+        -360.0..=360.0,
+        0.5,
+    )
+    .changed()
+    {
+        after.rotation = degrees.to_radians();
+        changed = true;
+    }
+    changed
 }
 
 /// The Select tool on the canvas: pick, move, scale, turn and flip maps.
@@ -3255,7 +3436,7 @@ fn selection_popup(
     panel(
         ctx,
         "selection",
-        &format!("{} picked", held.len()),
+        &text::panel_picked_title(held.len()),
         Place {
             left_top,
             width: PANEL_WIDTH,
@@ -3276,21 +3457,28 @@ fn selection_popup(
                 row_name(ui, rect, &name, false, tokens);
             }
             ui.horizontal(|ui| {
-                if widget::button(ui, "Group", Some(Icon::Plus), Height::Panel).clicked() {
+                if widget::button(
+                    ui,
+                    text::panel_picked_group(),
+                    Some(Icon::Plus),
+                    Height::Panel,
+                )
+                .clicked()
+                {
                     group_them = true;
                 }
-                if widget::button(ui, "Close", None, Height::Panel).clicked() {
+                if widget::button(ui, text::panel_picked_close(), None, Height::Panel).clicked() {
                     select.popup = false;
                 }
             });
         },
     );
     if group_them {
-        let name = format!("Group {}", frame.scene.next_id());
+        let name = text::panel_objects_group_name(frame.scene.next_id());
         let chosen = select.chosen.clone();
         let mut made = None;
         let subject = name.clone();
-        let change = reshape(frame.scene, "Group", subject, |scene| {
+        let change = reshape(frame.scene, Deed::Group, subject, |scene| {
             made = crate::scene::group_selection(scene, &chosen, name);
         });
         if let (Some(change), Some(id)) = (change, made) {
@@ -3708,8 +3896,7 @@ fn keys(ui: &egui::Ui, select: &mut Select, frame: &mut Frame<'_>) -> bool {
             // past their brothers and sisters and never leave the parent.
             if matches!(key, egui::Key::PageUp | egui::Key::PageDown) {
                 if crate::scene::share_parent(frame.scene, &held).is_none() {
-                    "Order works inside one group. Pick nodes that sit together."
-                        .clone_into(&mut select.note);
+                    text::panel_objects_one_group().clone_into(&mut select.note);
                     continue;
                 }
                 select.note.clear();
@@ -3718,7 +3905,7 @@ fn keys(ui: &egui::Ui, select: &mut Select, frame: &mut Frame<'_>) -> bool {
                     .first()
                     .map(|id| crate::scene::name_of(frame.scene, *id))
                     .unwrap_or_default();
-                if let Some(change) = reshape(frame.scene, "Order", subject, |scene| {
+                if let Some(change) = reshape(frame.scene, Deed::Order, subject, |scene| {
                     crate::scene::reorder_all(scene, &held, toward_top);
                 }) {
                     frame.history.kept(change);
@@ -4109,7 +4296,7 @@ fn held_names(scene: &Scene, starts: &[Placed]) -> String {
     match starts {
         [] => String::new(),
         [one] => crate::scene::name_of(scene, one.id),
-        many => format!("{} maps", many.len()),
+        many => text::history_maps_many(many.len()),
     }
 }
 
@@ -4203,6 +4390,7 @@ mod tests {
     fn settings() -> Settings {
         Settings {
             theme: theme::Mode::default(),
+            language: crate::text::DEFAULT.to_owned(),
             ui_scale: theme::DEFAULT_SCALE,
             tv_display: Some(1),
             swap_windows: false,

@@ -50,6 +50,12 @@ pub struct Config {
     pub snap_percent: f64,
     /// The theme the DM window draws. DESIGN.md 2.
     pub theme: crate::theme::Mode,
+    /// The language the window speaks, by the name of its file.
+    ///
+    /// A first run takes the language of the system, and English when the
+    /// program carries no file for it.
+    #[serde(default = "first_language")]
+    pub language: String,
     /// What every size of DESIGN.md is multiplied by. DESIGN.md 3.1.
     pub ui_scale: f64,
 }
@@ -60,12 +66,30 @@ impl Default for Config {
             scenes_dir: default_scenes_dir(&home()),
             last_scene: None,
             tv_display: TvPlacement::default(),
-            swap_windows: false,
+            swap_windows: true,
             snap_percent: DEFAULT_SNAP_PERCENT,
             theme: crate::theme::Mode::default(),
+            language: first_language(),
             ui_scale: crate::theme::DEFAULT_SCALE,
         }
     }
+}
+
+/// The language a first run takes: the system's, or English.
+///
+/// The desktop puts the locale in the environment, such as `ru_RU.UTF-8`.
+/// Windows leaves those unset, and a DM there picks the language in
+/// Settings once. Issue #53.
+fn first_language() -> String {
+    for name in ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"] {
+        let Ok(locale) = std::env::var(name) else {
+            continue;
+        };
+        if let Some(code) = crate::text::system_language(&locale) {
+            return code.to_owned();
+        }
+    }
+    crate::text::DEFAULT.to_owned()
 }
 
 impl Config {
@@ -278,6 +302,7 @@ mod tests {
             swap_windows: true,
             snap_percent: 12.0,
             theme: crate::theme::Mode::Dark,
+            language: "ru".to_owned(),
             ui_scale: 1.25,
         };
         assert_eq!(Config::from_json(&config.to_json()).unwrap(), config);

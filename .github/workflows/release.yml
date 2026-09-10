@@ -62,6 +62,7 @@ jobs:
           fi
           cp README.md LICENSE "dist/$out/"
           cp crates/app/assets/fonts/LICENSE-OFL.txt "dist/$out/LICENSE-font-OFL.txt"
+          cp crates/app/assets/fonts/LICENSE-OFL-FiraSans.txt "dist/$out/LICENSE-font-FiraSans-OFL.txt"
           cp crates/app/assets/icons/LICENSE-ISC.txt "dist/$out/LICENSE-icons-ISC.txt"
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then

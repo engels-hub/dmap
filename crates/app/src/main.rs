@@ -24,6 +24,7 @@ mod images;
 mod maps;
 mod pointer;
 mod scene;
+mod text;
 mod theme;
 mod transform;
 mod tv;
@@ -45,7 +46,7 @@ use egui_winit::winit::{
 };
 
 use crate::camera::{Camera, DEFAULT_PIXELS_PER_INCH};
-use crate::command::{History, reshape};
+use crate::command::{Deed, History, reshape};
 use crate::config::Config;
 use crate::gpu::{Gpu, Pane};
 use crate::grid::GridLayer;
@@ -87,6 +88,7 @@ fn main() -> Result<()> {
     let scene_dir = scene_to_open(&mut config)?;
     std::fs::create_dir_all(&scene_dir)
         .with_context(|| format!("{}: cannot make the scene folder", scene_dir.display()))?;
+    text::use_language(&config.language);
     let scene = load_scene(&scene_dir)?;
     // The config remembers this scene for the next run. The scene file is
     // written only when it is missing, so a scene on a read-only stick
@@ -318,6 +320,7 @@ impl Running {
                 swap_windows: config.swap_windows,
                 snap_percent: clamp_snap_percent(config.snap_percent),
                 theme: config.theme,
+                language: config.language.clone(),
                 ui_scale: crate::theme::clamp_scale(config.ui_scale),
             },
             placed: false,
@@ -423,7 +426,7 @@ impl Running {
         let name = stored.display().to_string();
         let asset = Asset::new(id, stored, self.camera.center);
         let into = self.active_group;
-        let Some(change) = reshape(&mut self.scene, "Add a map", name, |scene| {
+        let Some(change) = reshape(&mut self.scene, Deed::AddMap, name, |scene| {
             push_into(scene, into, Node::Asset(asset));
         }) else {
             return false;
@@ -436,7 +439,7 @@ impl Running {
     /// Asks for an image file and adds it. Returns `true` when a file was added.
     fn pick_map_file(&mut self) -> bool {
         let picked = rfd::FileDialog::new()
-            .add_filter("Images", &["png", "jpg", "jpeg"])
+            .add_filter(text::dialog_file_images(), &["png", "jpg", "jpeg"])
             .set_directory(&self.scene_dir)
             .pick_file();
         picked.is_some_and(|file| self.add_map(&file))
@@ -630,6 +633,7 @@ impl Running {
         config.swap_windows = self.settings.swap_windows;
         config.snap_percent = self.settings.snap_percent;
         config.theme = self.settings.theme;
+        config.language.clone_from(&self.settings.language);
         config.ui_scale = self.settings.ui_scale;
         scene.clone_from(&self.scene);
     }
