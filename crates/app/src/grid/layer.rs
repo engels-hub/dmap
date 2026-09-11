@@ -328,12 +328,12 @@ impl GridLayer {
         // line true. A hex grid cannot: a hex twice the size is no hex of
         // this table. So a hex grid holds the cell the DM chose and fades
         // out instead. Issue #15.
-        let wide = step_for(cells.cell, pixels_per_inch);
-        let step = if cells.kind.is_hex() {
-            cells.cell
-        } else {
-            wide
-        };
+        // `width` is the cell the DM chose, less any value that would
+        // break the math. A raw `cell` of infinity here reaches the shader
+        // and paints the whole surface NaN, maps and all.
+        let cell = cells.width();
+        let wide = step_for(cell, pixels_per_inch);
+        let step = if cells.kind.is_hex() { cell } else { wide };
         // A line holds its share of the cell and fades as the DM zooms
         // out, so a grid that says nothing more is not a grid that covers
         // everything. DESIGN.md 5.1.

@@ -7,6 +7,7 @@
 // Rust guideline compliant 2026-02-21
 
 use crate::command::{Deed, SetAssets, SetStrokes, SetTvBox, reshape};
+use crate::grid::Cells;
 use crate::icon;
 use crate::icons::Icon;
 use crate::scene::{Asset, Node, NodeId, ROOT_ID, Scene};
@@ -776,7 +777,7 @@ fn stroke_properties(
         after.width = width;
         changed = true;
     }
-    changed |= reach_row(ui, &mark, &mut after);
+    changed |= reach_row(ui, frame.settings.cells(), &mark, &mut after);
     if mark.ink == Ink::Measure {
         widget::row_label(ui, text::ruler_rule());
         let cells = frame.settings.cells();
@@ -817,16 +818,19 @@ fn stroke_properties(
 ///
 /// A reach moves the far point along the line the shape already runs on,
 /// so the shape keeps its heading and takes a new size.
-fn reach_row(ui: &mut egui::Ui, mark: &Stroke, after: &mut Stroke) -> bool {
+fn reach_row(ui: &mut egui::Ui, cells: Cells, mark: &Stroke, after: &mut Stroke) -> bool {
     let Some(reach) = mark.ink.reach(&mark.points) else {
         return false;
     };
     let mut changed = false;
+    // A stroke holds inches, and the row says cells. One cell is one inch
+    // no longer, so each field turns the number on the way in and on the
+    // way out. Issue #15.
     widget::row_label(ui, text::panel_stroke_reach());
-    let mut cells = reach;
+    let mut across = cells.in_cells(reach);
     if widget::input(
         ui,
-        &mut cells,
+        &mut across,
         text::unit_cells(),
         100.0,
         MIN_REACH..=MAX_REACH,
@@ -834,12 +838,16 @@ fn reach_row(ui: &mut egui::Ui, mark: &Stroke, after: &mut Stroke) -> bool {
     )
     .changed()
     {
-        after.points = mark.reached(cells);
+        after.points = mark.reached(cells.in_inches(across));
         changed = true;
     }
     if mark.ink.spans() {
         widget::row_label(ui, text::panel_stroke_across());
-        let mut span = if mark.span > 0.0 { mark.span } else { 1.0 };
+        let mut span = if mark.span > 0.0 {
+            cells.in_cells(mark.span)
+        } else {
+            1.0
+        };
         if widget::input(
             ui,
             &mut span,
@@ -850,7 +858,7 @@ fn reach_row(ui: &mut egui::Ui, mark: &Stroke, after: &mut Stroke) -> bool {
         )
         .changed()
         {
-            after.span = span;
+            after.span = cells.in_inches(span);
             changed = true;
         }
     }

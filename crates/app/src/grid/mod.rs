@@ -76,6 +76,34 @@ impl Default for Cells {
 }
 
 impl Cells {
+    /// How wide one cell is, in inches, and never a width that breaks the
+    /// math.
+    ///
+    /// A config file is text a DM can edit, so a cell of nothing, a cell
+    /// of less than nothing, and a cell of infinity all reach here. Each
+    /// one reads as the cell the program draws when the DM chose nothing,
+    /// so the lines on the screen and the snap under them agree.
+    pub fn width(self) -> f64 {
+        if self.cell.is_finite() && self.cell > 0.0 {
+            self.cell
+        } else {
+            DEFAULT_CELL
+        }
+    }
+
+    /// How many cells a measure of `inches` covers.
+    ///
+    /// A stroke holds inches, because the canvas is inches. A panel and a
+    /// label say cells, because a DM counts cells. Issue #15.
+    pub fn in_cells(self, inches: f64) -> f64 {
+        inches / self.width()
+    }
+
+    /// How many inches a measure of `cells` covers. See [`Cells::in_cells`].
+    pub fn in_inches(self, cells: f64) -> f64 {
+        cells * self.width()
+    }
+
     /// The point of the grid nearest `at`, in inches.
     ///
     /// A square grid answers with the corner of a cell, because a map and
@@ -83,19 +111,17 @@ impl Cells {
     /// answers with the middle of a hex, because a hex has no corner that
     /// two cells share the way squares do. Issue #15.
     ///
-    /// A grid of no cells gives `at` back, and so does a cell of no
-    /// width. The DM drags freely under both.
+    /// A grid of no cells gives `at` back. A cell of no width reads as
+    /// the cell of [`Cells::width`], so the snap holds to the lines the
+    /// grid draws.
     pub fn snap(self, at: (f64, f64)) -> (f64, f64) {
-        // A cell of nothing would divide by zero and send the map to NaN.
-        if !self.kind.snaps() || !self.cell.is_finite() || self.cell <= 0.0 {
+        if !self.kind.snaps() {
             return at;
         }
+        let cell = self.width();
         match self.kind {
-            Kind::Square => (
-                (at.0 / self.cell).round() * self.cell,
-                (at.1 / self.cell).round() * self.cell,
-            ),
-            Kind::HexPointyTop | Kind::HexFlatTop => center_of(self.kind, self.cell, at),
+            Kind::Square => ((at.0 / cell).round() * cell, (at.1 / cell).round() * cell),
+            Kind::HexPointyTop | Kind::HexFlatTop => center_of(self.kind, cell, at),
             Kind::None => at,
         }
     }
@@ -109,11 +135,9 @@ impl Cells {
     /// A grid of squares has diagonals and a rule that says what they
     /// cost, so it gives `None` and leaves the count to that rule.
     pub fn hex_steps(self, from: (f64, f64), to: (f64, f64)) -> Option<f64> {
-        if !self.cell.is_finite() || self.cell <= 0.0 {
-            return None;
-        }
-        let (from_q, from_r) = axial(self.kind, self.cell, from)?;
-        let (to_q, to_r) = axial(self.kind, self.cell, to)?;
+        let cell = self.width();
+        let (from_q, from_r) = axial(self.kind, cell, from)?;
+        let (to_q, to_r) = axial(self.kind, cell, to)?;
         let (q, r) = (to_q - from_q, to_r - from_r);
         let s = -q - r;
         Some(q.abs().max(r.abs()).max(s.abs()))
@@ -218,11 +242,50 @@ mod tests {
     }
 
     #[test]
-    fn a_cell_of_nothing_leaves_every_point_where_it_stands() {
+    fn a_measure_turns_between_inches_and_cells() {
+        // Issue #15: a four inch burst is two cells when a cell is two
+        // inches, and four cells when a cell is one.
+        let two = cells(Kind::Square, 2.0);
+        assert!((two.in_cells(4.0) - 2.0).abs() < NEAR);
+        assert!((two.in_inches(2.0) - 4.0).abs() < NEAR);
+        let one = cells(Kind::Square, DEFAULT_CELL);
+        assert!((one.in_cells(4.0) - 4.0).abs() < NEAR);
+        // A hex grid measures flat to flat, so it turns the same way.
+        let hex = cells(Kind::HexPointyTop, 2.0);
+        assert!((hex.in_cells(4.0) - 2.0).abs() < NEAR);
+    }
+
+    #[test]
+    fn a_measure_comes_back_from_its_own_turn() {
+        // The panel reads a field in cells and writes it back in inches,
+        // so a value the DM never touched must not drift.
+        for cell in [0.25, 1.0, 2.5, 10.0, 0.0, f64::NAN] {
+            let grid = cells(Kind::Square, cell);
+            for inches in [0.5, 4.0, 37.25] {
+                let back = grid.in_inches(grid.in_cells(inches));
+                assert!((back - inches).abs() < NEAR, "{cell} {inches} -> {back}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_cell_that_breaks_the_math_reads_as_the_default_cell() {
+        // A config file is text a DM can edit. The grid draws the default
+        // cell under each of these, so the snap holds to the same lines.
         let at = (5.3, 6.6);
-        assert!(same(cells(Kind::Square, 0.0).snap(at), at));
-        assert!(same(cells(Kind::HexPointyTop, -1.0).snap(at), at));
-        assert!(same(cells(Kind::HexFlatTop, f64::NAN).snap(at), at));
+        let sound = cells(Kind::Square, DEFAULT_CELL).snap(at);
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                (cells(Kind::Square, bad).width() - DEFAULT_CELL).abs() < NEAR,
+                "{bad}"
+            );
+            assert!(same(cells(Kind::Square, bad).snap(at), sound), "{bad}");
+            // A hex grid must not divide by it either.
+            let hex = cells(Kind::HexPointyTop, bad).snap(at);
+            assert!(hex.0.is_finite() && hex.1.is_finite(), "{bad} gave {hex:?}");
+        }
+        // A cell the DM really chose comes through untouched.
+        assert!((cells(Kind::Square, 2.5).width() - 2.5).abs() < NEAR);
     }
 
     #[test]

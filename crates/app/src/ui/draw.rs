@@ -266,13 +266,15 @@ pub fn measure_overlay(
         } else if let (Some(reach), Some(last)) =
             (stroke.ink.reach(&stroke.points), stroke.points.last())
         {
+            // A stroke holds inches, and a label says cells. One cell is
+            // one inch no longer, so both numbers turn. Issue #15.
             let says = if stroke.span > 0.0 {
                 // The width says cells alone. The length beside it
                 // already carries the feet.
-                let across = text::ruler_cells(format_args!("{:.1}", stroke.span));
-                text::ruler_span(length(reach), across)
+                let across = text::ruler_cells(format_args!("{:.1}", cells.in_cells(stroke.span)));
+                text::ruler_span(length(cells.in_cells(reach)), across)
             } else {
-                length(reach)
+                length(cells.in_cells(reach))
             };
             label(painter, view.to_screen(*last), &says, tokens, true, size);
         }
