@@ -41,7 +41,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result, bail};
 use egui_winit::winit::{
     application::ApplicationHandler,
-    dpi::LogicalSize,
+    dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
     event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoop},
     monitor::MonitorHandle,
@@ -50,7 +50,7 @@ use egui_winit::winit::{
 
 use crate::camera::{Camera, DEFAULT_PIXELS_PER_INCH};
 use crate::command::{Deed, History, reshape};
-use crate::config::Config;
+use crate::config::{Config, Spot};
 use crate::gpu::{Gpu, Pane};
 use crate::grid::GridLayer;
 use crate::images::Loader;
@@ -152,12 +152,19 @@ fn scene_to_open(config: &mut Config) -> Result<PathBuf> {
         } else {
             given
         };
-        config.last_scene = Some(config.remember(&dir));
+        let remembered = config.remember(&dir);
+        // The camera belongs to the scene of the last run. Another scene
+        // from the shell starts at the middle of the world.
+        if config.last_scene.as_ref() != Some(&remembered) {
+            config.camera = None;
+        }
+        config.last_scene = Some(remembered);
         return Ok(dir);
     }
     let scene = config.last_scene.clone().unwrap_or_else(|| {
         let first = PathBuf::from(FIRST_SCENE);
         config.last_scene = Some(first.clone());
+        config.camera = None;
         first
     });
     Ok(config.scene_dir(&scene))
@@ -200,18 +207,29 @@ fn load_history(dir: &Path) -> History {
 }
 
 /// What one event left for the program to do.
+///
+/// The two writes stand apart because a scene file grows with the scene
+/// and a config file does not. A DM who drags a slider in Settings would
+/// otherwise write every stroke of the scene again for each frame of the
+/// drag. Issue #66.
 #[derive(Debug, Default)]
 struct Outcome {
-    /// Write the config and the scene.
-    save: bool,
+    /// Write the scene and the changes beside it.
+    scene_changed: bool,
+    /// Write the config.
+    config_changed: bool,
     /// What the DM asked the scenes dialog to do.
     scene: Option<SceneCommand>,
 }
 
 impl Outcome {
-    /// An outcome that only writes the files.
-    fn saving(save: bool) -> Self {
-        Self { save, scene: None }
+    /// An outcome that only writes the scene.
+    fn saving(scene_changed: bool) -> Self {
+        Self {
+            scene_changed,
+            config_changed: scene_changed,
+            scene: None,
+        }
     }
 }
 
@@ -284,13 +302,18 @@ impl Running {
         scene: &Scene,
         scene_dir: PathBuf,
     ) -> Result<Self> {
-        let dm_window = Arc::new(
-            event_loop.create_window(
-                Window::default_attributes()
-                    .with_title(window_title(&scene_dir))
-                    .with_inner_size(DM_WINDOW_SIZE),
-            )?,
-        );
+        // The window comes back where the DM left it. A first run, and a
+        // Wayland session that tells a window nothing, take the default.
+        let mut attributes = Window::default_attributes()
+            .with_title(window_title(&scene_dir))
+            .with_inner_size(DM_WINDOW_SIZE);
+        if let Some(spot) = config.dm_window {
+            attributes = attributes
+                .with_inner_size(PhysicalSize::new(spot.width, spot.height))
+                .with_position(PhysicalPosition::new(spot.x, spot.y))
+                .with_maximized(spot.maximized);
+        }
+        let dm_window = Arc::new(event_loop.create_window(attributes)?);
         let displays: Vec<_> = event_loop.available_monitors().collect();
         let dm_display = display_of(&dm_window, &displays);
         let tv_display =
@@ -308,7 +331,7 @@ impl Running {
         let gpu = Gpu::new(&dm_window)?;
         let dm = gpu.pane(dm_window)?;
         let tv = gpu.pane(tv_window)?;
-        let ui = DmUi::new(&gpu, &dm);
+        let ui = DmUi::new(&gpu, &dm, config.tool, config.settings_tab);
         let pointer = PointerDisc::new(&gpu.device, tv.config.format);
         let map_layer = MapLayer::new(&gpu.device, dm.config.format);
         let grid_layer = GridLayer::new(&gpu.device, dm.config.format);
@@ -341,6 +364,8 @@ impl Running {
                 ink_rule: config.ink_rule,
                 ink_snap: config.ink_snap,
                 ui_scale: crate::theme::clamp_scale(config.ui_scale),
+                paper_light: config.paper_light.clone(),
+                paper_dark: config.paper_dark.clone(),
             },
             placed: false,
             // The first frame owes the players the scene the DM opened.
@@ -359,7 +384,7 @@ impl Running {
             overlay,
             live: None,
             loader,
-            camera: DM_CAMERA,
+            camera: config.camera.map_or(DM_CAMERA, Camera::usable),
         })
     }
 
@@ -460,20 +485,35 @@ impl Running {
         let map_layer = &mut self.map_layer;
         let grid_layer = &self.grid_layer;
         let ink_layer = &mut self.ink_layer;
-        let line = self.settings.theme.tokens().grid_line();
-        let width = pane.window.scale_factor() as f32;
+        let gpu = &self.gpu;
         let mode = self.settings.theme;
-        self.overlay
-            .render(&self.gpu, pane, &ink, &tv_camera, mode, |pass| {
+        let paper = self.settings.paper();
+        let line = paper.line(mode, pane.window.scale_factor() as f32);
+        let canvas = paper.canvas(mode);
+        // A clone of the handle, because the pane goes into the call that
+        // draws it.
+        let beneath = pane.beneath.view().clone();
+        self.overlay.render(
+            gpu,
+            pane,
+            &ink,
+            &tv_camera,
+            mode,
+            canvas,
+            |pass| {
                 map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
+            },
+            |pass| {
                 // DESIGN.md 5.1: one grid covers the canvas and it lies over
-                // every map, on both screens.
-                grid_layer.draw(queue, pass, &tv_camera, viewport, line, width);
+                // every map, on both screens. The pass carries the maps to
+                // the window with it.
+                grid_layer.draw(gpu, pass, &beneath, &tv_camera, viewport, line);
                 ink_layer.draw(device, queue, pass, &ink, &tv_camera, viewport);
                 if let Some(center) = tv_pointer {
                     pointer.draw(queue, pass, center, viewport);
                 }
-            })
+            },
+        )
     }
 
     /// Adds a map file at the middle of the DM view.
@@ -564,6 +604,7 @@ impl Running {
         }
         let viewport = (self.dm.config.width, self.dm.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
+        let gpu = &self.gpu;
         // DESIGN.md 5.6: a map the TV does not show draws faint here, so
         // the DM sees at a glance what the players cannot.
         let shown: Vec<(&Asset, f32)> = crate::scene::dm_draw_order(&self.scene)
@@ -588,17 +629,21 @@ impl Running {
         let (map_layer, camera) = (&mut self.map_layer, &self.camera);
         let grid_layer = &self.grid_layer;
         let ink_layer = &mut self.ink_layer;
-        let tokens = self.settings.theme.tokens();
-        let line = tokens.grid_line();
-        let width = self.dm.window.scale_factor() as f32;
+        let mode = self.settings.theme;
+        let paper = self.settings.paper();
+        let line = paper.line(mode, self.dm.window.scale_factor() as f32);
+        let canvas = paper.canvas(mode);
+        let beneath = self.dm.beneath.view().clone();
         self.ui.render(
             &self.gpu,
             &mut self.dm,
             output.paint,
-            tokens.canvas,
+            canvas,
             |pass| {
                 map_layer.draw(device, queue, pass, &shown, camera, viewport);
-                grid_layer.draw(queue, pass, camera, viewport, line, width);
+            },
+            |pass| {
+                grid_layer.draw(gpu, pass, &beneath, camera, viewport, line);
                 ink_layer.draw(device, queue, pass, &ink, camera, viewport);
             },
         )?;
@@ -621,7 +666,11 @@ impl Running {
             }
         }
         Ok(Outcome {
-            save: added || output.save || settings_changed,
+            scene_changed: added || output.save,
+            // The camera and the window of the DM go into the config as
+            // well, and neither asks for a write of its own. The way out
+            // of the program writes those.
+            config_changed: added || output.save || settings_changed,
             scene: output.scene,
         })
     }
@@ -665,7 +714,29 @@ impl Running {
         self.dm.window.set_maximized(true);
         self.tv.window.set_title("dmap TV");
         self.tv.window.set_decorations(false);
-        self.ui = DmUi::new(&self.gpu, &self.dm);
+        // The swap builds the interface again, and the DM keeps the tool
+        // and the tab they were working in.
+        let (tool, tab) = (self.ui.tool(), self.ui.settings_tab());
+        self.ui = DmUi::new(&self.gpu, &self.dm, tool, tab);
+    }
+
+    /// Where the DM window stands, or `None` when the desktop hides it.
+    ///
+    /// Wayland tells a window nothing about its own place. There the size
+    /// still comes back, and the place stays as the desktop puts it.
+    fn window_spot(&self) -> Option<Spot> {
+        let size = self.dm.window.inner_size();
+        if size.width == 0 || size.height == 0 || self.dm.window.fullscreen().is_some() {
+            return None;
+        }
+        let at = self.dm.window.outer_position().ok()?;
+        Some(Spot {
+            x: at.x,
+            y: at.y,
+            width: size.width,
+            height: size.height,
+            maximized: self.dm.window.is_maximized(),
+        })
     }
 
     /// Puts another scene on the canvas.
@@ -675,6 +746,9 @@ impl Running {
     /// new one must not draw the old one.
     fn open_scene(&mut self, dir: PathBuf, scene: &Scene, history: History) {
         self.scene_dir = dir;
+        // A place in one scene says nothing about another, so the camera
+        // starts in the middle of the world again.
+        self.camera = DM_CAMERA;
         self.scene = scene.clone();
         self.scene.tv_box = scene.tv_box.clamped();
         // Every scene brings the changes of its own folder.
@@ -724,6 +798,14 @@ impl Running {
         config.ink_rule = self.settings.ink_rule;
         config.ink_snap = self.settings.ink_snap;
         config.ui_scale = self.settings.ui_scale;
+        config.paper_light.clone_from(&self.settings.paper_light);
+        config.paper_dark.clone_from(&self.settings.paper_dark);
+        config.tool = self.ui.tool();
+        config.settings_tab = self.ui.settings_tab();
+        config.camera = Some(self.camera);
+        if let Some(spot) = self.window_spot() {
+            config.dm_window = Some(spot);
+        }
         scene.clone_from(&self.scene);
     }
 }
@@ -882,6 +964,22 @@ fn fullscreen_on(displays: &[MonitorHandle], index: Option<usize>) -> Option<Ful
 }
 
 impl App {
+    /// Writes the files the outcome asks for.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a file cannot be written.
+    fn write(&self, running: &mut Running, outcome: &Outcome) -> Result<()> {
+        if outcome.scene_changed {
+            save_scene(&self.scene, &self.scene_dir)?;
+            save_history(&mut running.history, &self.scene_dir)?;
+        }
+        if outcome.config_changed {
+            save_config(&self.config)?;
+        }
+        Ok(())
+    }
+
     /// Handles one window event and does what it left behind.
     ///
     /// # Errors
@@ -894,16 +992,11 @@ impl App {
         event: &WindowEvent,
     ) -> Result<()> {
         let outcome = running.window_event(window_id, event)?;
-        if outcome.save {
+        if outcome.scene_changed || outcome.config_changed {
             running.update(&mut self.config, &mut self.scene);
             // A write that fails leaves the session alone. The DM keeps
             // working, and the message says what went wrong.
-            if let Err(error) = save(
-                &self.config,
-                &self.scene,
-                &mut running.history,
-                &self.scene_dir,
-            ) {
+            if let Err(error) = self.write(running, &outcome) {
                 eprintln!("{error:#}");
                 running.scene_error = format!("{error:#}");
             }
@@ -1014,6 +1107,11 @@ impl App {
         self.scene_dir.clone_from(&dir);
         self.config.last_scene = Some(self.config.remember(&dir));
         running.open_scene(dir, &self.scene, history);
+        // The camera in the config belongs to the scene the config names.
+        // A scene that leaves the canvas must not leave its camera behind
+        // for the next one, because a run that ends without a word would
+        // open the new scene where the old one stood. Issue #66.
+        self.config.camera = Some(running.camera);
         Ok(())
     }
 }
@@ -1044,6 +1142,15 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         if event == WindowEvent::CloseRequested {
+            // The window, the tool and the camera are what the DM leaves
+            // behind. Nothing asked for a save while they changed, so the
+            // way out is the place to write them.
+            if let Some(running) = self.running.as_mut() {
+                running.update(&mut self.config, &mut self.scene);
+                if let Err(error) = save_config(&self.config) {
+                    eprintln!("{error:#}");
+                }
+            }
             event_loop.exit();
             return;
         }

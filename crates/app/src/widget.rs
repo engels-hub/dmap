@@ -408,6 +408,9 @@ pub fn select_row(ui: &mut Ui, text: &str, picked: bool) -> Response {
 ///
 /// The knob keeps the full range reachable: the track starts and ends half
 /// a knob inside the control, so the end values sit under the pointer.
+///
+/// The response reads as changed on each frame of a drag that moves the
+/// value, so a caller can write what the DM picked and no more.
 pub fn slider(
     ui: &mut Ui,
     value: &mut f64,
@@ -418,7 +421,8 @@ pub fn slider(
     /// The side of the knob, in points. DESIGN.md 6.
     const KNOB: f32 = 14.0;
     let tokens = theme::of(ui.ctx());
-    let (rect, response) = ui.allocate_exact_size(vec2(width, CONTROL), Sense::click_and_drag());
+    let (rect, mut response) =
+        ui.allocate_exact_size(vec2(width, CONTROL), Sense::click_and_drag());
     let track = Rect::from_min_max(
         pos2(rect.left() + KNOB / 2.0, rect.center().y - 1.0),
         pos2(rect.right() - KNOB / 2.0, rect.center().y + 1.0),
@@ -428,7 +432,14 @@ pub fn slider(
         && let Some(pointer) = response.interact_pointer_pos()
     {
         let share = ((pointer.x - track.left()) / track.width()).clamp(0.0, 1.0);
-        *value = range.start() + f64::from(share) * span;
+        let picked = range.start() + f64::from(share) * span;
+        // A hand that holds the knob still moves no value, and a caller
+        // that saves what changed must not write a file for every frame
+        // of the drag.
+        if (picked - *value).abs() > f64::EPSILON {
+            *value = picked;
+            response.mark_changed();
+        }
     }
     let share = if span.abs() < f64::EPSILON {
         0.0
@@ -482,6 +493,27 @@ pub fn color_swatch(ui: &mut Ui, color: &mut [u8; 4]) -> bool {
     let mut taken = picked.to_srgba_unmultiplied();
     taken[3] = taken[3].max(MIN_ALPHA);
     *color = taken;
+    true
+}
+
+/// A swatch that picks a color and takes no alpha with it. DESIGN.md 9.2.
+///
+/// The canvas background and the grid line are as solid as the row beside
+/// them says, so an alpha in the popover would be a control that changes
+/// nothing. Issue #66.
+///
+/// Returns `true` when the DM changed the color.
+pub fn color_swatch_rgb(ui: &mut Ui, color: &mut [u8; 3]) -> bool {
+    let mut picked = egui::Color32::from_rgb(color[0], color[1], color[2]);
+    let response = egui::color_picker::color_edit_button_srgba(
+        ui,
+        &mut picked,
+        egui::color_picker::Alpha::Opaque,
+    );
+    if !response.changed() {
+        return false;
+    }
+    *color = [picked.r(), picked.g(), picked.b()];
     true
 }
 

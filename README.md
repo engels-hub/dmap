@@ -64,6 +64,10 @@ A scene is a folder. The folder holds one `scene.json`, one `history.json` and t
 
 The program keeps its own file in `~/.config/dmap/config.json`. It holds the folder your scenes live in and the scene you had open last. It also holds the settings of this table: the TV display, swap mode and the snap window. A scene carries none of those, so your TV does not travel with a scene you give away.
 
+Everything you set stays set. The theme, the language, the interface scale, the colors of the canvas and the grid, and every choice in the Draw panel come back on the next run. So do the size and the place of the window, the tool in the toolbar, the tab the Settings dialog showed, and where you were looking in the scene you had open. Another scene starts in the middle of the world, because a place in one scene says nothing about another.
+
+Note: a Wayland desktop tells a window nothing about where it stands, and takes no place from it. There the size of the window comes back and the place does not.
+
 These files hold plain JSON. Read them, and edit them by hand if you like.
 
 Caution: a change you make to `scene.json` by hand leaves `history.json` behind. The steps in it go back to a scene that no longer stands there. Delete `history.json` after such an edit. A scene with no history file opens with an empty stack.
@@ -190,6 +194,12 @@ The two switches work on their own, and a group rules the nodes under it. A grou
 A map the TV does not show draws faint on your own screen. So you see at a glance what the players cannot, without a look at the list.
 
 One grid covers the canvas on both screens, over every map. One cell is one inch on the table.
+
+The **Grid** tab of Settings holds the color of the canvas and the color of the grid. Each choice belongs to the theme you work in, so the dark theme and the light one keep grids of their own. **Reset** on a row gives the color of the theme back.
+
+The grid line takes one of two ways. **Automatic**, which every scene opens with, reads the map under each line and turns its light around, so the line is pale over a dark map and dark over a pale one. It also holds itself away from the middle gray, which is where a line that only turns the map around would disappear. **Chosen** draws the color you pick instead. You set the width and the opacity of the line either way.
+
+The line is 2 points wide, and you can take it from 0.5 to 8. However wide you make it, a line takes no more than a tenth of the cell it draws, and the whole grid fades as you zoom out. Past a step of 16 inches to a cell the grid draws no more, so a look at the whole map is a look at the map.
 
 To move something you already placed, drag its row onto a group. The **Group** field in the Map panel does the same without a drag.
 

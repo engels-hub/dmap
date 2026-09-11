@@ -49,11 +49,60 @@ impl Gpu {
             .get_default_config(&self.adapter, size.width.max(1), size.height.max(1))
             .context("the GPU adapter cannot draw to this window")?;
         surface.configure(&self.device, &config);
+        let beneath = Beneath::new(&self.device, &config);
         Ok(Pane {
             window,
             surface,
             config,
+            beneath,
         })
+    }
+}
+
+/// What the grid draws over: the canvas color and the maps.
+///
+/// The grid can take its color from the map below it, and a fragment
+/// shader cannot read the surface it writes to. So the maps go into this
+/// texture first. The grid pass then reads the texture, and writes both
+/// the map and the lines to the window in one go. DESIGN.md 5.1.
+pub struct Beneath {
+    view: wgpu::TextureView,
+}
+
+impl Beneath {
+    /// Builds a texture of the size and the format `config` gives.
+    fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("beneath"),
+            size: wgpu::Extent3d {
+                width: config.width.max(1),
+                height: config.height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        Self {
+            view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        }
+    }
+
+    /// The view the grid reads and the maps write.
+    ///
+    /// A view is a handle, so a caller that must hold it across a borrow
+    /// of the pane clones it and keeps the clone.
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+}
+
+impl std::fmt::Debug for Beneath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Beneath").finish_non_exhaustive()
     }
 }
 
@@ -62,6 +111,8 @@ pub struct Pane {
     pub window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     pub config: wgpu::SurfaceConfiguration,
+    /// The maps of this frame, for the grid to read.
+    pub beneath: Beneath,
 }
 
 impl std::fmt::Debug for Pane {
@@ -109,6 +160,7 @@ impl Pane {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(device, &self.config);
+        self.beneath = Beneath::new(device, &self.config);
         true
     }
 }
