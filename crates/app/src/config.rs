@@ -61,7 +61,7 @@ impl Default for Paper {
 /// Half a point is a hairline on a screen of two device pixels. Eight
 /// points is a line the players read from across the table. A line that
 /// wide would swallow a cell as the DM zooms out, so the grid thins it
-/// against the cell it draws. See [`crate::grid::thinned`].
+/// against the cell it draws. See `thinned` in `grid::layer`.
 pub const MIN_GRID_WIDTH: f64 = 0.5;
 /// See [`MIN_GRID_WIDTH`].
 pub const MAX_GRID_WIDTH: f64 = 8.0;
