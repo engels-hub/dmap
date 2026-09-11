@@ -15,6 +15,7 @@ use egui_wgpu::wgpu;
 
 use crate::camera::Camera;
 use crate::gpu::{Gpu, Pane};
+use crate::grid::Cells;
 use crate::stroke::Stroke;
 use crate::theme;
 use crate::ui::{Paint, measure_overlay, render_pane};
@@ -78,13 +79,14 @@ impl Overlay {
         pane: &mut Pane,
         strokes: &[&Stroke],
         camera: &Camera,
+        cells: Cells,
         mode: theme::Mode,
         canvas: egui::Color32,
         draw_maps: impl FnOnce(&mut wgpu::RenderPass<'static>),
         draw_canvas: impl FnOnce(&mut wgpu::RenderPass<'static>),
     ) -> Result<bool> {
         let viewport = (pane.config.width, pane.config.height);
-        let paint = self.paint(strokes, camera, viewport, mode);
+        let paint = self.paint(strokes, camera, viewport, cells, mode);
         render_pane(
             gpu,
             pane,
@@ -106,6 +108,7 @@ impl Overlay {
         strokes: &[&Stroke],
         camera: &Camera,
         viewport: (u32, u32),
+        cells: Cells,
         mode: theme::Mode,
     ) -> Paint {
         let screen = egui::Rect::from_min_size(
@@ -124,7 +127,9 @@ impl Overlay {
         let size = (LABEL_INCHES * camera.pixels_per_inch) as f32;
         let output = self.ctx.run_ui(input, |ui| {
             let painter = ui.ctx().layer_painter(egui::LayerId::background());
-            measure_overlay(&painter, strokes, camera, viewport, 1.0, tokens, size);
+            measure_overlay(
+                &painter, strokes, camera, viewport, 1.0, cells, tokens, size,
+            );
         });
         let jobs = self.ctx.tessellate(output.shapes, 1.0);
         Paint {

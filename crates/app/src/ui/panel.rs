@@ -609,6 +609,7 @@ pub(super) fn say_lengths(
         frame.camera,
         viewport,
         ppp,
+        frame.settings.cells(),
         tokens,
         theme::SMALL,
     );

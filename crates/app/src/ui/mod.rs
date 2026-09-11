@@ -234,10 +234,6 @@ const ZOOM_LABEL_SIZE: f32 = 14.0;
 /// Gap between the top edge of the box and its zoom label, in points.
 const ZOOM_LABEL_GAP: f32 = 6.0;
 
-/// One grid cell on the canvas, in inches. The arrow keys move the TV box
-/// by this much.
-const CELL: f64 = 1.0;
-
 /// The share of the canvas the TV box takes when `T` frames it.
 const FRAME_MARGIN: f64 = 0.9;
 

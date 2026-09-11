@@ -46,6 +46,11 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// Whether this kind draws hexes.
+    pub fn is_hex(self) -> bool {
+        matches!(self, Self::HexPointyTop | Self::HexFlatTop)
+    }
+
     /// Whether this kind holds cells the snap can reach.
     pub fn snaps(self) -> bool {
         !matches!(self, Self::None)
@@ -94,16 +99,33 @@ impl Cells {
             Kind::None => at,
         }
     }
+
+    /// How many hexes a figure walks from `from` to `to`.
+    ///
+    /// A hex grid has no diagonal: every neighbor is one step away. So the
+    /// count is the cube distance, which is the longest of the three cube
+    /// coordinates the two hexes differ by. Issue #15.
+    ///
+    /// A grid of squares has diagonals and a rule that says what they
+    /// cost, so it gives `None` and leaves the count to that rule.
+    pub fn hex_steps(self, from: (f64, f64), to: (f64, f64)) -> Option<f64> {
+        if !self.cell.is_finite() || self.cell <= 0.0 {
+            return None;
+        }
+        let (from_q, from_r) = axial(self.kind, self.cell, from)?;
+        let (to_q, to_r) = axial(self.kind, self.cell, to)?;
+        let (q, r) = (to_q - from_q, to_r - from_r);
+        let s = -q - r;
+        Some(q.abs().max(r.abs()).max(s.abs()))
+    }
 }
 
-/// The middle of the hex that holds `at`, in inches.
+/// Which hex holds `at`, as whole axial coordinates.
 ///
-/// The point becomes axial coordinates, rounds to the nearest hex, and
-/// comes back as a point. Red Blob Games sets out the same steps.
-///
-/// A kind that is not a hex gives `at` back, because it has no hex to
-/// name.
-fn center_of(kind: Kind, cell: f64, at: (f64, f64)) -> (f64, f64) {
+/// The point becomes axial coordinates and rounds to the nearest hex. Red
+/// Blob Games sets out the same steps. A kind that is not a hex has no
+/// hex to name, so it gives `None`.
+fn axial(kind: Kind, cell: f64, at: (f64, f64)) -> Option<(f64, f64)> {
     // The distance from the middle of a hex to a corner. A hex measured
     // `cell` flat to flat stands `cell / sqrt(3)` tall to its corner.
     let size = cell / f64::sqrt(3.0);
@@ -111,13 +133,24 @@ fn center_of(kind: Kind, cell: f64, at: (f64, f64)) -> (f64, f64) {
     let (q, r) = match kind {
         Kind::HexPointyTop => (f64::sqrt(3.0) / 3.0 * x - y / 3.0, 2.0 / 3.0 * y),
         Kind::HexFlatTop => (2.0 / 3.0 * x, -x / 3.0 + f64::sqrt(3.0) / 3.0 * y),
-        _ => return at,
+        Kind::Square | Kind::None => return None,
     };
-    let (q, r) = rounded(q, r);
+    Some(rounded(q, r))
+}
+
+/// The middle of the hex that holds `at`, in inches.
+///
+/// A kind that is not a hex gives `at` back, because it has no hex to
+/// name.
+fn center_of(kind: Kind, cell: f64, at: (f64, f64)) -> (f64, f64) {
+    let size = cell / f64::sqrt(3.0);
+    let Some((q, r)) = axial(kind, cell, at) else {
+        return at;
+    };
     match kind {
         Kind::HexPointyTop => (size * f64::sqrt(3.0) * (q + r / 2.0), size * 1.5 * r),
         Kind::HexFlatTop => (size * 1.5 * q, size * f64::sqrt(3.0) * (q / 2.0 + r)),
-        _ => at,
+        Kind::Square | Kind::None => at,
     }
 }
 

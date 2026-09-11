@@ -19,10 +19,10 @@ use crate::tvbox::{TV_WIDTH_INCHES, TvBox, at_true_size, clamp_width, snap_to_tr
 
 use super::panel::selection_popup;
 use super::{
-    BoxDrag, Button, CELL, DASH, Drag, FRAME_MARGIN, Frame, GROUP_MARGIN, GROUP_REACH,
-    HANDLE_REACH, HANDLE_SIZE, HANDLE_STANDOFF, KEY_ZOOM_STEP, Measure, PICK_REACH, Pointer, REDO,
-    REDO_Y, ROTATION_HANDLE_OFFSET, Select, Table, UNDO, View, ZOOM_IN, ZOOM_IN_EQUALS,
-    ZOOM_LABEL_GAP, ZOOM_LABEL_SIZE, ZOOM_OUT, ZOOM_RESET,
+    BoxDrag, Button, DASH, Drag, FRAME_MARGIN, Frame, GROUP_MARGIN, GROUP_REACH, HANDLE_REACH,
+    HANDLE_SIZE, HANDLE_STANDOFF, KEY_ZOOM_STEP, Measure, PICK_REACH, Pointer, REDO, REDO_Y,
+    ROTATION_HANDLE_OFFSET, Select, Table, UNDO, View, ZOOM_IN, ZOOM_IN_EQUALS, ZOOM_LABEL_GAP,
+    ZOOM_LABEL_SIZE, ZOOM_OUT, ZOOM_RESET,
 };
 
 /// The Select tool on the canvas: pick, move, scale, turn and flip maps.
@@ -266,7 +266,7 @@ pub(super) fn table_tool(
     // The keys wait for the drag to end. A drag rewrites the box from its
     // start state every frame, so a key press in the middle of one is lost.
     if table.drag.is_none() {
-        edited |= arrow_keys(ui, &mut box_now);
+        edited |= arrow_keys(ui, &mut box_now, frame.settings.cells().cell);
     }
 
     // Ctrl and Alt with the wheel reach a zoom without a drag on a handle.
@@ -331,7 +331,7 @@ fn drag_box(tv_box: &mut TvBox, drag: BoxDrag, cursor: (f64, f64)) -> bool {
 
 /// The arrow keys move the box one grid cell. Held keys repeat, so the DM
 /// can walk the box across the canvas.
-fn arrow_keys(ui: &egui::Ui, tv_box: &mut TvBox) -> bool {
+fn arrow_keys(ui: &egui::Ui, tv_box: &mut TvBox, cell: f64) -> bool {
     // A number in the panel takes the keyboard first. egui leaves the left
     // and right keys to us, so the box would walk while the DM types.
     if ui.ctx().egui_wants_keyboard_input() {
@@ -347,10 +347,10 @@ fn arrow_keys(ui: &egui::Ui, tv_box: &mut TvBox) -> bool {
                 continue;
             };
             let (dx, dy) = match key {
-                egui::Key::ArrowLeft => (-CELL, 0.0),
-                egui::Key::ArrowRight => (CELL, 0.0),
-                egui::Key::ArrowUp => (0.0, -CELL),
-                egui::Key::ArrowDown => (0.0, CELL),
+                egui::Key::ArrowLeft => (-cell, 0.0),
+                egui::Key::ArrowRight => (cell, 0.0),
+                egui::Key::ArrowUp => (0.0, -cell),
+                egui::Key::ArrowDown => (0.0, cell),
                 _ => continue,
             };
             tv_box.center = (tv_box.center.0 + dx, tv_box.center.1 + dy);

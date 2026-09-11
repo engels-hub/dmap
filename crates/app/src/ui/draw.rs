@@ -241,12 +241,17 @@ fn span_of(live: &Stroke, at: (f64, f64)) -> f64 {
 ///
 /// A kept measure carries its length as the live one does, so the DM and
 /// the players read the same numbers off the same line.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one overlay of labels: what it labels, where, on which grid, and how"
+)]
 pub fn measure_overlay(
     painter: &egui::Painter,
     strokes: &[&Stroke],
     camera: &Camera,
     viewport: (u32, u32),
     ppp: f64,
+    cells: Cells,
     tokens: Tokens,
     size: f32,
 ) {
@@ -257,7 +262,7 @@ pub fn measure_overlay(
     };
     for stroke in strokes {
         if stroke.ink == Ink::Measure {
-            measure_labels(painter, stroke, &view, tokens, size);
+            measure_labels(painter, stroke, &view, cells, tokens, size);
         } else if let (Some(reach), Some(last)) =
             (stroke.ink.reach(&stroke.points), stroke.points.last())
         {
@@ -278,10 +283,17 @@ pub fn measure_overlay(
 ///
 /// The label sits beside the middle of its leg, and the total stands at
 /// the end, where the pointer is. Issue #12.
-fn measure_labels(painter: &egui::Painter, live: &Stroke, view: &View, tokens: Tokens, size: f32) {
+fn measure_labels(
+    painter: &egui::Painter,
+    live: &Stroke,
+    view: &View,
+    cells: Cells,
+    tokens: Tokens,
+    size: f32,
+) {
     let mut whole = 0.0;
     for pair in live.points.windows(2) {
-        let leg = live.rule.cells(pair[0], pair[1]);
+        let leg = live.rule.cells(cells, pair[0], pair[1]);
         whole += leg;
         let middle = (
             f64::midpoint(pair[0].0, pair[1].0),
