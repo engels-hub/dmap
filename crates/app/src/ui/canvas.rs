@@ -931,7 +931,7 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
                     asset.center = (start.center.0 + step.0, start.center.1 + step.1);
                     if !snap && let Some(size) = (frame.size_of)(&asset.path) {
                         let corners = asset.corners(size);
-                        asset.snap_offset = corner_offset(&corners);
+                        asset.snap_offset = corner_offset(frame.settings.cells(), &corners);
                     }
                     asset
                 })
@@ -999,7 +999,7 @@ fn snap_step(frame: &Frame<'_>, lead: &Asset, step: (f64, f64)) -> Option<(f64, 
     let mut settled = lead.clone();
     settled.center = moved;
     let corners = settled.corners(size);
-    let snapped = snap_corner(moved, &corners, lead.snap_offset);
+    let snapped = snap_corner(frame.settings.cells(), moved, &corners, lead.snap_offset);
     Some((snapped.0 - start.0, snapped.1 - start.1))
 }
 

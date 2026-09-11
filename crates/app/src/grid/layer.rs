@@ -99,7 +99,7 @@ fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
 ///
 /// Under this the grid doubles its step, so a camera that shows the whole
 /// canvas gets lines that stay apart instead of a solid wash.
-const MIN_CELL: f64 = 24.0;
+const MIN_DRAWN_CELL: f64 = 24.0;
 
 /// How many floats the shader's `Grid` block holds.
 ///
@@ -296,7 +296,7 @@ impl GridLayer {
 ///
 /// A tenth leaves nine tenths of the map to look at. Without this a wide
 /// line keeps its pixels as the DM zooms out, the cell narrows toward
-/// `MIN_CELL`, and the grid swallows the map it lies on.
+/// `MIN_DRAWN_CELL`, and the grid swallows the map it lies on.
 const MAX_SHARE: f32 = 0.1;
 
 /// The step where a grid starts to go away, in inches.
@@ -338,10 +338,10 @@ fn faded(step: f64) -> f32 {
 ///
 /// One inch is the cell of DESIGN.md 5.1. A camera far enough out would
 /// draw those lines closer than a pixel apart, so the step doubles until
-/// a cell is at least `MIN_CELL` wide.
+/// a cell is at least `MIN_DRAWN_CELL` wide.
 fn step_for(pixels_per_inch: f64) -> f64 {
     let mut step = 1.0;
-    while step * pixels_per_inch < MIN_CELL {
+    while step * pixels_per_inch < MIN_DRAWN_CELL {
         step *= 2.0;
     }
     step
@@ -349,7 +349,7 @@ fn step_for(pixels_per_inch: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{FADE_STEP, GONE_STEP, MIN_CELL, faded, step_for, thinned};
+    use super::{FADE_STEP, GONE_STEP, MIN_DRAWN_CELL, faded, step_for, thinned};
 
     #[test]
     fn a_line_never_takes_more_than_a_tenth_of_a_cell() {
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn a_close_camera_draws_one_line_for_each_inch() {
         assert!((step_for(48.0) - 1.0).abs() < f64::EPSILON);
-        assert!((step_for(MIN_CELL) - 1.0).abs() < f64::EPSILON);
+        assert!((step_for(MIN_DRAWN_CELL) - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -387,7 +387,10 @@ mod tests {
         // lines that were there before.
         for zoom in [12.0, 6.0, 3.0, 0.5, 0.01] {
             let step = step_for(zoom);
-            assert!(step * zoom >= MIN_CELL, "a cell at {zoom} is too narrow");
+            assert!(
+                step * zoom >= MIN_DRAWN_CELL,
+                "a cell at {zoom} is too narrow"
+            );
             assert!(step.log2().fract().abs() < 1e-9, "{step} is not a doubling");
         }
     }

@@ -8,6 +8,7 @@
 
 use crate::camera::Camera;
 use crate::command::{Deed, Restructure, reshape};
+use crate::grid::Cells;
 use crate::scene::{Group, Node, NodeId, ROOT_ID, Scene};
 use crate::stroke::{Ink, Stroke};
 use crate::text;
@@ -93,7 +94,7 @@ pub(super) fn draw_tool(
     // on it and reaches wherever the DM pulls.
     let at = at.map(|at| {
         if snap && ink == Ink::Measure {
-            on_grid(at)
+            on_grid(frame.settings.cells(), at)
         } else {
             at
         }
@@ -145,7 +146,11 @@ pub(super) fn draw_tool(
             id: ROOT_ID,
             shown: crate::scene::Shown::default(),
             ink,
-            points: vec![if snap { on_grid(at) } else { at }],
+            points: vec![if snap {
+                on_grid(frame.settings.cells(), at)
+            } else {
+                at
+            }],
             color: frame.settings.ink_color,
             width: frame.settings.ink_width,
             span: 0.0,
@@ -342,9 +347,13 @@ fn length(cells: f64) -> String {
     )
 }
 
-/// The nearest crossing of the grid, in inches.
-fn on_grid(at: (f64, f64)) -> (f64, f64) {
-    (at.0.round(), at.1.round())
+/// The nearest point of the grid, in inches.
+///
+/// A square grid gives the nearest crossing. A hex grid gives the middle
+/// of the nearest hex, because a spell lands on a cell, not on a corner.
+/// Issue #15.
+fn on_grid(cells: Cells, at: (f64, f64)) -> (f64, f64) {
+    cells.snap(at)
 }
 
 /// Takes a bite out of every stroke the eraser passes over.

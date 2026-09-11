@@ -214,12 +214,15 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, value: &mut T, options: &[(T,
         .map(|(_, text)| text_width(ui, text, &font) + 2.0 * PAD)
         .collect();
     let total: f32 = widths.iter().sum::<f32>() - (options.len().saturating_sub(1)) as f32;
-    let (rect, _) = ui.allocate_exact_size(vec2(total, CONTROL), Sense::hover());
+    // The id comes from the space this control took, not from where it
+    // sits. Two controls that start at one x would otherwise hold one id,
+    // and egui would send the click of the second to the first.
+    let (rect, whole) = ui.allocate_exact_size(vec2(total, CONTROL), Sense::hover());
     let mut changed = false;
     let mut left = rect.left();
-    for ((choice, text), width) in options.iter().zip(&widths) {
+    for (index, ((choice, text), width)) in options.iter().zip(&widths).enumerate() {
         let segment = Rect::from_min_size(pos2(left, rect.top()), vec2(*width, CONTROL));
-        let response = ui.interact(segment, ui.id().with(left as i32), Sense::click());
+        let response = ui.interact(segment, whole.id.with(index), Sense::click());
         let picked = *value == *choice;
         if response.clicked() && !picked {
             *value = *choice;

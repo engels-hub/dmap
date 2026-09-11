@@ -1,13 +1,11 @@
 {
   "language.name": "Русский",
-
   "tool.select": "Выбор",
   "tool.table": "Стол",
   "tool.scenes": "Сцены",
   "tool.add_map": "Добавить карту",
   "tool.settings": "Настройки",
   "tool.history": "История",
-
   "panel.objects.pieces": "Части",
   "panel.objects.title": "Объекты",
   "panel.objects.new_group": "Новая группа",
@@ -15,7 +13,6 @@
   "panel.objects.helper": "Ассет будет добавлен в отмеченную группу.",
   "panel.objects.one_group": "Переставлять можно только внутри группы. Выберите соседние ассеты.",
   "panel.objects.group_name": "Группа {id}",
-
   "panel.map.group": "Группа",
   "panel.map.grid_px": "Пикселей в сетке",
   "panel.map.size": "Размер",
@@ -25,7 +22,6 @@
   "panel.map.turn_button": "Повернуть",
   "panel.map.flip": "Отразить",
   "panel.map.flip_helper": "Shift + F отражает ассет.",
-
   "panel.box.title": "Рамка телевизора",
   "panel.box.zoom": "Масштаб",
   "panel.box.zoom_helper": "100 % — реальный размер",
@@ -33,18 +29,15 @@
   "panel.box.move_helper": "Стрелки сдвигают рамку на одну клетку",
   "panel.box.frame": "Рамка",
   "panel.box.frame_button": "Показать всю рамку",
-
   "panel.stroke.reach": "Длина",
   "panel.stroke.across": "Ширина",
   "unit.cells": "кл.",
   "panel.picked.title": "Выбрано: {count}",
   "panel.picked.group": "Сгруппировать",
   "panel.picked.close": "Закрыть",
-
   "dialog.history.title": "История",
   "dialog.history.start": "Сцена создана",
   "dialog.history.helper": "Нажатие на шаг откатывает сцену",
-
   "dialog.scenes.title": "Сцены",
   "dialog.scenes.folder": "Папка сцен",
   "dialog.scenes.change": "Изменить",
@@ -58,7 +51,6 @@
   "dialog.scenes.rename": "Переименовать",
   "dialog.scenes.open_now": "Открыта",
   "dialog.scenes.open": "Открыть",
-
   "dialog.settings.title": "Настройки",
   "dialog.settings.tab.table": "Стол",
   "dialog.settings.tab.grid": "Сетка",
@@ -90,11 +82,17 @@
   "dialog.settings.reset": "Сбросить",
   "dialog.settings.opacity_value": "{percent} %",
   "unit.points": "пт",
-
-  "dialog.settings.grid_soon": "Вид сетки, размер клетки и где она видна — TODO: #15.",
+  "unit.inches": "дюйм",
+  "dialog.settings.grid_kind": "Вид",
+  "dialog.settings.grid_kind_square": "Квадраты",
+  "dialog.settings.grid_kind_hex_pointy": "Гексы углом вверх",
+  "dialog.settings.grid_kind_hex_flat": "Гексы гранью вверх",
+  "dialog.settings.grid_kind_none": "Нет",
+  "dialog.settings.grid_cell": "Размер клетки",
+  "dialog.settings.grid_cell_helper": "Размер гекса измеряется между гранями",
+  "dialog.settings.grid_soon": "Где показывать сетку и стиль линии — не сделано.",
   "dialog.settings.light_soon": "Настройки света TODO: #20.",
   "dialog.settings.shortcuts_soon": "Список клавиш TODO: #36.",
-
   "dialog.about.version": "dmap {version}",
   "dialog.about.tagline": "Показ карт для настольных ролевых игр в гибридном режиме.",
   "dialog.about.licensed": "{name}, по лицензии {terms}.",
@@ -102,9 +100,7 @@
   "dialog.about.built_by": "Авторы",
   "dialog.about.free": "dmap — свободное ПО, WIP.",
   "dialog.about.bring": "Добавьте багрепорт, хотелку или патч",
-
   "dialog.file.images": "Изображения",
-
   "tool.draw": "Рисовать",
   "panel.draw.title": "Рисование",
   "panel.draw.color": "Цвет",
@@ -130,10 +126,8 @@
   "stroke.rect": "Прямоугольник",
   "stroke.ellipse": "Эллипс",
   "stroke.measure": "Линейка",
-
   "theme.light": "Светлая",
   "theme.dark": "Тёмная",
-
   "history.row": "{what}: {subject}",
   "history.ago.earlier": "раньше",
   "history.ago.now": "только что",
@@ -150,7 +144,6 @@
   "history.maps.many": "карт: {count}",
   "history.lists.one": "один список",
   "history.lists.many": "списков: {count}",
-
   "history.deed.draw": "Рисование",
   "history.deed.erase": "Стирание",
   "panel.objects.drawings": "Рисунки",
@@ -170,7 +163,6 @@
   "history.deed.another_group": "Другая группа",
   "history.deed.group": "Группировка",
   "history.deed.order": "Порядок",
-
   "history.detail.move": "с {from} на {to}, дюймы",
   "history.detail.turn": "с {from}° на {to}°",
   "history.detail.size": "с {from} % на {to} %",
@@ -181,7 +173,6 @@
   "history.detail.rename": "на {name}",
   "history.detail.screens": "с «{from}» на «{to}»",
   "history.detail.tree": "{lists} в дереве",
-
   "unit.px": "px",
   "unit.percent": "%",
   "unit.degrees": "°"

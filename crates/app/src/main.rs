@@ -364,6 +364,8 @@ impl Running {
                 ink_rule: config.ink_rule,
                 ink_snap: config.ink_snap,
                 ui_scale: crate::theme::clamp_scale(config.ui_scale),
+                grid_kind: config.grid_kind,
+                grid_cell: config.grid_cell,
                 paper_light: config.paper_light.clone(),
                 paper_dark: config.paper_dark.clone(),
             },
@@ -798,6 +800,8 @@ impl Running {
         config.ink_rule = self.settings.ink_rule;
         config.ink_snap = self.settings.ink_snap;
         config.ui_scale = self.settings.ui_scale;
+        config.grid_kind = self.settings.grid_kind;
+        config.grid_cell = self.settings.grid_cell;
         config.paper_light.clone_from(&self.settings.paper_light);
         config.paper_dark.clone_from(&self.settings.paper_dark);
         config.tool = self.ui.tool();

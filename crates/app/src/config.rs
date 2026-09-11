@@ -180,6 +180,15 @@ pub struct Config {
     /// The canvas and the grid of the dark theme. Issue #66.
     #[serde(default)]
     pub paper_dark: Paper,
+    /// What shape a cell is. Issue #15.
+    ///
+    /// The shape belongs to the table, not to the theme, so one setting
+    /// serves the light paper and the dark one.
+    #[serde(default)]
+    pub grid_kind: crate::grid::Kind,
+    /// How wide a cell is, in inches. A hex measures flat to flat.
+    #[serde(default)]
+    pub grid_cell: Option<f32>,
     /// Where the DM window stood, in the pixels of the display.
     ///
     /// A DM who gives the window a size and a place keeps it. Wayland
@@ -235,6 +244,8 @@ impl Default for Config {
             ink_snap: yes(),
             paper_light: Paper::default(),
             paper_dark: Paper::default(),
+            grid_kind: crate::grid::Kind::default(),
+            grid_cell: None,
             dm_window: None,
             tool: crate::ui::Tool::default(),
             settings_tab: crate::ui::Tab::default(),
@@ -496,6 +507,8 @@ mod tests {
             ink_rule: crate::stroke::Rule::Fifth,
             ink_snap: false,
             paper_light: Paper::default(),
+            grid_kind: crate::grid::Kind::default(),
+            grid_cell: None,
             paper_dark: Paper {
                 canvas: Some([10, 20, 30]),
                 line: Some([40, 50, 60]),
