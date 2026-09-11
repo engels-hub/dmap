@@ -115,8 +115,8 @@ impl History {
 
     /// Keeps a change that is in the scene already, as one step.
     ///
-    /// [`reshape`] writes the tree while it reads what moved, so its
-    /// result comes in here.
+    /// [`reshape`](super::reshape) writes the tree while it reads what
+    /// moved, so its result comes in here.
     pub fn kept(&mut self, change: impl Into<Change>) {
         self.settle();
         self.undone.clear();

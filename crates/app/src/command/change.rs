@@ -417,7 +417,8 @@ fn write_children(scene: &mut Scene, lists: &[(NodeId, Vec<Node>)]) {
 /// dialog, which reads "New group" over "Cave".
 ///
 /// The change is in the scene already when this returns, so the result
-/// goes to [`History::kept`], not to [`History::run`].
+/// goes to [`History::kept`](super::History::kept), not to
+/// [`History::run`](super::History::run).
 pub fn reshape(
     scene: &mut Scene,
     what: Deed,
