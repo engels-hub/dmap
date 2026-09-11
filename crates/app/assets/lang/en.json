@@ -113,6 +113,7 @@
   "ruler.manhattan": "Manhattan",
   "ruler.fifth": "D&D 5e",
   "ruler.pathfinder": "Pathfinder",
+  "ruler.hexes": "Hexes",
   "ruler.span": "{length} long, {width} wide",
   "ruler.cells": "{cells} cells",
   "ruler.length": "{cells} cells, {feet} ft",

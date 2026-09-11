@@ -113,6 +113,7 @@
   "ruler.manhattan": "Манхэттен",
   "ruler.fifth": "D&D 5e",
   "ruler.pathfinder": "Pathfinder",
+  "ruler.hexes": "Гексы",
   "ruler.span": "длина {length}, ширина {width}",
   "ruler.cells": "{cells} кл.",
   "ruler.length": "{cells} кл., {feet} фут.",

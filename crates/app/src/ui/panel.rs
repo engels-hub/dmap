@@ -643,14 +643,16 @@ fn draw_properties(ui: &mut egui::Ui, settings: &mut Settings, tokens: Tokens) {
     widget::color_swatch(ui, &mut settings.ink_color);
     if settings.ink_nib == Nib::Ruler {
         widget::row_label(ui, text::ruler_rule());
-        let field = widget::select_field(ui, settings.ink_rule.name(), ui.available_width());
+        let cells = settings.cells();
+        let held = settings.ink_rule;
+        let field = widget::select_field(ui, held.name_on(cells), ui.available_width());
         egui::Popup::menu(&field)
             .gap(-1.0)
             .width(ui.available_width())
             .show(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                for rule in Rule::all() {
-                    if widget::select_row(ui, rule.name(), rule == settings.ink_rule).clicked() {
+                for rule in Rule::all_on(cells, held) {
+                    if widget::select_row(ui, rule.name_on(cells), rule == held).clicked() {
                         settings.ink_rule = rule;
                     }
                 }
@@ -777,14 +779,15 @@ fn stroke_properties(
     changed |= reach_row(ui, &mark, &mut after);
     if mark.ink == Ink::Measure {
         widget::row_label(ui, text::ruler_rule());
-        let field = widget::select_field(ui, mark.rule.name(), ui.available_width());
+        let cells = frame.settings.cells();
+        let field = widget::select_field(ui, mark.rule.name_on(cells), ui.available_width());
         egui::Popup::menu(&field)
             .gap(-1.0)
             .width(ui.available_width())
             .show(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                for rule in Rule::all() {
-                    if widget::select_row(ui, rule.name(), rule == mark.rule).clicked() {
+                for rule in Rule::all_on(cells, mark.rule) {
+                    if widget::select_row(ui, rule.name_on(cells), rule == mark.rule).clicked() {
                         after.rule = rule;
                         changed = true;
                     }

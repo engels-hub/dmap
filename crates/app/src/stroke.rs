@@ -184,6 +184,36 @@ impl Rule {
     pub fn all() -> [Self; 4] {
         [Self::Euclid, Self::Fifth, Self::Pathfinder, Self::Manhattan]
     }
+
+    /// What the Draw panel calls this rule on this grid.
+    ///
+    /// A hex grid has no diagonal, so every rule that walks it gives one
+    /// count. The three read as one name there. Issue #15.
+    pub fn name_on(self, cells: Cells) -> &'static str {
+        if cells.kind.is_hex() && self != Self::Euclid {
+            return crate::text::ruler_hexes();
+        }
+        self.name()
+    }
+
+    /// The rules the DM may pick on this grid.
+    ///
+    /// A hex grid offers the straight line and the walk, because the three
+    /// rules that walk it agree. `held` is the rule the DM holds now, so a
+    /// grid of squares later finds it where the DM left it. D&D 5e stands
+    /// for the walk when the DM holds the straight line, because a table
+    /// that counts hexes most often counts them that way.
+    pub fn all_on(cells: Cells, held: Self) -> Vec<Self> {
+        if !cells.kind.is_hex() {
+            return Self::all().to_vec();
+        }
+        let walks = if held == Self::Euclid {
+            Self::Fifth
+        } else {
+            held
+        };
+        vec![Self::Euclid, walks]
+    }
 }
 
 /// One thing the DM drew, in inches.
@@ -629,6 +659,38 @@ mod tests {
         };
         assert!((Rule::Euclid.cells(two, (0.0, 0.0), (6.0, 8.0)) - 5.0).abs() < 1e-9);
         assert!((Rule::Manhattan.cells(two, (0.0, 0.0), (6.0, 8.0)) - 7.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_hex_grid_offers_the_line_and_the_walk() {
+        // The three rules that walk a hex grid agree, so the DM picks
+        // between two. Issue #15.
+        let offered = Rule::all_on(hexes(), Rule::Pathfinder);
+        assert_eq!(offered, vec![Rule::Euclid, Rule::Pathfinder]);
+        // The rule the DM holds stands for the walk, so a grid of squares
+        // later finds Pathfinder where they left it.
+        assert_eq!(
+            Rule::Pathfinder.name_on(hexes()),
+            Rule::Fifth.name_on(hexes())
+        );
+        assert_eq!(Rule::Euclid.name_on(hexes()), Rule::Euclid.name());
+    }
+
+    #[test]
+    fn a_dm_on_the_straight_line_walks_by_the_common_rule() {
+        // Nothing remembers a walk, so D&D 5e stands in.
+        assert_eq!(
+            Rule::all_on(hexes(), Rule::Euclid),
+            vec![Rule::Euclid, Rule::Fifth]
+        );
+    }
+
+    #[test]
+    fn a_grid_of_squares_offers_every_rule() {
+        assert_eq!(Rule::all_on(inch(), Rule::Euclid), Rule::all().to_vec());
+        for rule in Rule::all() {
+            assert_eq!(rule.name_on(inch()), rule.name());
+        }
     }
 
     #[test]
