@@ -795,6 +795,11 @@ fn stroke_properties(
                 }
             });
     }
+    // The panel of a drawing takes Delete as the panel of a map does, so
+    // a DM who picked one thing has one place to put it. Issue #71.
+    if widget::button(ui, text::panel_delete(), Some(Icon::Trash), Height::Row).clicked() {
+        return super::canvas::delete_held(select, frame);
+    }
     if !changed {
         return false;
     }
@@ -878,6 +883,9 @@ fn map_properties(
     tokens: Tokens,
 ) -> bool {
     let mut edited = false;
+    // Whether the DM asked for the map to go. The delete runs after the
+    // rows, so nothing reads a map that has left the scene.
+    let mut gone = false;
     // DESIGN.md 8.1 gives the file name a row of its own. The title of the
     // panel carries it now, so the row would say it twice.
     widget::row_label(ui, text::panel_map_group());
@@ -943,6 +951,10 @@ fn map_properties(
             after.flip_x = !map.flip_x;
             changed = true;
         }
+        // DESIGN.md 8.1 puts Delete in this footer. Issue #71.
+        if widget::button(ui, text::panel_delete(), Some(Icon::Trash), Height::Row).clicked() {
+            gone = true;
+        }
     });
     widget::helper(ui, text::panel_map_flip_helper());
     let _ = tokens;
@@ -964,6 +976,9 @@ fn map_properties(
             },
         );
         edited = true;
+    }
+    if gone {
+        edited |= super::canvas::delete_held(select, frame);
     }
     edited
 }

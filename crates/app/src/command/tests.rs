@@ -6,10 +6,11 @@
 // Rust guideline compliant 2026-02-21
 
 use super::{
-    Command as _, Deed, Grow, History, Restructure, SetAssets, SetName, SetShown, SetTvBox, Turn,
-    reshape,
+    Both, Command as _, Deed, Grow, History, Restructure, SetAssets, SetName, SetShown, SetStrokes,
+    SetTvBox, Turn, reshape,
 };
 use crate::scene::{Asset, Group, Node, ROOT_ID, Scene, Shown};
+use crate::stroke::{Ink, Rule};
 
 fn asset(id: u64, center: (f64, f64)) -> Asset {
     Asset {
@@ -361,6 +362,129 @@ fn a_stack_that_wrote_itself_asks_for_no_second_write() {
     // A stack that came from a file is the file.
     let back = History::from_json(&history.to_json()).unwrap();
     assert!(!back.unwritten());
+}
+
+/// A drawing of two points, for the changes a drag makes. Issue #69.
+fn stroke(id: u64, points: &[(f64, f64)]) -> crate::stroke::Stroke {
+    crate::stroke::Stroke {
+        id,
+        shown: Shown::default(),
+        ink: Ink::Line,
+        points: points.to_vec(),
+        color: [0, 0, 0, 255],
+        width: 0.1,
+        span: 0.0,
+        angle: 0.0,
+        rule: Rule::default(),
+    }
+}
+
+#[test]
+fn a_drag_of_a_map_and_a_drawing_is_one_step() {
+    let mut scene = scene();
+    let mark = stroke(5, &[(0.0, 0.0), (1.0, 0.0)]);
+    scene.root.children.push(Node::Stroke(mark.clone()));
+    let was = crate::scene::find(&scene, 1)
+        .unwrap()
+        .asset()
+        .unwrap()
+        .clone();
+    let mut moved = was.clone();
+    moved.center = (2.0, 2.0);
+    let mut history = History::default();
+    history.run(
+        &mut scene,
+        Both::of(
+            SetAssets {
+                before: vec![was.clone()],
+                after: vec![moved],
+            },
+            SetStrokes {
+                before: vec![mark.clone()],
+                after: vec![mark.moved((2.0, 2.0))],
+            },
+        ),
+    );
+    assert_eq!(
+        crate::scene::find(&scene, 1)
+            .unwrap()
+            .asset()
+            .unwrap()
+            .center,
+        (2.0, 2.0)
+    );
+    assert_eq!(
+        crate::scene::find(&scene, 5)
+            .unwrap()
+            .stroke()
+            .unwrap()
+            .points,
+        vec![(2.0, 2.0), (3.0, 2.0)]
+    );
+    // One gesture is one step, so one undo puts both back.
+    assert_eq!(history.steps().len(), 1);
+    assert!(history.undo(&mut scene));
+    assert_eq!(
+        crate::scene::find(&scene, 1)
+            .unwrap()
+            .asset()
+            .unwrap()
+            .center,
+        was.center
+    );
+    assert_eq!(
+        crate::scene::find(&scene, 5)
+            .unwrap()
+            .stroke()
+            .unwrap()
+            .points,
+        mark.points
+    );
+}
+
+#[test]
+fn the_list_says_what_a_drag_did_to_a_drawing() {
+    let mark = stroke(5, &[(0.0, 0.0), (2.0, 0.0)]);
+    // A move carries the middle.
+    let moved = SetStrokes {
+        before: vec![mark.clone()],
+        after: vec![mark.moved((3.0, 0.0))],
+    };
+    assert_eq!(moved.note().what, crate::text::history_deed_move());
+    // A turn of a box goes into the angle.
+    let mut turned = mark.clone();
+    turned.ink = Ink::Rect;
+    let spun = SetStrokes {
+        before: vec![turned.clone()],
+        after: vec![turned.turned((1.0, 0.0), std::f64::consts::FRAC_PI_2)],
+    };
+    assert_eq!(spun.note().what, crate::text::history_deed_turn());
+    // A growth takes the width with it, so the list says size.
+    let grown = SetStrokes {
+        before: vec![mark.clone()],
+        after: vec![mark.scaled((0.0, 0.0), 2.0)],
+    };
+    assert_eq!(grown.note().what, crate::text::history_deed_size());
+}
+
+#[test]
+fn a_delete_takes_a_group_and_brings_it_back_whole() {
+    let mut scene = scene();
+    let mut history = History::default();
+    let change = reshape(&mut scene, Deed::Delete, "Group 7".to_owned(), |scene| {
+        crate::scene::take_node(scene, 7);
+    })
+    .expect("the group left the tree");
+    history.kept(change);
+    assert!(crate::scene::find(&scene, 7).is_none());
+    // The map inside the group went with it.
+    assert!(crate::scene::find(&scene, 3).is_none());
+    assert!(history.undo(&mut scene));
+    assert!(crate::scene::find(&scene, 7).is_some());
+    assert!(crate::scene::find(&scene, 3).is_some());
+    // And it came back where it sat: after the two maps of the root.
+    assert_eq!(scene.root.children.len(), 3);
+    assert_eq!(scene.root.children[2].id(), 7);
 }
 
 #[test]

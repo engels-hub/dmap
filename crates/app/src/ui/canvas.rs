@@ -7,8 +7,9 @@
 // Rust guideline compliant 2026-02-21
 
 use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
-use crate::command::{Deed, Grow, SetAssets, SetTvBox, Turn, reshape};
+use crate::command::{Both, Change, Deed, Grow, SetAssets, SetStrokes, SetTvBox, Turn, reshape};
 use crate::scene::{Asset, Node, NodeId, Placed, Scene};
+use crate::stroke::Stroke;
 use crate::text;
 use crate::theme::{self, Tokens};
 use crate::transform::{
@@ -475,16 +476,19 @@ fn press(
     frame.history.settle();
     if let (Some(handle), Some(corners)) = (hit_handle, held_corners(select, frame)) {
         let starts = crate::scene::placed(frame.scene, &select.chosen);
+        let ink = held_ink(frame.scene, &select.chosen);
         let pivot = pivot_of(&corners);
         select.drag = Some(if handle == 4 {
             Drag::Rotate {
                 starts,
+                ink,
                 pivot,
                 start_cursor: cursor,
             }
         } else {
             Drag::Scale {
                 starts,
+                ink,
                 pivot,
                 start_cursor: cursor,
             }
@@ -524,6 +528,7 @@ fn press(
     }
     select.drag = Some(Drag::Move {
         was: standing(frame.scene, &select.chosen),
+        ink: held_ink(frame.scene, &select.chosen),
         start_cursor: cursor,
     });
 }
@@ -551,6 +556,53 @@ fn standing(scene: &Scene, chosen: &[NodeId]) -> Vec<Asset> {
         .iter()
         .flat_map(|id| crate::scene::assets_of(scene, *id))
         .filter_map(|id| crate::scene::find(scene, id).and_then(Node::asset).cloned())
+        .collect()
+}
+
+/// Takes every node the DM holds out of the scene. Issue #71.
+///
+/// A group goes with everything under it, and the image files stay in the
+/// scene folder: an undo has to bring the map back, and two assets may
+/// name one file. The DM holds nothing afterward, so the panel of what
+/// went closes with it.
+///
+/// Returns `true` when the scene changed.
+pub fn delete_held(select: &mut Select, frame: &mut Frame<'_>) -> bool {
+    let held = crate::scene::normalize(frame.scene, &select.chosen);
+    let subject = match held.as_slice() {
+        [] => return false,
+        [one] => crate::scene::name_of(frame.scene, *one),
+        many => text::history_maps_many(many.len()),
+    };
+    let change = reshape(frame.scene, Deed::Delete, subject, |scene| {
+        for id in &held {
+            crate::scene::take_node(scene, *id);
+        }
+    });
+    let Some(change) = change else {
+        return false;
+    };
+    frame.history.kept(change);
+    select.chosen.clear();
+    select.opened = None;
+    select.opened_ink = None;
+    select.popup = false;
+    true
+}
+
+/// Every drawing under a selection, as each one stands now.
+///
+/// A drag rewrites a stroke from here on every frame, so the snapshot is
+/// the whole stroke and not a place. Issue #69.
+fn held_ink(scene: &Scene, chosen: &[NodeId]) -> Vec<Stroke> {
+    crate::scene::normalize(scene, chosen)
+        .iter()
+        .flat_map(|id| crate::scene::strokes_of(scene, *id))
+        .filter_map(|id| {
+            crate::scene::find(scene, id)
+                .and_then(Node::stroke)
+                .cloned()
+        })
         .collect()
 }
 
@@ -583,6 +635,12 @@ fn keys(ui: &egui::Ui, select: &mut Select, frame: &mut Frame<'_>) -> bool {
             else {
                 continue;
             };
+            // The selection goes, so nothing is left for a later key of
+            // the same batch to act on.
+            if matches!(key, egui::Key::Delete | egui::Key::Backspace) {
+                edited |= delete_held(select, frame);
+                break;
+            }
             // Order lives inside one group, so these two keys move nodes
             // past their brothers and sisters and never leave the parent.
             if matches!(key, egui::Key::PageUp | egui::Key::PageDown) {
@@ -913,16 +971,27 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
     match drag {
         // The band picks nothing until the DM lets go of it.
         Drag::Band { .. } => false,
-        Drag::Move { was, start_cursor } => {
+        Drag::Move {
+            was,
+            ink,
+            start_cursor,
+        } => {
             // A press without motion picks and nothing more: a snap would
             // shift a map that the DM placed off the grid.
-            if cursor == *start_cursor || was.is_empty() {
+            if cursor == *start_cursor || (was.is_empty() && ink.is_empty()) {
                 return false;
             }
             let step = (cursor.0 - start_cursor.0, cursor.1 - start_cursor.1);
-            // One asset snaps to its own grid. A selection moves as one
-            // piece, so the first asset snaps and the rest follow it.
-            let lead = snap.then(|| snap_step(frame, &was[0], step)).flatten();
+            // What the DM took hold of first snaps to the grid, and the
+            // rest of the selection follows it, so the set holds its
+            // shape. A map snaps by its corner and a drawing by the point
+            // it was drawn from.
+            let lead = snap
+                .then(|| match was.first() {
+                    Some(asset) => snap_step(frame, asset, step),
+                    None => Some(snap_ink_step(frame, step)),
+                })
+                .flatten();
             let step = lead.unwrap_or(step);
             let after: Vec<Asset> = was
                 .iter()
@@ -936,29 +1005,33 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
                     asset
                 })
                 .collect();
-            let before = was.clone();
-            frame.history.hold(frame.scene, SetAssets { before, after });
-            true
+            let maps = (!was.is_empty()).then(|| SetAssets {
+                before: was.clone(),
+                after,
+            });
+            let drawn = ink_change(ink, |stroke| stroke.moved(step));
+            hold_drag(frame, maps.map(Change::from), drawn)
         }
         Drag::Scale {
             starts,
+            ink,
             pivot,
             start_cursor,
         } => {
             let factor = scale_from_drag(*pivot, *start_cursor, cursor);
-            frame.history.hold(
-                frame.scene,
-                Grow {
-                    subject: held_names(frame.scene, starts),
-                    starts: starts.clone(),
-                    pivot: *pivot,
-                    factor,
-                },
-            );
-            true
+            let maps = (!starts.is_empty()).then(|| Grow {
+                subject: held_names(frame.scene, starts, ink),
+                starts: starts.clone(),
+                pivot: *pivot,
+                factor,
+            });
+            let pivot = *pivot;
+            let drawn = ink_change(ink, |stroke| stroke.scaled(pivot, factor));
+            hold_drag(frame, maps.map(Change::from), drawn)
         }
         Drag::Rotate {
             starts,
+            ink,
             pivot,
             start_cursor,
         } => {
@@ -968,27 +1041,66 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             // asset in it takes the same angle.
             let base = starts.first().map_or(0.0, |first| first.rotation);
             let turned = rotation_from_drag(base, *pivot, *start_cursor, cursor, snap);
-            frame.history.hold(
-                frame.scene,
-                Turn {
-                    subject: held_names(frame.scene, starts),
-                    starts: starts.clone(),
-                    pivot: *pivot,
-                    angle: turned - base,
-                },
-            );
-            true
+            let angle = turned - base;
+            let maps = (!starts.is_empty()).then(|| Turn {
+                subject: held_names(frame.scene, starts, ink),
+                starts: starts.clone(),
+                pivot: *pivot,
+                angle,
+            });
+            let pivot = *pivot;
+            let drawn = ink_change(ink, |stroke| stroke.turned(pivot, angle));
+            hold_drag(frame, maps.map(Change::from), drawn)
         }
     }
 }
 
-/// What the history calls the assets of a drag: the file, or a count.
-fn held_names(scene: &Scene, starts: &[Placed]) -> String {
-    match starts {
-        [] => String::new(),
-        [one] => crate::scene::name_of(scene, one.id),
-        many => text::history_maps_many(many.len()),
+/// The change a drag makes to the drawings it holds, if it holds any.
+fn ink_change(ink: &[Stroke], place: impl Fn(&Stroke) -> Stroke) -> Option<Change> {
+    if ink.is_empty() {
+        return None;
     }
+    Some(
+        SetStrokes {
+            before: ink.to_vec(),
+            after: ink.iter().map(place).collect(),
+        }
+        .into(),
+    )
+}
+
+/// Holds the change of one frame of a drag. Returns `true` when it wrote.
+///
+/// A drag that holds maps and drawings writes both, and the DM made one
+/// gesture, so the two go down as one step. Issue #69.
+fn hold_drag(frame: &mut Frame<'_>, maps: Option<Change>, ink: Option<Change>) -> bool {
+    let change = match (maps, ink) {
+        (Some(maps), Some(ink)) => Both::of(maps, ink).into(),
+        (Some(alone), None) | (None, Some(alone)) => alone,
+        (None, None) => return false,
+    };
+    frame.history.hold(frame.scene, change);
+    true
+}
+
+/// What the history calls what a drag holds: the file, or a count.
+fn held_names(scene: &Scene, starts: &[Placed], ink: &[Stroke]) -> String {
+    match (starts, ink) {
+        ([one], []) => crate::scene::name_of(scene, one.id),
+        ([], [one]) => one.ink.name().to_owned(),
+        (maps, ink) => text::history_maps_many(maps.len() + ink.len()),
+    }
+}
+
+/// The step a move takes when the DM holds drawings and no map.
+///
+/// The step itself snaps, so a drawing keeps the place it holds on its
+/// cell: a shape that started on a crossing lands on one, and a free line
+/// from the pen keeps the shape it had against the grid. Every step
+/// between two cell middles is a step the grid allows, on squares and on
+/// hexes alike. Issue #69.
+fn snap_ink_step(frame: &Frame<'_>, step: (f64, f64)) -> (f64, f64) {
+    frame.settings.cells().snap(step)
 }
 
 /// The step a move takes once the leading asset snaps to its own grid.
