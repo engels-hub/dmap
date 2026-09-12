@@ -2,6 +2,8 @@
 
 // Rust guideline compliant 2026-02-21
 
+use crate::grid::Cells;
+
 /// Rotation handle snaps to multiples of this angle: 15 degrees.
 pub const ROTATION_STEP: f64 = std::f64::consts::PI / 12.0;
 
@@ -30,25 +32,30 @@ pub fn hit_test(point: (f64, f64), corners: &[(f64, f64); 4]) -> bool {
 /// on whole inches. A map the DM placed by hand keeps the spot it got, and
 /// steps by whole inches from there. See `corner_offset`.
 pub fn snap_corner(
+    cells: Cells,
     center: (f64, f64),
     corners: &[(f64, f64); 4],
     offset: (f64, f64),
 ) -> (f64, f64) {
     let (min_x, min_y) = top_left(corners);
-    let on_grid = |value: f64, offset: f64| (value - offset).round() + offset;
+    // The offset says which lattice this map steps on, so the corner
+    // comes back to the canvas grid, snaps there, and goes out again.
+    let on = cells.snap((min_x - offset.0, min_y - offset.1));
     (
-        center.0 + (on_grid(min_x, offset.0) - min_x),
-        center.1 + (on_grid(min_y, offset.1) - min_y),
+        center.0 + (on.0 + offset.0 - min_x),
+        center.1 + (on.1 + offset.1 - min_y),
     )
 }
 
 /// Where the grid of a map that the DM placed by hand starts.
 ///
-/// This is how far the map's top-left extent sits past a whole inch, from
-/// zero up to but not including one. `snap_corner` takes it back.
-pub fn corner_offset(corners: &[(f64, f64); 4]) -> (f64, f64) {
+/// This is how far the map's top-left extent sits past the nearest point
+/// of the canvas grid. `snap_corner` takes it back, so the map steps by
+/// whole cells from the spot the DM gave it. Issue #32.
+pub fn corner_offset(cells: Cells, corners: &[(f64, f64); 4]) -> (f64, f64) {
     let (min_x, min_y) = top_left(corners);
-    (min_x.rem_euclid(1.0), min_y.rem_euclid(1.0))
+    let on = cells.snap((min_x, min_y));
+    (min_x - on.0, min_y - on.1)
 }
 
 /// The top-left extent of the map's bounding box, in world inches.
@@ -182,6 +189,12 @@ mod tests {
         MAX_GRID_PX, ROTATION_STEP, corner_offset, edge_midpoint, grid_px_from_measure, hit_test,
         pick_handle, rotation_from_drag, rotation_handle, scale_from_drag, snap_corner, step_scale,
     };
+    use crate::grid::Cells;
+
+    /// The square inch grid the program draws when the DM changes nothing.
+    fn inch() -> Cells {
+        Cells::default()
+    }
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
@@ -209,10 +222,16 @@ mod tests {
     fn snapping_moves_the_top_left_corner_onto_whole_inches() {
         // A 6 by 4 map centered at (5.3, 6.6): its corner (2.3, 4.6) moves to (2, 5).
         let corners = [(2.3, 4.6), (8.3, 4.6), (8.3, 8.6), (2.3, 8.6)];
-        assert_eq!(snap_corner((5.3, 6.6), &corners, (0.0, 0.0)), (5.0, 7.0));
+        assert_eq!(
+            snap_corner(inch(), (5.3, 6.6), &corners, (0.0, 0.0)),
+            (5.0, 7.0)
+        );
         // Already on the grid: no change.
         let corners = [(2.0, 5.0), (8.0, 5.0), (8.0, 9.0), (2.0, 9.0)];
-        assert_eq!(snap_corner((5.0, 7.0), &corners, (0.0, 0.0)), (5.0, 7.0));
+        assert_eq!(
+            snap_corner(inch(), (5.0, 7.0), &corners, (0.0, 0.0)),
+            (5.0, 7.0)
+        );
     }
 
     #[test]
@@ -220,7 +239,10 @@ mod tests {
         // The same 6 by 4 map a quarter turn later: 4 wide, 6 tall.
         // Its top-left extent is at (3.3, 3.6) and moves to (3, 4).
         let corners = [(7.3, 3.6), (7.3, 9.6), (3.3, 9.6), (3.3, 3.6)];
-        assert_eq!(snap_corner((5.3, 6.6), &corners, (0.0, 0.0)), (5.0, 7.0));
+        assert_eq!(
+            snap_corner(inch(), (5.3, 6.6), &corners, (0.0, 0.0)),
+            (5.0, 7.0)
+        );
     }
 
     #[test]
@@ -353,29 +375,71 @@ mod tests {
         // A map placed by hand at a quarter inch past the grid keeps that
         // quarter inch: its steps run through where the DM left it.
         let corners = [(2.3, 4.6), (8.3, 4.6), (8.3, 8.6), (2.3, 8.6)];
-        assert_eq!(snap_corner((5.3, 6.6), &corners, (0.25, 0.5)), (5.25, 6.5));
+        assert_eq!(
+            snap_corner(inch(), (5.3, 6.6), &corners, (0.25, 0.5)),
+            (5.25, 6.5)
+        );
     }
 
     #[test]
     fn a_map_already_on_its_own_grid_does_not_move() {
         // The corner at (2.25, 4.5) is one whole inch from the offset itself.
         let corners = [(2.25, 4.5), (8.25, 4.5), (8.25, 8.5), (2.25, 8.5)];
-        assert_eq!(snap_corner((5.25, 6.5), &corners, (0.25, 0.5)), (5.25, 6.5));
+        assert_eq!(
+            snap_corner(inch(), (5.25, 6.5), &corners, (0.25, 0.5)),
+            (5.25, 6.5)
+        );
     }
 
     #[test]
     fn a_free_move_leaves_the_offset_it_ended_on() {
+        // Issue #32: the spot a free move gave the map is the spot the
+        // next snap holds it to, whatever fraction it landed on.
         let corners = [(2.3, 4.6), (8.3, 4.6), (8.3, 8.6), (2.3, 8.6)];
-        let (x, y) = corner_offset(&corners);
-        assert!(close(x, 0.3) && close(y, 0.6));
+        let offset = corner_offset(inch(), &corners);
+        let center = (5.3, 6.6);
+        assert_eq!(snap_corner(inch(), center, &corners, offset), center);
     }
 
     #[test]
-    fn the_offset_of_a_map_left_of_the_origin_is_still_a_fraction() {
-        let corners = [(-6.075, -2.5), (0.0, -2.5), (0.0, 1.0), (-6.075, 1.0)];
-        let offset = corner_offset(&corners);
-        assert!(offset.0 >= 0.0 && offset.0 < 1.0);
-        // The map sits on the grid that offset makes, so it does not move.
-        assert_eq!(snap_corner((0.0, 0.0), &corners, offset), (0.0, 0.0));
+    fn an_offset_never_reaches_half_a_cell() {
+        // The offset is what the nearest point of the grid left over, so
+        // it stays inside half a cell on every side of the origin.
+        for corners in [
+            [(2.3, 4.6), (8.3, 4.6), (8.3, 8.6), (2.3, 8.6)],
+            [(-6.075, -2.5), (0.0, -2.5), (0.0, 1.0), (-6.075, 1.0)],
+        ] {
+            let offset = corner_offset(inch(), &corners);
+            assert!(offset.0.abs() <= 0.5 && offset.1.abs() <= 0.5, "{offset:?}");
+            // The map sits on the grid that offset makes, so it stays.
+            assert_eq!(
+                snap_corner(inch(), (0.0, 0.0), &corners, offset),
+                (0.0, 0.0)
+            );
+        }
+    }
+
+    #[test]
+    fn a_map_on_a_hex_grid_steps_from_where_the_dm_left_it() {
+        // Issue #15: a hex grid holds the same promise as a square one.
+        let cells = Cells {
+            kind: crate::grid::Kind::HexPointyTop,
+            cell: 1.0,
+        };
+        let corners = [(2.3, 4.6), (8.3, 4.6), (8.3, 8.6), (2.3, 8.6)];
+        let offset = corner_offset(cells, &corners);
+        let center = (5.3, 6.6);
+        assert_eq!(snap_corner(cells, center, &corners, offset), center);
+    }
+
+    #[test]
+    fn no_grid_holds_a_map_wherever_the_dm_drops_it() {
+        let cells = Cells {
+            kind: crate::grid::Kind::None,
+            cell: 1.0,
+        };
+        let corners = [(2.3, 4.6), (8.3, 4.6), (8.3, 8.6), (2.3, 8.6)];
+        let center = (5.3, 6.6);
+        assert_eq!(snap_corner(cells, center, &corners, (0.0, 0.0)), center);
     }
 }

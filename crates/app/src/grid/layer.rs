@@ -9,6 +9,7 @@
 
 use egui_wgpu::wgpu;
 
+use super::{Cells, DEFAULT_CELL, Kind};
 use crate::camera::Camera;
 use crate::gpu::Gpu;
 
@@ -22,11 +23,14 @@ struct Grid {
     viewport: vec2<f32>,
     center: vec2<f32>,
     pixels_per_inch: f32,
+    // Inches between two lines. A hex measures this flat to flat.
     step: f32,
     width: f32,
     // Above zero the line takes its color from the map below it.
     automatic: f32,
     color: vec4<f32>,
+    // 0 squares, 1 hexes with a corner up, 2 hexes with a flat edge up.
+    kind: f32,
 };
 
 @group(0) @binding(0) var<uniform> grid: Grid;
@@ -57,6 +61,65 @@ fn against(below: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(value, value, value);
 }
 
+const SQRT3: f32 = 1.7320508;
+
+// The middle of the hex that holds `at`, in inches.
+//
+// The same axial coordinates and the same cube rounding as `center_of` in
+// the module above. The shader and the snap must agree, or a stroke would
+// land off the hex the DM aimed at.
+fn hex_center(at: vec2<f32>, size: f32, pointy: bool) -> vec2<f32> {
+    let n = at / size;
+    var q: f32;
+    var r: f32;
+    if pointy {
+        q = SQRT3 / 3.0 * n.x - n.y / 3.0;
+        r = 2.0 / 3.0 * n.y;
+    } else {
+        q = 2.0 / 3.0 * n.x;
+        r = -n.x / 3.0 + SQRT3 / 3.0 * n.y;
+    }
+    let s = -q - r;
+    var whole_q = round(q);
+    var whole_r = round(r);
+    let whole_s = round(s);
+    let off_q = abs(whole_q - q);
+    let off_r = abs(whole_r - r);
+    let off_s = abs(whole_s - s);
+    if off_q > off_r && off_q > off_s {
+        whole_q = -whole_r - whole_s;
+    } else if off_r > off_s {
+        whole_r = -whole_q - whole_s;
+    }
+    if pointy {
+        return vec2<f32>(size * SQRT3 * (whole_q + whole_r / 2.0), size * 1.5 * whole_r);
+    }
+    return vec2<f32>(size * 1.5 * whole_q, size * SQRT3 * (whole_q / 2.0 + whole_r));
+}
+
+// How far `at` sits from the nearest edge of its own hex, in inches.
+//
+// A hex is three pairs of parallel edges. The point stands as far from the
+// boundary as the inradius, less the furthest it reaches along any of the
+// three normals. The inradius is half the flat to flat width.
+fn hex_gap(at: vec2<f32>, step: f32, pointy: bool) -> f32 {
+    let center = hex_center(at, step / SQRT3, pointy);
+    let p = at - center;
+    var reach: f32;
+    if pointy {
+        reach = max(
+            abs(p.x),
+            max(abs(dot(p, vec2<f32>(0.5, SQRT3 / 2.0))), abs(dot(p, vec2<f32>(-0.5, SQRT3 / 2.0)))),
+        );
+    } else {
+        reach = max(
+            abs(p.y),
+            max(abs(dot(p, vec2<f32>(SQRT3 / 2.0, 0.5))), abs(dot(p, vec2<f32>(-SQRT3 / 2.0, 0.5)))),
+        );
+    }
+    return step * 0.5 - reach;
+}
+
 @vertex
 fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
     var corners = array<vec2<f32>, 3>(
@@ -77,13 +140,19 @@ fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         return vec4<f32>(below, 1.0);
     }
     let world = grid.center + (at.xy - grid.viewport * 0.5) / grid.pixels_per_inch;
-    let cell = world / grid.step;
-    // How far this pixel sits from the nearest line, on each axis.
-    let away = abs(fract(cell + vec2<f32>(0.5, 0.5)) - vec2<f32>(0.5, 0.5))
-        * grid.step * grid.pixels_per_inch;
+    // How far this pixel sits from the nearest line, in pixels.
+    var away: f32;
+    if grid.kind < 0.5 {
+        let cell = world / grid.step;
+        let each = abs(fract(cell + vec2<f32>(0.5, 0.5)) - vec2<f32>(0.5, 0.5))
+            * grid.step * grid.pixels_per_inch;
+        away = min(each.x, each.y);
+    } else {
+        away = hex_gap(world, grid.step, grid.kind < 1.5) * grid.pixels_per_inch;
+    }
     let half = grid.width * 0.5;
     // Half a pixel of feather, or a thin line flickers as the camera moves.
-    let solid = 1.0 - smoothstep(half - 0.5, half + 0.5, min(away.x, away.y));
+    let solid = 1.0 - smoothstep(half - 0.5, half + 0.5, away);
     if solid <= 0.0 {
         return vec4<f32>(below, 1.0);
     }
@@ -99,15 +168,16 @@ fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
 ///
 /// Under this the grid doubles its step, so a camera that shows the whole
 /// canvas gets lines that stay apart instead of a solid wash.
-const MIN_CELL: f64 = 24.0;
+const MIN_DRAWN_CELL: f64 = 24.0;
 
 /// How many floats the shader's `Grid` block holds.
 ///
 /// Two for the viewport, two for the center, then the four scalars, then
-/// the four of the color. The last of the four scalars says how the line
-/// takes its color, and it holds the color on the 16 byte boundary a
-/// uniform block wants.
-const FIELDS: usize = 12;
+/// the four of the color, then the kind. The last of the four scalars
+/// says how the line takes its color, and it holds the color on the 16
+/// byte boundary a uniform block wants. Three floats of nothing follow
+/// the kind, because such a block takes a size of sixteen bytes over.
+const FIELDS: usize = 16;
 
 /// How a grid line draws.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -234,6 +304,10 @@ impl GridLayer {
     /// `beneath` is the view of [`crate::gpu::Beneath`], which holds what
     /// the pass draws under the lines. The pass writes the whole surface,
     /// so it must run before the ink and the panels.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one pass of the grid: where it draws, what shape it draws, and how"
+    )]
     pub fn draw(
         &self,
         gpu: &Gpu,
@@ -241,6 +315,7 @@ impl GridLayer {
         beneath: &wgpu::TextureView,
         camera: &Camera,
         viewport: (u32, u32),
+        cells: Cells,
         line: Line,
     ) {
         // A camera with no size gives a step of nothing and a wash of
@@ -248,12 +323,22 @@ impl GridLayer {
         // with a width of zero and draws them alone.
         let usable = camera.pixels_per_inch.is_finite() && camera.pixels_per_inch > 0.0;
         let pixels_per_inch = if usable { camera.pixels_per_inch } else { 1.0 };
-        let step = step_for(pixels_per_inch);
+        // Two lines of a square grid that lie four inches apart are two
+        // real lines, so a square grid doubles its step and keeps every
+        // line true. A hex grid cannot: a hex twice the size is no hex of
+        // this table. So a hex grid holds the cell the DM chose and fades
+        // out instead. Issue #15.
+        // `width` is the cell the DM chose, less any value that would
+        // break the math. A raw `cell` of infinity here reaches the shader
+        // and paints the whole surface NaN, maps and all.
+        let cell = cells.width();
+        let wide = step_for(cell, pixels_per_inch);
+        let step = if cells.kind.is_hex() { cell } else { wide };
         // A line holds its share of the cell and fades as the DM zooms
         // out, so a grid that says nothing more is not a grid that covers
         // everything. DESIGN.md 5.1.
-        let alpha = line.color[3] * faded(step);
-        let width = if usable && alpha > 0.0 {
+        let alpha = line.color[3] * faded(wide);
+        let width = if usable && alpha > 0.0 && cells.kind.snaps() {
             thinned(line.width, (step * pixels_per_inch) as f32)
         } else {
             0.0
@@ -271,6 +356,16 @@ impl GridLayer {
             line.color[1],
             line.color[2],
             alpha,
+            match cells.kind {
+                Kind::HexPointyTop => 1.0,
+                Kind::HexFlatTop => 2.0,
+                Kind::Square | Kind::None => 0.0,
+            },
+            // The block takes a size of sixteen bytes over, so three
+            // floats of nothing close it.
+            0.0,
+            0.0,
+            0.0,
         ];
         let bytes: Vec<u8> = values
             .iter()
@@ -296,7 +391,7 @@ impl GridLayer {
 ///
 /// A tenth leaves nine tenths of the map to look at. Without this a wide
 /// line keeps its pixels as the DM zooms out, the cell narrows toward
-/// `MIN_CELL`, and the grid swallows the map it lies on.
+/// `MIN_DRAWN_CELL`, and the grid swallows the map it lies on.
 const MAX_SHARE: f32 = 0.1;
 
 /// The step where a grid starts to go away, in inches.
@@ -336,12 +431,16 @@ fn faded(step: f64) -> f32 {
 
 /// How many inches lie between two lines at this zoom.
 ///
-/// One inch is the cell of DESIGN.md 5.1. A camera far enough out would
-/// draw those lines closer than a pixel apart, so the step doubles until
-/// a cell is at least `MIN_CELL` wide.
-fn step_for(pixels_per_inch: f64) -> f64 {
-    let mut step = 1.0;
-    while step * pixels_per_inch < MIN_CELL {
+/// `cell` is the cell the DM chose, in inches. A camera far enough out
+/// would draw those lines closer than a pixel apart, so the step doubles
+/// until a cell is at least `MIN_DRAWN_CELL` wide.
+fn step_for(cell: f64, pixels_per_inch: f64) -> f64 {
+    // A cell of nothing would never reach the width and would spin here.
+    if !cell.is_finite() || cell <= 0.0 {
+        return DEFAULT_CELL;
+    }
+    let mut step = cell;
+    while step * pixels_per_inch < MIN_DRAWN_CELL {
         step *= 2.0;
     }
     step
@@ -349,7 +448,7 @@ fn step_for(pixels_per_inch: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{FADE_STEP, GONE_STEP, MIN_CELL, faded, step_for, thinned};
+    use super::{DEFAULT_CELL, FADE_STEP, GONE_STEP, MIN_DRAWN_CELL, faded, step_for, thinned};
 
     #[test]
     fn a_line_never_takes_more_than_a_tenth_of_a_cell() {
@@ -377,8 +476,8 @@ mod tests {
 
     #[test]
     fn a_close_camera_draws_one_line_for_each_inch() {
-        assert!((step_for(48.0) - 1.0).abs() < f64::EPSILON);
-        assert!((step_for(MIN_CELL) - 1.0).abs() < f64::EPSILON);
+        assert!((step_for(DEFAULT_CELL, 48.0) - 1.0).abs() < f64::EPSILON);
+        assert!((step_for(DEFAULT_CELL, MIN_DRAWN_CELL) - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -386,17 +485,38 @@ mod tests {
         // Every step is a whole doubling, so the lines that remain are the
         // lines that were there before.
         for zoom in [12.0, 6.0, 3.0, 0.5, 0.01] {
-            let step = step_for(zoom);
-            assert!(step * zoom >= MIN_CELL, "a cell at {zoom} is too narrow");
-            assert!(step.log2().fract().abs() < 1e-9, "{step} is not a doubling");
+            let step = step_for(DEFAULT_CELL, zoom);
+            assert!(
+                step * zoom >= MIN_DRAWN_CELL,
+                "a cell at {zoom} is too narrow"
+            );
+            let doublings = (step / DEFAULT_CELL).log2();
+            assert!(doublings.fract().abs() < 1e-9, "{step} is not a doubling");
         }
+    }
+
+    #[test]
+    fn a_wider_cell_starts_the_step_wider() {
+        // The DM who asks for two inch cells gets lines two inches apart,
+        // not one. Issue #15.
+        assert!((step_for(2.0, 48.0) - 2.0).abs() < f64::EPSILON);
+        assert!((step_for(0.5, 96.0) - 0.5).abs() < f64::EPSILON);
+        // A far camera doubles from the cell the DM chose.
+        assert!((step_for(2.0, 6.0) - 4.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_cell_of_nothing_never_spins() {
+        // A zero would never reach the width the loop waits for.
+        assert!((step_for(0.0, 48.0) - DEFAULT_CELL).abs() < f64::EPSILON);
+        assert!((step_for(f64::NAN, 48.0) - DEFAULT_CELL).abs() < f64::EPSILON);
     }
 
     #[test]
     fn the_step_never_grows_when_the_camera_comes_closer() {
         let mut last = f64::INFINITY;
         for zoom in [0.5, 1.0, 4.0, 16.0, 64.0, 256.0] {
-            let step = step_for(zoom);
+            let step = step_for(DEFAULT_CELL, zoom);
             assert!(step <= last, "the step grew at {zoom}");
             last = step;
         }

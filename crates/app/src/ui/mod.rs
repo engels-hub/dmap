@@ -234,10 +234,6 @@ const ZOOM_LABEL_SIZE: f32 = 14.0;
 /// Gap between the top edge of the box and its zoom label, in points.
 const ZOOM_LABEL_GAP: f32 = 6.0;
 
-/// One grid cell on the canvas, in inches. The arrow keys move the TV box
-/// by this much.
-const CELL: f64 = 1.0;
-
 /// The share of the canvas the TV box takes when `T` frames it.
 const FRAME_MARGIN: f64 = 0.9;
 
@@ -418,10 +414,25 @@ pub struct Settings {
     pub paper_light: Paper,
     /// The canvas and the grid of the dark theme. Issue #66.
     pub paper_dark: Paper,
+    /// What shape a cell is. Issue #15.
+    ///
+    /// The shape belongs to the table, not to the theme, so a DM who
+    /// swaps light for dark keeps the hexes they chose.
+    pub grid_kind: crate::grid::Kind,
+    /// How wide a cell is, in inches. A hex measures flat to flat.
+    pub grid_cell: Option<f32>,
 }
 
 impl Settings {
     /// The colors of the theme the window draws.
+    /// What shape the cells are, and how wide. Issue #15.
+    pub fn cells(&self) -> crate::grid::Cells {
+        crate::grid::Cells {
+            kind: self.grid_kind,
+            cell: self.grid_cell.map_or(crate::grid::DEFAULT_CELL, f64::from),
+        }
+    }
+
     pub fn paper(&self) -> &Paper {
         match self.theme {
             theme::Mode::Light => &self.paper_light,
@@ -1082,6 +1093,8 @@ mod tests {
             snap_percent: 8.0,
             paper_light: Paper::default(),
             paper_dark: Paper::default(),
+            grid_kind: crate::grid::Kind::default(),
+            grid_cell: None,
         }
     }
 

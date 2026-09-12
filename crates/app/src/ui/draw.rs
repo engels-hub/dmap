@@ -8,6 +8,7 @@
 
 use crate::camera::Camera;
 use crate::command::{Deed, Restructure, reshape};
+use crate::grid::Cells;
 use crate::scene::{Group, Node, NodeId, ROOT_ID, Scene};
 use crate::stroke::{Ink, Stroke};
 use crate::text;
@@ -93,7 +94,7 @@ pub(super) fn draw_tool(
     // on it and reaches wherever the DM pulls.
     let at = at.map(|at| {
         if snap && ink == Ink::Measure {
-            on_grid(at)
+            on_grid(frame.settings.cells(), at)
         } else {
             at
         }
@@ -145,7 +146,11 @@ pub(super) fn draw_tool(
             id: ROOT_ID,
             shown: crate::scene::Shown::default(),
             ink,
-            points: vec![if snap { on_grid(at) } else { at }],
+            points: vec![if snap {
+                on_grid(frame.settings.cells(), at)
+            } else {
+                at
+            }],
             color: frame.settings.ink_color,
             width: frame.settings.ink_width,
             span: 0.0,
@@ -236,12 +241,17 @@ fn span_of(live: &Stroke, at: (f64, f64)) -> f64 {
 ///
 /// A kept measure carries its length as the live one does, so the DM and
 /// the players read the same numbers off the same line.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one overlay of labels: what it labels, where, on which grid, and how"
+)]
 pub fn measure_overlay(
     painter: &egui::Painter,
     strokes: &[&Stroke],
     camera: &Camera,
     viewport: (u32, u32),
     ppp: f64,
+    cells: Cells,
     tokens: Tokens,
     size: f32,
 ) {
@@ -252,17 +262,19 @@ pub fn measure_overlay(
     };
     for stroke in strokes {
         if stroke.ink == Ink::Measure {
-            measure_labels(painter, stroke, &view, tokens, size);
+            measure_labels(painter, stroke, &view, cells, tokens, size);
         } else if let (Some(reach), Some(last)) =
             (stroke.ink.reach(&stroke.points), stroke.points.last())
         {
+            // A stroke holds inches, and a label says cells. One cell is
+            // one inch no longer, so both numbers turn. Issue #15.
             let says = if stroke.span > 0.0 {
                 // The width says cells alone. The length beside it
                 // already carries the feet.
-                let across = text::ruler_cells(format_args!("{:.1}", stroke.span));
-                text::ruler_span(length(reach), across)
+                let across = text::ruler_cells(format_args!("{:.1}", cells.in_cells(stroke.span)));
+                text::ruler_span(length(cells.in_cells(reach)), across)
             } else {
-                length(reach)
+                length(cells.in_cells(reach))
             };
             label(painter, view.to_screen(*last), &says, tokens, true, size);
         }
@@ -273,10 +285,17 @@ pub fn measure_overlay(
 ///
 /// The label sits beside the middle of its leg, and the total stands at
 /// the end, where the pointer is. Issue #12.
-fn measure_labels(painter: &egui::Painter, live: &Stroke, view: &View, tokens: Tokens, size: f32) {
+fn measure_labels(
+    painter: &egui::Painter,
+    live: &Stroke,
+    view: &View,
+    cells: Cells,
+    tokens: Tokens,
+    size: f32,
+) {
     let mut whole = 0.0;
     for pair in live.points.windows(2) {
-        let leg = live.rule.cells(pair[0], pair[1]);
+        let leg = live.rule.cells(cells, pair[0], pair[1]);
         whole += leg;
         let middle = (
             f64::midpoint(pair[0].0, pair[1].0),
@@ -342,9 +361,13 @@ fn length(cells: f64) -> String {
     )
 }
 
-/// The nearest crossing of the grid, in inches.
-fn on_grid(at: (f64, f64)) -> (f64, f64) {
-    (at.0.round(), at.1.round())
+/// The nearest point of the grid, in inches.
+///
+/// A square grid gives the nearest crossing. A hex grid gives the middle
+/// of the nearest hex, because a spell lands on a cell, not on a corner.
+/// Issue #15.
+fn on_grid(cells: Cells, at: (f64, f64)) -> (f64, f64) {
+    cells.snap(at)
 }
 
 /// Takes a bite out of every stroke the eraser passes over.

@@ -1,13 +1,11 @@
 {
   "language.name": "English",
-
   "tool.select": "Select",
   "tool.table": "Table",
   "tool.scenes": "Scenes",
   "tool.add_map": "Add map",
   "tool.settings": "Settings",
   "tool.history": "History",
-
   "panel.objects.pieces": "Pieces",
   "panel.objects.title": "Objects",
   "panel.objects.new_group": "New group",
@@ -15,7 +13,6 @@
   "panel.objects.helper": "A new asset joins the marked group.",
   "panel.objects.one_group": "Order works inside one group. Pick nodes that sit together.",
   "panel.objects.group_name": "Group {id}",
-
   "panel.map.group": "Group",
   "panel.map.grid_px": "Pixels per cell",
   "panel.map.size": "Size",
@@ -25,7 +22,6 @@
   "panel.map.turn_button": "Turn",
   "panel.map.flip": "Flip",
   "panel.map.flip_helper": "Shift with F flips the map the other way.",
-
   "panel.box.title": "TV box",
   "panel.box.zoom": "Zoom",
   "panel.box.zoom_helper": "100 % — true size on the TV",
@@ -33,18 +29,15 @@
   "panel.box.move_helper": "Arrow keys move the box one cell",
   "panel.box.frame": "Fit box",
   "panel.box.frame_button": "Show the whole box",
-
   "panel.stroke.reach": "Reach",
   "panel.stroke.across": "Across",
   "unit.cells": "cells",
   "panel.picked.title": "Picked: {count}",
   "panel.picked.group": "Group",
   "panel.picked.close": "Close",
-
   "dialog.history.title": "History",
   "dialog.history.start": "Scene created",
   "dialog.history.helper": "A click on a step rolls back the scene.",
-
   "dialog.scenes.title": "Scenes",
   "dialog.scenes.folder": "Scenes folder",
   "dialog.scenes.change": "Change",
@@ -58,7 +51,6 @@
   "dialog.scenes.rename": "Rename",
   "dialog.scenes.open_now": "Open now",
   "dialog.scenes.open": "Open",
-
   "dialog.settings.title": "Settings",
   "dialog.settings.tab.table": "Table",
   "dialog.settings.tab.grid": "Grid",
@@ -90,11 +82,17 @@
   "dialog.settings.reset": "Reset",
   "dialog.settings.opacity_value": "{percent} %",
   "unit.points": "pt",
-
-  "dialog.settings.grid_soon": "Grid kind, cell size and where it shows — TODO: #15.",
+  "unit.inches": "in",
+  "dialog.settings.grid_kind": "Kind",
+  "dialog.settings.grid_kind_square": "Square",
+  "dialog.settings.grid_kind_hex_pointy": "Hex pointy top",
+  "dialog.settings.grid_kind_hex_flat": "Hex flat top",
+  "dialog.settings.grid_kind_none": "None",
+  "dialog.settings.grid_cell": "Cell size",
+  "dialog.settings.grid_cell_helper": "Hex size is measured flat to flat",
+  "dialog.settings.grid_soon": "Where the grid shows, and its line style — not built.",
   "dialog.settings.light_soon": "Light settings — TODO: #20.",
   "dialog.settings.shortcuts_soon": "Key list — TODO: #36.",
-
   "dialog.about.version": "dmap {version}",
   "dialog.about.tagline": "Map display for tabletop RPGs in hybrid mode.",
   "dialog.about.licensed": "{name}, under the {terms}.",
@@ -102,9 +100,7 @@
   "dialog.about.built_by": "Authors",
   "dialog.about.free": "dmap is free software, WIP.",
   "dialog.about.bring": "Bring a bug, a story or a patch",
-
   "dialog.file.images": "Images",
-
   "tool.draw": "Draw",
   "panel.draw.title": "Draw",
   "panel.draw.color": "Color",
@@ -117,6 +113,7 @@
   "ruler.manhattan": "Manhattan",
   "ruler.fifth": "D&D 5e",
   "ruler.pathfinder": "Pathfinder",
+  "ruler.hexes": "Hexes",
   "ruler.span": "{length} long, {width} wide",
   "ruler.cells": "{cells} cells",
   "ruler.length": "{cells} cells, {feet} ft",
@@ -130,10 +127,8 @@
   "stroke.rect": "Rectangle",
   "stroke.ellipse": "Ellipse",
   "stroke.measure": "Measure",
-
   "theme.light": "Light",
   "theme.dark": "Dark",
-
   "history.row": "{what}: {subject}",
   "history.ago.earlier": "earlier",
   "history.ago.now": "just now",
@@ -150,7 +145,6 @@
   "history.maps.many": "{count} maps",
   "history.lists.one": "one list",
   "history.lists.many": "{count} lists",
-
   "history.deed.draw": "Draw",
   "history.deed.erase": "Erase",
   "panel.objects.drawings": "Drawings",
@@ -170,7 +164,6 @@
   "history.deed.another_group": "Another group",
   "history.deed.group": "Group",
   "history.deed.order": "Order",
-
   "history.detail.move": "{from} to {to} in",
   "history.detail.turn": "{from}° to {to}°",
   "history.detail.size": "{from} % to {to} %",
@@ -181,7 +174,6 @@
   "history.detail.rename": "to {name}",
   "history.detail.screens": "{from} to {to}",
   "history.detail.tree": "{lists} in the tree",
-
   "unit.px": "px",
   "unit.percent": "%",
   "unit.degrees": "°"

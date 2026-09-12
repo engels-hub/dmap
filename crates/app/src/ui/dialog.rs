@@ -7,6 +7,7 @@
 
 use crate::command::Note;
 use crate::config::{MAX_GRID_WIDTH, MIN_GRID_WIDTH};
+use crate::grid::{Kind, MAX_CELL, MIN_CELL};
 use crate::icon;
 use crate::icons::Icon;
 use crate::text;
@@ -489,7 +490,51 @@ fn grid_tab(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             edited = true;
         }
     });
+    edited |= cell_rows(ui, settings);
     not_built(ui, text::dialog_settings_grid_soon());
+    edited
+}
+
+/// The Kind and the Cell size rows of the Grid tab. DESIGN.md 9.2.
+///
+/// The shape of a cell belongs to the table, so these two rows read the
+/// settings and not the paper of one theme. Issue #15. Returns `true`
+/// when the DM changed a row.
+fn cell_rows(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+    let mut edited = false;
+    dialog_row(ui, text::dialog_settings_grid_kind(), |ui| {
+        let mut kind = settings.grid_kind;
+        let choices = [
+            (Kind::Square, text::dialog_settings_grid_kind_square()),
+            (
+                Kind::HexPointyTop,
+                text::dialog_settings_grid_kind_hex_pointy(),
+            ),
+            (Kind::HexFlatTop, text::dialog_settings_grid_kind_hex_flat()),
+            (Kind::None, text::dialog_settings_grid_kind_none()),
+        ];
+        if widget::segmented(ui, &mut kind, &choices) {
+            settings.grid_kind = kind;
+            edited = true;
+        }
+    });
+    dialog_row(ui, text::dialog_settings_grid_cell(), |ui| {
+        let mut cell = settings.cells().cell;
+        if widget::input(
+            ui,
+            &mut cell,
+            text::unit_inches(),
+            90.0,
+            MIN_CELL..=MAX_CELL,
+            0.25,
+        )
+        .changed()
+        {
+            settings.grid_cell = Some(cell as f32);
+            edited = true;
+        }
+        widget::helper(ui, text::dialog_settings_grid_cell_helper());
+    });
     edited
 }
 
