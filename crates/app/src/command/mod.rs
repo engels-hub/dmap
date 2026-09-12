@@ -20,7 +20,8 @@ mod change;
 mod history;
 
 pub use change::{
-    Deed, Grow, Restructure, SetAssets, SetName, SetShown, SetStrokes, SetTvBox, Turn, reshape,
+    Both, Change, Deed, Grow, Restructure, SetAssets, SetName, SetShown, SetStrokes, SetTvBox,
+    Turn, reshape,
 };
 pub use history::History;
 

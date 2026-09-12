@@ -86,6 +86,23 @@ fn collect_assets<'a>(nodes: &'a [Node], found: &mut Vec<&'a Asset>) {
     }
 }
 
+/// Every stroke under a group, however deep. Issue #69.
+pub fn ink_under(group: &Group) -> Vec<&Stroke> {
+    let mut found = Vec::new();
+    collect_ink_under(&group.children, &mut found);
+    found
+}
+
+fn collect_ink_under<'a>(nodes: &'a [Node], found: &mut Vec<&'a Stroke>) {
+    for node in nodes {
+        match node {
+            Node::Stroke(stroke) => found.push(stroke),
+            Node::Group(group) => collect_ink_under(&group.children, found),
+            Node::Asset(_) => {}
+        }
+    }
+}
+
 /// Every group in the scene that draws for the DM, with the root last.
 ///
 /// The root has no box around it, so a caller that draws boxes skips it.

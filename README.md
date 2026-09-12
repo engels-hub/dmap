@@ -137,6 +137,7 @@ Pick a view in the toolbar at the bottom of the window. The toolbar comes in two
 | Flip it | `F` for left to right, `Shift` with `F` for top to bottom |
 | Grow or shrink it a tenth | `+` or `-` |
 | Move it up or down the stack | `Page Up` or `Page Down`. Nodes that sit in one group move together |
+| Delete what you hold | `Delete`, or the Delete button in the panel. A group goes with everything in it |
 | Set the pixels in one grid cell | Type the number in the panel, or press Measure a cell and click two corners of one cell |
 | Give up a measure | `Escape` |
 
@@ -188,6 +189,10 @@ The list shows one group and what is in it, never the whole tree. Click a group 
 | The screen | Draw this node on the TV |
 
 To rename a group, go into it with a click, then double-click its name at the top of the list. `Enter` keeps the new name and `Escape` gives it up.
+
+A drawing takes the same three drags a map takes: a drag moves it, a corner handle grows it, and the handle above the top edge turns it. A growth takes the width of the line and the reach of an effect with it, so a fireball that covered four cells covers eight. One gesture is one step, whether it holds maps, drawings, or both.
+
+**Delete** takes what you hold out of the scene, by the key or by the button in the panel. A group goes with everything under it. `Ctrl+Z` brings it all back, each node in the group and the place it sat in. The image files stay in the scene folder, so nothing you delete is lost from the disk.
 
 The two switches work on their own, and a group rules the nodes under it. A group with the screen switch off keeps every asset in it off the TV, whatever the asset says. Use it for the room the players have not found.
 
