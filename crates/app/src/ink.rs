@@ -354,6 +354,7 @@ mod tests {
             color: [255, 0, 0, 255],
             width,
             span: 0.0,
+            angle: 0.0,
             rule: crate::stroke::Rule::default(),
         }
     }

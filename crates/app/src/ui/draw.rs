@@ -154,6 +154,9 @@ pub(super) fn draw_tool(
             color: frame.settings.ink_color,
             width: frame.settings.ink_width,
             span: 0.0,
+            // A new shape stands square with the grid. The turn handle
+            // gives it an angle later. Issue #69.
+            angle: 0.0,
             rule: frame.settings.ink_rule,
         });
     }
@@ -540,6 +543,7 @@ mod tests {
             color: [0, 0, 0, 255],
             width: 0.1,
             span: 0.0,
+            angle: 0.0,
             rule: Rule::default(),
         }
     }

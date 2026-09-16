@@ -239,6 +239,15 @@ pub struct Stroke {
     /// second drag of the gesture. Issue #12.
     #[serde(default)]
     pub span: f64,
+    /// How far a rectangle or an ellipse turns, in radians.
+    ///
+    /// Those two hold two opposite corners and nothing else, so a turn of
+    /// the corners would give another box and not the same box at an
+    /// angle. The angle sits beside them instead, and the outline takes
+    /// it. Every other ink holds its heading in its own points and leaves
+    /// this at nothing. Issue #69.
+    #[serde(default)]
+    pub angle: f64,
     /// How a measure counts its length. It says nothing for other ink.
     ///
     /// A kept measure holds the rule it was made under, so the number it
@@ -246,6 +255,12 @@ pub struct Stroke {
     #[serde(default)]
     pub rule: Rule,
 }
+
+/// The smallest a growth may leave a stroke, as a share of its size.
+///
+/// A stroke of no size has no box and no handles, so a DM who pulled a
+/// corner past the middle would have nothing left to pull back.
+const MIN_FACTOR: f64 = 0.01;
 
 impl Stroke {
     /// The line this stroke draws, point by point, in inches.
@@ -256,7 +271,7 @@ impl Stroke {
         let (Some(first), Some(last)) = (self.points.first(), self.points.last()) else {
             return Vec::new();
         };
-        match self.ink {
+        let line = match self.ink {
             Ink::Pen | Ink::Measure => self.points.clone(),
             Ink::Line => vec![*first, *last],
             Ink::Rect => vec![*first, (last.0, first.1), *last, (first.0, last.1), *first],
@@ -264,7 +279,26 @@ impl Stroke {
             Ink::Burst => burst(*first, *last),
             Ink::Cone => cone(*first, *last),
             Ink::Beam => beam(*first, *last, self.span),
+        };
+        if self.angle.abs() < f64::EPSILON {
+            return line;
         }
+        // A box turns around its own middle, so the turn leaves it the
+        // size the DM gave it. Issue #69.
+        let middle = (
+            f64::midpoint(first.0, last.0),
+            f64::midpoint(first.1, last.1),
+        );
+        let (sin, cos) = self.angle.sin_cos();
+        line.into_iter()
+            .map(|(x, y)| {
+                let (dx, dy) = (x - middle.0, y - middle.1);
+                (
+                    middle.0 + dx * cos - dy * sin,
+                    middle.1 + dx * sin + dy * cos,
+                )
+            })
+            .collect()
     }
 
     /// The points this stroke takes when its reach becomes `cells`.
@@ -300,6 +334,82 @@ impl Stroke {
             high = (high.0.max(x), high.1.max(y));
         }
         Some((low, high))
+    }
+
+    /// The same stroke, moved by `step` inches.
+    ///
+    /// A stroke holds points and no center, so a move rewrites each one.
+    /// Every transform starts from the stroke as it stood when the drag
+    /// began, so a drag of many frames leaves no drift behind. Issue #69.
+    pub fn moved(&self, step: (f64, f64)) -> Self {
+        self.mapped(|(x, y)| (x + step.0, y + step.1))
+    }
+
+    /// The same stroke, grown around `pivot` by `factor`.
+    ///
+    /// The width grows with it, and so does the reach of an area of
+    /// effect, because the reach comes from the points. A factor of
+    /// nothing would leave a stroke with no length and no way back, so the
+    /// growth stops at [`MIN_FACTOR`].
+    pub fn scaled(&self, pivot: (f64, f64), factor: f64) -> Self {
+        let factor = factor.max(MIN_FACTOR);
+        let mut grown = self.mapped(|(x, y)| {
+            (
+                pivot.0 + (x - pivot.0) * factor,
+                pivot.1 + (y - pivot.1) * factor,
+            )
+        });
+        grown.width *= factor;
+        grown.span *= factor;
+        grown
+    }
+
+    /// The same stroke, turned around `pivot` by `angle` radians.
+    ///
+    /// The width and the span are lengths across the line, so a turn
+    /// leaves both as they were. A rectangle and an ellipse take the turn
+    /// in [`Stroke::angle`] and carry their middle around the pivot, so
+    /// the box keeps the size the DM gave it.
+    pub fn turned(&self, pivot: (f64, f64), angle: f64) -> Self {
+        let (sin, cos) = angle.sin_cos();
+        let around = |(x, y): (f64, f64)| {
+            let (dx, dy) = (x - pivot.0, y - pivot.1);
+            (pivot.0 + dx * cos - dy * sin, pivot.1 + dx * sin + dy * cos)
+        };
+        if !matches!(self.ink, Ink::Rect | Ink::Ellipse) {
+            return self.mapped(around);
+        }
+        let (Some(first), Some(last)) = (self.points.first(), self.points.last()) else {
+            return self.clone();
+        };
+        let middle = (
+            f64::midpoint(first.0, last.0),
+            f64::midpoint(first.1, last.1),
+        );
+        let half = ((last.0 - first.0) / 2.0, (last.1 - first.1) / 2.0);
+        let moved = around(middle);
+        let mut turned = self.clone();
+        turned.points = vec![
+            (moved.0 - half.0, moved.1 - half.1),
+            (moved.0 + half.0, moved.1 + half.1),
+        ];
+        turned.angle += angle;
+        turned
+    }
+
+    /// The same stroke, with every point through `place`.
+    fn mapped(&self, place: impl Fn((f64, f64)) -> (f64, f64)) -> Self {
+        let mut moved = self.clone();
+        for point in &mut moved.points {
+            *point = place(*point);
+        }
+        moved
+    }
+
+    /// The middle of the box around this stroke, in inches.
+    pub fn middle(&self) -> Option<(f64, f64)> {
+        let (low, high) = self.bounds()?;
+        Some((f64::midpoint(low.0, high.0), f64::midpoint(low.1, high.1)))
     }
 
     /// Whether a disc of `radius` inches around `at` reaches this stroke.
@@ -531,8 +641,83 @@ mod tests {
             color: [0, 0, 0, 255],
             width: 0.1,
             span: 0.0,
+            angle: 0.0,
             rule: Rule::default(),
         }
+    }
+
+    #[test]
+    fn a_move_carries_every_point_of_a_drawing() {
+        let mark = stroke(Ink::Pen, &[(1.0, 1.0), (2.0, 3.0)]);
+        let moved = mark.moved((0.5, -1.0));
+        assert_eq!(moved.points, vec![(1.5, 0.0), (2.5, 2.0)]);
+        // Nothing but the points moves.
+        assert!((moved.width - mark.width).abs() < f64::EPSILON);
+        // And the way back is the way there, the other way around.
+        assert_eq!(moved.moved((-0.5, 1.0)).points, mark.points);
+    }
+
+    #[test]
+    fn a_growth_takes_the_width_and_the_reach_with_it() {
+        // A burst of two inches of reach, around the origin. Issue #69.
+        let mark = stroke(Ink::Burst, &[(0.0, 0.0), (2.0, 0.0)]);
+        let grown = mark.scaled((0.0, 0.0), 2.0);
+        assert_eq!(grown.points, vec![(0.0, 0.0), (4.0, 0.0)]);
+        assert!((grown.width - mark.width * 2.0).abs() < 1e-9);
+        // The reach comes from the points, so it grew with them.
+        let reach = grown.ink.reach(&grown.points).unwrap();
+        assert!((reach - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_growth_leaves_a_drawing_something_to_hold() {
+        // A DM who pulls a corner past the middle would otherwise be left
+        // with a drawing of no size, and so with no handles to pull back.
+        let mark = stroke(Ink::Line, &[(1.0, 0.0), (3.0, 0.0)]);
+        let flat = mark.scaled((2.0, 0.0), 0.0);
+        let (low, high) = flat.bounds().unwrap();
+        assert!(high.0 - low.0 > 0.0, "a drawing with no width is lost");
+    }
+
+    #[test]
+    fn a_turned_box_keeps_the_size_the_dm_gave_it() {
+        // A rectangle holds two corners, so the turn goes beside them and
+        // the outline takes it. Issue #69.
+        let mark = stroke(Ink::Rect, &[(0.0, 0.0), (4.0, 2.0)]);
+        let turned = mark.turned((2.0, 1.0), std::f64::consts::FRAC_PI_2);
+        // A quarter turn about the middle: the box stands on its end.
+        let (low, high) = turned.bounds().unwrap();
+        assert!((high.0 - low.0 - 2.0).abs() < 1e-9, "{low:?} {high:?}");
+        assert!((high.1 - low.1 - 4.0).abs() < 1e-9, "{low:?} {high:?}");
+        // And the turn is in the angle, not in the corners.
+        assert!((turned.angle - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+        assert_eq!(turned.points, mark.points);
+    }
+
+    #[test]
+    fn a_turned_box_carries_its_middle_around_the_pivot() {
+        let mark = stroke(Ink::Ellipse, &[(0.0, 0.0), (2.0, 2.0)]);
+        // Half a turn about the origin puts the middle on the other side.
+        let turned = mark.turned((0.0, 0.0), std::f64::consts::PI);
+        let (x, y) = turned.middle().unwrap();
+        assert!((x + 1.0).abs() < 1e-9 && (y + 1.0).abs() < 1e-9, "{x} {y}");
+    }
+
+    #[test]
+    fn a_turn_keeps_the_width_and_the_span() {
+        let mark = stroke(Ink::Beam, &[(0.0, 0.0), (2.0, 0.0)]);
+        let turned = mark.turned((0.0, 0.0), std::f64::consts::FRAC_PI_2);
+        let (x, y) = turned.points[1];
+        assert!(x.abs() < 1e-9 && (y - 2.0).abs() < 1e-9, "{x} {y}");
+        assert!((turned.width - mark.width).abs() < f64::EPSILON);
+        assert!((turned.span - mark.span).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn the_middle_of_a_drawing_is_the_middle_of_its_box() {
+        let mark = stroke(Ink::Rect, &[(1.0, 2.0), (3.0, 6.0)]);
+        let (x, y) = mark.middle().unwrap();
+        assert!((x - 2.0).abs() < 1e-9 && (y - 4.0).abs() < 1e-9);
     }
 
     #[test]

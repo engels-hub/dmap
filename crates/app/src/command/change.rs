@@ -235,12 +235,54 @@ impl Command for SetStrokes {
     }
 
     fn note(&self) -> Note {
-        let subject = self
-            .after
-            .first()
-            .map(|stroke| stroke.ink.name().to_owned())
-            .unwrap_or_default();
-        Note::new(text::history_deed_change(), subject, String::new())
+        let subject = match self.after.as_slice() {
+            [] => String::new(),
+            [one] => one.ink.name().to_owned(),
+            many => text::history_maps_many(many.len()),
+        };
+        // A drag writes the points, and the panel writes the fields. The
+        // two read differently on the list, so the note says which it was.
+        let changed = self
+            .before
+            .iter()
+            .zip(&self.after)
+            .find(|(was, now)| was != now);
+        let Some((was, now)) = changed else {
+            return Note::new(text::history_deed_change(), subject, String::new());
+        };
+        let (what, detail) = if differs(was.angle, now.angle) {
+            (
+                text::history_deed_turn(),
+                text::history_detail_turn(
+                    format_args!("{:.0}", was.angle.to_degrees()),
+                    format_args!("{:.0}", now.angle.to_degrees()),
+                ),
+            )
+        } else if differs(was.width, now.width) {
+            (
+                text::history_deed_size(),
+                text::history_detail_size(
+                    format_args!("{:.0}", was.width * 100.0),
+                    format_args!("{:.0}", now.width * 100.0),
+                ),
+            )
+        } else if let (true, Some(from), Some(to)) =
+            (was.points != now.points, was.middle(), now.middle())
+        {
+            // A turn of a drawing that holds its heading in its points
+            // leaves the middle where it was, and a move carries it.
+            if spot(from) == spot(to) {
+                (text::history_deed_turn(), String::new())
+            } else {
+                (
+                    text::history_deed_move(),
+                    text::history_detail_move(spot(from), spot(to)),
+                )
+            }
+        } else {
+            (text::history_deed_change(), String::new())
+        };
+        Note::new(what, subject, detail)
     }
 }
 
@@ -249,6 +291,48 @@ fn write_strokes(scene: &mut Scene, strokes: &[Stroke]) {
         if let Some(place) = crate::scene::stroke_mut(scene, stroke.id) {
             place.clone_from(stroke);
         }
+    }
+}
+
+/// Two changes one gesture made, kept as one step.
+///
+/// A drag of a selection that holds a map and a drawing writes both, and
+/// the DM took one action, so the stack must hold one step. The note
+/// comes from the first change, because a mixed drag is a drag of maps
+/// with drawings along for the ride. Issue #69.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Both {
+    /// The change that goes down first and comes back last.
+    pub first: Box<Change>,
+    /// The change that goes down last and comes back first.
+    pub then: Box<Change>,
+}
+
+impl Both {
+    /// Pairs two changes, in the order they go down.
+    pub fn of(first: impl Into<Change>, then: impl Into<Change>) -> Self {
+        Self {
+            first: Box::new(first.into()),
+            then: Box::new(then.into()),
+        }
+    }
+}
+
+impl Command for Both {
+    fn apply(&self, scene: &mut Scene) {
+        self.first.apply(scene);
+        self.then.apply(scene);
+    }
+
+    fn revert(&self, scene: &mut Scene) {
+        // The way back runs the other way, so a pair of changes that touch
+        // one node leaves it as the first change found it.
+        self.then.revert(scene);
+        self.first.revert(scene);
+    }
+
+    fn note(&self) -> Note {
+        self.first.note()
     }
 }
 
@@ -346,6 +430,8 @@ pub enum Deed {
     Draw,
     /// The eraser took a bite out of what the DM drew.
     Erase,
+    /// A node left the scene. Issue #71.
+    Delete,
 }
 
 impl Deed {
@@ -361,6 +447,7 @@ impl Deed {
             Self::Order => text::history_deed_order(),
             Self::Draw => text::history_deed_draw(),
             Self::Erase => text::history_deed_erase(),
+            Self::Delete => text::history_deed_delete(),
         }
     }
 }
@@ -503,6 +590,8 @@ pub enum Change {
     Shown(SetShown),
     /// See [`Restructure`].
     Restructure(Restructure),
+    /// See [`Both`].
+    Both(Both),
 }
 
 impl Command for Change {
@@ -516,6 +605,7 @@ impl Command for Change {
             Self::Name(change) => change.apply(scene),
             Self::Shown(change) => change.apply(scene),
             Self::Restructure(change) => change.apply(scene),
+            Self::Both(change) => change.apply(scene),
         }
     }
 
@@ -529,6 +619,7 @@ impl Command for Change {
             Self::Name(change) => change.revert(scene),
             Self::Shown(change) => change.revert(scene),
             Self::Restructure(change) => change.revert(scene),
+            Self::Both(change) => change.revert(scene),
         }
     }
 
@@ -542,6 +633,7 @@ impl Command for Change {
             Self::Name(change) => change.note(),
             Self::Shown(change) => change.note(),
             Self::Restructure(change) => change.note(),
+            Self::Both(change) => change.note(),
         }
     }
 }
@@ -591,5 +683,11 @@ impl From<SetShown> for Change {
 impl From<Restructure> for Change {
     fn from(change: Restructure) -> Self {
         Self::Restructure(change)
+    }
+}
+
+impl From<Both> for Change {
+    fn from(change: Both) -> Self {
+        Self::Both(change)
     }
 }

@@ -667,24 +667,31 @@ enum BoxDrag {
 }
 
 /// A drag in progress, all positions in world inches.
+///
+/// A drag carries the maps and the drawings it holds as each one stood,
+/// because every frame of it rewrites them from there. A drawing has no
+/// center of its own, so what it stood as is the whole stroke. Issue #69.
 #[derive(Debug, Clone)]
 enum Drag {
-    /// Every asset the DM holds, as each one stood.
+    /// Every asset and drawing the DM holds, as each one stood.
     Move {
         was: Vec<Asset>,
+        ink: Vec<Stroke>,
         start_cursor: (f64, f64),
     },
     /// A rectangle over the canvas that picks what it covers.
     Band { start_cursor: (f64, f64) },
-    /// Every asset the DM holds, where it stood, and the point it turns
-    /// or grows around.
+    /// Every asset and drawing the DM holds, where it stood, and the
+    /// point it turns or grows around.
     Scale {
         starts: Vec<Placed>,
+        ink: Vec<Stroke>,
         pivot: (f64, f64),
         start_cursor: (f64, f64),
     },
     Rotate {
         starts: Vec<Placed>,
+        ink: Vec<Stroke>,
         pivot: (f64, f64),
         start_cursor: (f64, f64),
     },

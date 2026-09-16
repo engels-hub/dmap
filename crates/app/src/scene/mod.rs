@@ -14,12 +14,12 @@ mod files;
 mod tree;
 
 pub use asset::{Asset, Placed, bounds, placed, rotate_about, scale_about};
-pub use draw::{assets, dm_draw_order, draw_order, groups, ink_order, under};
+pub use draw::{assets, dm_draw_order, draw_order, groups, ink_order, ink_under, under};
 pub use files::copy_into_scene;
 pub use tree::{
     ancestors, asset_mut, assets_of, find, group_mut, group_names, group_selection, has_group,
     ink_group, move_above, move_into, name_of, normalize, parent_of, path_to, push_into,
-    reorder_all, share_parent, shown_mut, stroke_mut, take_node, ungroup,
+    reorder_all, share_parent, shown_mut, stroke_mut, strokes_of, take_node, ungroup,
 };
 
 use serde::{Deserialize, Serialize};

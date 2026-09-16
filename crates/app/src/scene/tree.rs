@@ -299,6 +299,21 @@ pub fn assets_of(scene: &Scene, id: NodeId) -> Vec<NodeId> {
     }
 }
 
+/// Every stroke a node holds: the stroke itself, or all under a group.
+///
+/// A drag carries the drawings of a selection as it carries its maps, so
+/// a group of drawings moves with one hand. Issue #69.
+pub fn strokes_of(scene: &Scene, id: NodeId) -> Vec<NodeId> {
+    match find(scene, id) {
+        Some(Node::Stroke(stroke)) => vec![stroke.id],
+        Some(Node::Group(group)) => super::ink_under(group)
+            .iter()
+            .map(|stroke| stroke.id)
+            .collect(),
+        Some(Node::Asset(_)) | None => Vec::new(),
+    }
+}
+
 /// Puts a selection into a new group, and gives back its name.
 ///
 /// The new group lands in the lowest group that holds every member, and

@@ -238,6 +238,16 @@ An area of effect and a kept measure come away whole. Each one stands for one th
 
 A stroke the DM picked opens a panel of its own, headed with what it is: Pen, Line, Rectangle, Ellipse, Ruler, Burst, Cone or Beam. Rows: Color as a swatch, Width as a slider, Reach in cells for an area of effect, Across in cells for a beam, and Measure as a select for a ruler. A new reach moves the far point along the line the shape already runs on, so the shape keeps its heading.
 
+The footer of the panel holds Delete, as the footer of a map does.
+
+A stroke the DM holds takes the same box, the same four corner handles and the same turn handle a map takes, and the three drags do to it what they do to a map. A drag moves it, a corner grows it, and the handle above the top edge turns it. The snap holds a move to the grid, and `Ctrl` holds the snap off. Issue #69.
+
+- A drawing holds points and no center, so every drag rewrites the points from the ones the drag began with. So a drag of many frames leaves no drift behind, and one undo puts the drawing back.
+- A growth takes the width of the line with it, and the reach of an area of effect grows with the points. A spell that covered four cells covers eight when the DM pulls the corner twice as far.
+- A rectangle and an ellipse hold two opposite corners and nothing else, so their turn sits beside the corners as an angle, and the outline takes it. Every other ink holds its heading in its own points.
+- A selection that holds a map and a drawing moves both, and the stack holds one step for the gesture.
+- The snap of a drawing steps the whole move by cells, so a shape that started on a crossing lands on one and a free line from the pen keeps the shape it had against the grid.
+
 A press on the canvas takes the stroke under the pointer before it takes a map, because a stroke draws over every map.
 
 ### 8.4 Objects list
@@ -253,6 +263,7 @@ The list shows the scene as a tree of groups and assets. It docks on the left.
 - The right of the row holds the star, then two switches, each 16 px in a 22 px square: `eye` for the DM screen and `monitor` for the TV. An off switch takes the `eye-off` or `monitor-off` glyph in `mute`.
 - The root group is always visible and carries no switches.
 - A picked row takes the `raised` background, a 3 px `accent` bar on its left edge, and `accent` text.
+- The box around a group covers every asset and every drawing under it, so a group of drawings has a box to take hold of.
 - A group has no panel of its own. It carries no size and no turn, and its two switches sit on its row, so a panel over it would hold nothing the row does not say. A double click on the name of the group at the top of the list opens it for a rename. Only that row takes the double click, because a click on any other row moves every row. The root keeps its own name.
 
 **The width of a deep tree**
@@ -273,7 +284,9 @@ A scene of a hundred thousand assets branches deep. Three things keep the list i
 
 **The footer**
 
-The footer holds Group and New group, and a helper line that names the picked nodes. Two buttons that do not fit one row take a second row, and the list above them gives up the height. A language whose words run long never loses the end of one.
+The footer holds Group and New group, and a helper line that names the picked nodes.
+
+The `Delete` key takes every node the DM holds, from the list and from the canvas alike. A group goes with everything under it. The images stay in the scene folder: an undo has to bring a map back, and two assets may name one file. Issue #71. Two buttons that do not fit one row take a second row, and the list above them gives up the height. A language whose words run long never loses the end of one.
 
 ## 9. Dialogs
 
