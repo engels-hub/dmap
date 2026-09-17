@@ -5,6 +5,7 @@
   "tool.scenes": "Сцены",
   "tool.add_map": "Добавить карту",
   "tool.settings": "Настройки",
+  "tool.freeze": "Стоп-кадр",
   "tool.history": "История",
   "panel.objects.pieces": "Части",
   "panel.objects.title": "Объекты",
