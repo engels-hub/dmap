@@ -5,6 +5,7 @@
   "tool.scenes": "Scenes",
   "tool.add_map": "Add map",
   "tool.settings": "Settings",
+  "tool.freeze": "Freeze",
   "tool.history": "History",
   "panel.objects.pieces": "Pieces",
   "panel.objects.title": "Objects",

@@ -294,7 +294,14 @@ pub(super) fn table_tool(
     let icon = table.drag.map(|_| egui::CursorIcon::ResizeNwSe);
     set_cursor(ui, table.drag.is_some(), icon, pointer, &handles);
     let zoom = frame.scene.tv_box.zoom(TV_WIDTH_INCHES);
-    draw_tv_box(&ui.painter_at(rect), rect, &handles, zoom, tokens);
+    draw_tv_box(
+        &ui.painter_at(rect),
+        rect,
+        &handles,
+        zoom,
+        frame.frozen,
+        tokens,
+    );
     edited
 }
 
@@ -367,6 +374,7 @@ fn draw_tv_box(
     canvas: egui::Rect,
     handles: &[egui::Pos2],
     zoom: f64,
+    frozen: bool,
     tokens: Tokens,
 ) {
     let inside = egui::Rect::from_two_pos(handles[0], handles[2]);
@@ -387,7 +395,15 @@ fn draw_tv_box(
         painter.rect_filled(wash.intersect(canvas), 0.0, tokens.dim);
     }
     let stroke = egui::Stroke::new(2.0, tokens.accent);
-    painter.add(egui::Shape::closed_line(handles.to_vec(), stroke));
+    if frozen {
+        // A frozen TV keeps the frame it had, and a solid outline would say
+        // that the box still rules what the table sees. Issue #76.
+        let mut round = handles.to_vec();
+        round.push(handles[0]);
+        painter.add(egui::Shape::dashed_line(&round, stroke, DASH, DASH));
+    } else {
+        painter.add(egui::Shape::closed_line(handles.to_vec(), stroke));
+    }
     // DESIGN.md 5.4: a handle stands 4 points outside the box, so the
     // outline stays whole under it.
     let middle = handles

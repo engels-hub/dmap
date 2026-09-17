@@ -108,7 +108,8 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - The first box holds the views: Select, Draw, Edit, Table. It is a segmented control, so one of them is always on.
 - A dashed 1 px line stands between each pair of views, dash and gap 3 px. It takes the `ink` of the box, not the `rule` of section 6: a lighter line beside an `ink` border reads as a seam, not as a join.
 - The dash is what tells the two boxes apart. A solid line would give the views the same divided look as the buttons beside them, and the eye would read one long control in two halves.
-- The second box holds Scenes, Add map and Settings. They are buttons, not views: none of them stays on, and no rule gathers them into one control. Each opens something at once.
+- The second box holds Scenes, Add map, Settings and Freeze. No rule gathers them into one control. The first three open something at once.
+- Freeze is the one entry of the box that stays on. It takes the `pause` glyph, and the `raised` background, the `accent` bar and the `accent` label of an active view while it stands. The TV holds the frame it had until the DM presses it again. Issue #76.
 - Two boxes say this louder than one rule between two groups. A DM reads the shape before the label.
 - The active entry has background `raised`, a 3 px `accent` bar on its top edge, and `accent` icon and label.
 - The Edit view brings a second bar of the same shape. It sits 8 px over the toolbar and holds Walls, Doors, Light and Fog. The views stay on the screen under it.
@@ -401,6 +402,19 @@ The Find the grid button of the Map panel opens this dialog on the map the DM ho
 - On a hex canvas the helper line says "A hex grid gives a line at each half hex". The search reads no hex grid. Two neighbor lines bound half a hex, and the two sides of one hex bound a whole one.
 - Use writes the pixels per cell to the map and the start of its grid to the snap offset, on the axis of the two lines, as one step. A map at an angle keeps the offset it had, and so does a map on a hex canvas. A hex canvas snaps to hex middles, so a line offset would set the map half a hex off. Cancel, `Escape` and a click on the scrim change nothing.
 - The search reads the whole file on a thread of its own. The picture in the dialog is a copy no larger than the largest texture the GPU takes, and the lines count in the pixels of the file.
+
+### 5.10 A frozen TV
+
+The DM sets up the next scene in front of the players, and the TV takes every change at once. Freeze holds the frame the TV had, so the table keeps the scene it was on. Issue #76.
+
+- The TV keeps the maps, the strokes, the TV box, the grid and the colors it had at the press.
+- A scene the DM opens lets the freeze go. The images live in the map layer by the name of their file, and another scene brings its own. A frozen tree would draw the new images under the old names, which is the one thing the freeze must not show.
+- A swap of the two windows keeps the freeze. The swap builds the interface again, and a TV that came back live would show the players the work behind it.
+- The pointer of the DM leaves the TV, because a hand that moves over a held frame says that the DM is at work.
+- The DM window takes every change at once, and undo and redo work as they do. Only the TV waits.
+- The TV box draws a dashed outline while the freeze stands. A solid one would say that the box still rules what the table sees.
+- `P` does what the button does, in every view. It stands for the `pause` glyph, because `F` for freeze already flips a map. A dialog over the canvas takes the keyboard first, and so does a field the DM types in.
+- A run starts with a live TV. A freeze reaches no config file, so one the DM left on never meets the next run.
 
 ## 10. Other overlays
 

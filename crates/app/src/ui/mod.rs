@@ -269,6 +269,14 @@ const REDO_Y: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
 
 /// Back to the zoom a new project opens with.
+/// The key that holds what the TV shows, and lets it go. Issue #76.
+///
+/// `P` stands for the `pause` glyph the toolbar entry takes. `F` would
+/// stand for freeze, and a flip of a map holds that key already. The key
+/// takes no modifier, because a DM reaches for it with the scene under
+/// their other hand.
+const FREEZE: egui::Key = egui::Key::P;
+
 const ZOOM_RESET: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Num0);
 
@@ -277,6 +285,10 @@ const MIN_ZOOM_PERCENT: f64 = 5.0;
 const MAX_ZOOM_PERCENT: f64 = 500.0;
 
 /// egui state and renderer for one window.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one switch of the window, and no two of them pair"
+)]
 pub struct DmUi {
     state: egui_winit::State,
     renderer: egui_wgpu::Renderer,
@@ -290,6 +302,12 @@ pub struct DmUi {
     dialog: Dialog,
     /// Whether the history dialog stands. DESIGN.md 9.8.
     history_open: bool,
+    /// Whether the TV holds the frame it had. Issue #76.
+    ///
+    /// The DM sets up the next scene behind a frozen TV, and the players
+    /// keep the last one. A run never starts frozen, so this reaches no
+    /// config file.
+    frozen: bool,
     /// The Find the grid dialog. DESIGN.md 9.9.
     finder: Finder,
     /// The theme the context carries, so a change installs once.
@@ -484,6 +502,11 @@ pub struct Frame<'a> {
     pub scene_error: &'a str,
     /// The folder that holds the scenes.
     pub scenes_dir: &'a Path,
+    /// Whether the TV holds the frame it had. Issue #76.
+    ///
+    /// The canvas draws the TV box dashed while it stands, so the DM reads
+    /// the freeze off the box as well as off the toolbar.
+    pub frozen: bool,
 }
 
 impl std::fmt::Debug for Frame<'_> {
@@ -739,6 +762,7 @@ impl DmUi {
             tree: Tree::default(),
             dialog: Dialog::on_tab(tab),
             history_open: false,
+            frozen: false,
             finder: Finder::default(),
             theme: theme::Mode::default(),
             language: text::DEFAULT.to_owned(),
@@ -803,6 +827,7 @@ impl DmUi {
         let tree = &mut self.tree;
         let dialog = &mut self.dialog;
         let history_open = &mut self.history_open;
+        let frozen = &mut self.frozen;
         let finder = &mut self.finder;
         let frame_box = &mut self.frame_box;
         let zoom_goes_to = &mut self.zoom_goes_to;
@@ -846,12 +871,11 @@ impl DmUi {
                 *history_open = !*history_open;
             }
             edited |= history_dialog(ui, history_open, &mut frame, tokens);
-            match toolbar(ui, *tool, tokens) {
-                Some(Press::View(view)) => *tool = view,
-                Some(Press::Scenes) => scenes.open = !scenes.open,
-                Some(Press::AddMap) => add_map = true,
-                Some(Press::Settings) => dialog.open = !dialog.open,
-                None => {}
+            if let Some(press) = toolbar(ui, *tool, *frozen, tokens) {
+                add_map |= take_press(press, tool, scenes, dialog, frozen);
+            }
+            if asked_to_freeze(ui, over) {
+                *frozen = !*frozen;
             }
             // A dialog over the canvas takes the keyboard too. egui holds
             // the pointer back on its own, but `R` and the arrow keys would
@@ -903,6 +927,7 @@ impl DmUi {
             save,
             scene,
             active_group: self.tree.active,
+            frozen: self.frozen,
             paint: Paint {
                 jobs: paint_jobs,
                 textures_delta,
@@ -935,6 +960,20 @@ impl DmUi {
     /// The tab the settings dialog marks, for the same reason.
     pub fn settings_tab(&self) -> Tab {
         self.dialog.tab
+    }
+
+    /// Whether the TV holds the frame it had. Issue #76.
+    pub fn frozen(&self) -> bool {
+        self.frozen
+    }
+
+    /// Holds the TV, or lets it go, from outside a frame.
+    ///
+    /// A swap of the two windows builds this interface again. Without this
+    /// the new one would start live, and the players would see the work the
+    /// DM was hiding from them.
+    pub fn set_frozen(&mut self, frozen: bool) {
+        self.frozen = frozen;
     }
 
     /// Draws the maps, then the canvas, then the UI on top of both.
@@ -1043,6 +1082,10 @@ pub fn render_pane(
 
 /// What one UI frame decided.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one answer of the frame, and no two of them pair"
+)]
 pub struct UiOutput {
     /// The stroke under the DM's hand, which is in no scene yet.
     ///
@@ -1060,6 +1103,37 @@ pub struct UiOutput {
     pub active_group: NodeId,
     /// What `DmUi::render` needs.
     pub paint: Paint,
+    /// Whether the TV holds the frame it had. Issue #76.
+    pub frozen: bool,
+}
+
+/// Whether the DM asked for the freeze with the key. Issue #76.
+///
+/// Freeze works in every view. A dialog over the canvas takes the keyboard
+/// first, and so does a field the DM types in.
+fn asked_to_freeze(ui: &egui::Ui, over: bool) -> bool {
+    !over && !ui.ctx().egui_wants_keyboard_input() && ui.input(|input| input.key_pressed(FREEZE))
+}
+
+/// Takes what the toolbar asked for. Returns `true` for Add map.
+///
+/// Add map opens a file dialog, which belongs to the caller and not to a
+/// frame of the UI, so it comes back as an answer.
+fn take_press(
+    press: Press,
+    tool: &mut Tool,
+    scenes: &mut Scenes,
+    dialog: &mut Dialog,
+    frozen: &mut bool,
+) -> bool {
+    match press {
+        Press::View(view) => *tool = view,
+        Press::Scenes => scenes.open = !scenes.open,
+        Press::Settings => dialog.open = !dialog.open,
+        Press::Freeze => *frozen = !*frozen,
+        Press::AddMap => return true,
+    }
+    false
 }
 
 /// The tessellated UI of one frame, ready to draw.
@@ -1095,7 +1169,36 @@ fn painter_dashes(ui: &egui::Ui, line: &[egui::Pos2; 2], color: egui::Color32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Paper, Settings, theme};
+    use super::{Dialog, Paper, Press, Scenes, Settings, Tool, take_press, theme};
+
+    #[test]
+    fn the_freeze_button_holds_the_tv_and_lets_it_go() {
+        let (mut tool, mut scenes) = (Tool::Select, Scenes::default());
+        let (mut dialog, mut frozen) = (Dialog::default(), false);
+        let mut press =
+            |what, frozen: &mut bool| take_press(what, &mut tool, &mut scenes, &mut dialog, frozen);
+        assert!(
+            !press(Press::Freeze, &mut frozen),
+            "Freeze asks the caller for nothing"
+        );
+        assert!(frozen, "one press holds the TV");
+        press(Press::Freeze, &mut frozen);
+        assert!(!frozen, "the next press lets it go");
+        // Add map is the one press the caller answers.
+        assert!(press(Press::AddMap, &mut frozen));
+        assert!(!frozen, "Add map says nothing about the TV");
+    }
+
+    #[test]
+    fn another_press_leaves_the_freeze_as_it_stands() {
+        let (mut tool, mut scenes) = (Tool::Select, Scenes::default());
+        let (mut dialog, mut frozen) = (Dialog::default(), true);
+        for what in [Press::View(Tool::Draw), Press::Scenes, Press::Settings] {
+            take_press(what, &mut tool, &mut scenes, &mut dialog, &mut frozen);
+            assert!(frozen, "{what:?} let the TV go");
+        }
+        assert_eq!(tool, Tool::Draw);
+    }
 
     fn settings() -> Settings {
         Settings {
