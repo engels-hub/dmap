@@ -10,9 +10,10 @@
 // Rust guideline compliant 2026-02-21
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use crate::command::SetAssets;
+use crate::grid::Cells;
 use crate::lines::{self, Line, Way};
 use crate::scene::{Node, NodeId};
 use crate::text;
@@ -185,6 +186,28 @@ impl Finder {
             ..Self::default()
         };
     }
+
+    /// Takes what the search sent back, when it sent anything.
+    ///
+    /// A search thread that stops without an answer drops its end of the
+    /// channel. The dialog says so. Without this it would say that it reads
+    /// the map for as long as it stands.
+    fn poll(&mut self, ctx: &egui::Context) {
+        let Some(receiver) = &self.search else {
+            return;
+        };
+        let seen = match receiver.try_recv() {
+            Ok(result) => result.map(|found| Seen {
+                size: found.size,
+                lines: found.lines,
+                texture: ctx.load_texture("finder", found.preview, egui::TextureOptions::LINEAR),
+            }),
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err(text::dialog_finder_failed().to_owned()),
+        };
+        self.search = None;
+        self.seen = Some(seen);
+    }
 }
 
 /// Reads a map file and finds its lines. Runs on the search thread.
@@ -234,16 +257,11 @@ fn finder_dialog(
         return false;
     };
     let ctx = ui.ctx().clone();
-    if let Some(receiver) = &finder.search
-        && let Ok(result) = receiver.try_recv()
-    {
-        finder.search = None;
-        finder.seen = Some(result.map(|found| Seen {
-            size: found.size,
-            lines: found.lines,
-            texture: ctx.load_texture("finder", found.preview, egui::TextureOptions::LINEAR),
-        }));
-    }
+    finder.poll(&ctx);
+    // Use writes the size in the pixels of the copy on the GPU, so it
+    // waits until the loader has made that copy. Issue #35.
+    let gpu = (frame.size_of)(&map.path);
+    let cells = frame.settings.cells();
     let mut chosen: Option<(Way, f64, f64)> = None;
     let mut wants_use = false;
     let title = text::dialog_finder_title();
@@ -272,14 +290,22 @@ fn finder_dialog(
                 chosen = Some((first.way, first.at, second.at));
             }
         }
-        wants_use = footer_row(ui, footer, finder, chosen, tokens);
+        wants_use = footer_row(
+            ui,
+            footer,
+            finder,
+            chosen,
+            (gpu.is_some(), cells.kind.is_hex()),
+            tokens,
+        );
     });
     let mut edited = false;
     if wants_use
         && let (Some((way, first, second)), Some(Ok(seen))) = (chosen, &finder.seen)
         && let Some(cell) = cell_of(first, second, finder.cells)
+        && let Some(gpu) = gpu
     {
-        let after = grid_of(frame, &map, seen.size, way, first, cell);
+        let after = grid_of(&map, seen.size, gpu, cells, way, first, cell);
         frame.history.run(
             frame.scene,
             SetAssets {
@@ -298,12 +324,15 @@ fn finder_dialog(
 
 /// The footer: Cells between, what the dialog has to say, Cancel and Use.
 ///
+/// `(loaded, hex)` says whether the map has its copy on the GPU, and whether
+/// the canvas grid is a hex grid. Use stands dead until the copy is there.
 /// Returns `true` when the DM pressed Use. Cancel closes the dialog here.
 fn footer_row(
     ui: &mut egui::Ui,
     footer: egui::Rect,
     finder: &mut Finder,
     chosen: Option<(Way, f64, f64)>,
+    (loaded, hex): (bool, bool),
     tokens: Tokens,
 ) -> bool {
     widget::rule_bottom(
@@ -336,12 +365,12 @@ fn footer_row(
         finder.cells = finder.cells.round().max(1.0);
     }
     let cell = chosen.and_then(|(_, first, second)| cell_of(first, second, finder.cells));
-    let says = say(finder, cell);
+    let says = say(finder, cell, loaded, hex);
     let mut wants_use = false;
     // DESIGN.md 9: the last button sits on the right.
     foot.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         wants_use = ui
-            .add_enabled_ui(cell.is_some(), |ui| {
+            .add_enabled_ui(cell.is_some() && loaded, |ui| {
                 widget::button(ui, text::dialog_finder_use(), None, Height::Full).clicked()
             })
             .inner;
@@ -563,42 +592,59 @@ fn cell_of(first: f64, second: f64, cells: f64) -> Option<f64> {
 }
 
 /// The helper line of the footer: what the dialog waits for, or the size.
-fn say(finder: &Finder, cell: Option<f64>) -> String {
+///
+/// `loaded` says whether the map has its copy on the GPU, which Use waits
+/// for. `hex` says whether the canvas grid is a hex grid.
+fn say(finder: &Finder, cell: Option<f64>, loaded: bool, hex: bool) -> String {
     match (&finder.seen, cell) {
         (None, _) => text::dialog_finder_searching().to_owned(),
         (Some(Err(error)), _) => error.clone(),
         (Some(Ok(seen)), _) if seen.lines.is_empty() => text::dialog_finder_none().to_owned(),
-        (Some(Ok(_)), Some(cell)) => text::dialog_finder_result(format_args!("{cell:.2}")),
+        (Some(Ok(_)), Some(cell)) => {
+            let size = text::dialog_finder_result(format_args!("{cell:.2}"));
+            if loaded {
+                size
+            } else {
+                format!("{size}. {}", text::dialog_finder_loading())
+            }
+        }
+        // A hex grid gives a line at each half hex, and two neighbors bound
+        // no cell. The search reads no hex grid, so the helper says how to
+        // pick one by hand.
+        (Some(Ok(_)), None) if hex => text::dialog_finder_hex().to_owned(),
         (Some(Ok(_)), None) => text::dialog_finder_pick().to_owned(),
     }
 }
 
 /// The map with the size of a cell the DM picked, and where its grid starts.
 ///
-/// The size goes into the pixels of the image on the GPU, because a map of
-/// a size past the GPU draws from a smaller copy and counts its cells on
-/// that copy. The start goes into the snap offset of #32, on the axis the
-/// two lines give, so a snapped move lays the map on the canvas grid. A
-/// map at an angle keeps its offset: its axes are no longer the axes of
-/// the canvas, and a snap does not bring them back.
+/// `file` is the size of the file, and `gpu` the size of the copy the canvas
+/// draws, both in pixels. The size goes into the pixels of that copy: a map
+/// past the largest texture draws from a smaller copy and counts its cells
+/// on it. The start goes into the snap offset of #32, on the axis the two
+/// lines give, so a snapped move lays the map on the canvas grid.
+///
+/// Two maps keep the offset they had. A map at an angle has axes that are
+/// not the axes of the canvas. A hex canvas snaps to the middle of a hex,
+/// not to a line, so an offset from a line puts the map half a hex off.
 fn grid_of(
-    frame: &Frame<'_>,
     map: &crate::scene::Asset,
     file: (u32, u32),
+    gpu: (u32, u32),
+    cells: Cells,
     way: Way,
     first: f64,
     cell: f64,
 ) -> crate::scene::Asset {
-    let on_gpu =
-        (frame.size_of)(&map.path).map_or(1.0, |size| f64::from(size.0) / f64::from(file.0.max(1)));
+    let on_gpu = f64::from(gpu.0) / f64::from(file.0.max(1));
     let mut after = map.clone();
     after.grid_px = (cell * on_gpu).clamp(MIN_GRID_PX, MAX_GRID_PX);
     let turned = map.rotation.rem_euclid(std::f64::consts::TAU);
     let square = turned < 1e-9 || std::f64::consts::TAU - turned < 1e-9;
-    if !square {
+    if !square || cells.kind.is_hex() {
         return after;
     }
-    let step = frame.settings.cells().width();
+    let step = cells.width();
     match way {
         Way::Down => {
             let at = if map.flip_x {
@@ -622,8 +668,132 @@ fn grid_of(
 
 #[cfg(test)]
 mod tests {
-    use super::{Look, pick};
-    use crate::lines::{Line, Way};
+    use std::path::PathBuf;
+    use std::sync::mpsc::channel;
+
+    use super::{Finder, Found, Look, Seen, grid_of, pick, say};
+    use crate::grid::{Cells, Kind};
+    use crate::lines::{self, Line, Way};
+    use crate::scene::{Asset, Shown};
+    use crate::text;
+
+    /// A map at true size, one inch to fifty pixels, with an offset of its own.
+    fn map() -> Asset {
+        Asset {
+            id: 1,
+            shown: Shown::default(),
+            path: PathBuf::from("map.png"),
+            center: (0.0, 0.0),
+            grid_px: 50.0,
+            rotation: 0.0,
+            scale: 1.0,
+            flip_x: false,
+            flip_y: false,
+            snap_offset: (0.3, 0.2),
+        }
+    }
+
+    /// What the search gives for an image of 400 by 300 with these lines.
+    fn seen(lines: Vec<Line>) -> Seen {
+        let ctx = egui::Context::default();
+        let image = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255]);
+        Seen {
+            size: (400, 300),
+            lines,
+            texture: ctx.load_texture("test", image, egui::TextureOptions::LINEAR),
+        }
+    }
+
+    #[test]
+    fn a_search_that_stops_without_an_answer_says_so() {
+        let ctx = egui::Context::default();
+        let (sender, receiver) = channel::<Result<Found, String>>();
+        let mut finder = Finder {
+            map: Some(1),
+            search: Some(receiver),
+            cells: 1.0,
+            ..Finder::default()
+        };
+        // A search at work sends nothing yet, and the dialog waits.
+        finder.poll(&ctx);
+        assert!(finder.search.is_some() && finder.seen.is_none());
+        // A thread that ends without a send drops its end of the channel.
+        drop(sender);
+        finder.poll(&ctx);
+        assert!(finder.search.is_none());
+        assert!(
+            matches!(&finder.seen, Some(Err(error)) if error == text::dialog_finder_failed()),
+            "the dialog must stop saying that it reads the map"
+        );
+    }
+
+    #[test]
+    fn use_waits_for_the_copy_on_the_gpu_and_says_why() {
+        let finder = Finder {
+            seen: Some(Ok(seen(vec![line(Way::Down, 10.0)]))),
+            ..Finder::default()
+        };
+        let size = text::dialog_finder_result(format_args!("40.00"));
+        assert_eq!(say(&finder, Some(40.0), true, false), size);
+        let waits = say(&finder, Some(40.0), false, false);
+        assert!(waits.starts_with(&size), "the size still shows: {waits}");
+        assert!(waits.ends_with(text::dialog_finder_loading()), "{waits}");
+    }
+
+    #[test]
+    fn a_hex_canvas_says_how_to_pick_a_hex() {
+        let finder = Finder {
+            seen: Some(Ok(seen(vec![line(Way::Down, 10.0)]))),
+            ..Finder::default()
+        };
+        assert_eq!(say(&finder, None, true, true), text::dialog_finder_hex());
+        assert_eq!(say(&finder, None, true, false), text::dialog_finder_pick());
+    }
+
+    #[test]
+    fn use_writes_the_size_in_the_pixels_of_the_copy() {
+        // A file of 12000 pixels draws from a copy of 6000, so a cell of 140
+        // pixels of the file is 70 of the copy.
+        let after = grid_of(
+            &map(),
+            (12000, 6000),
+            (6000, 3000),
+            Cells::default(),
+            Way::Down,
+            10.0,
+            140.0,
+        );
+        assert!((after.grid_px - 70.0).abs() < 1e-9, "{}", after.grid_px);
+    }
+
+    #[test]
+    fn a_square_canvas_takes_the_start_of_the_grid() {
+        let after = grid_of(
+            &map(),
+            (400, 300),
+            (400, 300),
+            Cells::default(),
+            Way::Down,
+            10.0,
+            40.0,
+        );
+        assert!((after.snap_offset.0 - lines::offset(10.0, 40.0, 1.0, 1.0)).abs() < 1e-9);
+        // The two lines run down, so they say nothing of the other axis.
+        assert!((after.snap_offset.1 - 0.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_hex_canvas_keeps_the_offset_the_map_had() {
+        // A hex canvas snaps to the middle of a hex. An offset from a line
+        // would put the map half a hex off, so the map keeps its own.
+        for kind in [Kind::HexPointyTop, Kind::HexFlatTop] {
+            let cells = Cells { kind, cell: 1.0 };
+            let after = grid_of(&map(), (400, 300), (400, 300), cells, Way::Down, 10.0, 40.0);
+            assert_eq!(after.snap_offset, map().snap_offset, "{kind:?}");
+            // The size is still the size.
+            assert!((after.grid_px - 40.0).abs() < 1e-9);
+        }
+    }
 
     fn line(way: Way, at: f64) -> Line {
         Line {
