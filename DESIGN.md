@@ -394,9 +394,12 @@ The Find the grid button of the Map panel opens this dialog on the map the DM ho
 - The line under the pointer takes `accent` at 2 px. A picked line takes `accent` at 3 px.
 - A click on a line picks it, and a click on a picked line lets it go. A line across the first one starts the pick over, and a third line of the same way takes the place of the second.
 - With two lines picked, a preview grid of the cell they give draws in `accent` at 70 % over the whole image, from the first line. The DM sees whether it holds to the far edge of the map.
-- The footer holds Cells between with a whole-number input, then the helper line, then Cancel and Use on the right. Use stands dead until two lines give a cell.
+- The footer holds Cells between with a whole-number input, then the helper line, then Cancel and Use on the right. Use stands dead until two lines give a cell and the map shows on the canvas.
 - The helper line says what the dialog waits for: "The program reads the lines of the map", "Click two lines that bound a cell", the size such as "199.83 px per cell", or "No line found on this map" with a pointer to Measure a cell.
-- Use writes the pixels per cell to the map and the start of its grid to the snap offset, on the axis of the two lines, as one step. A map at an angle keeps the offset it had. Cancel, `Escape` and a click on the scrim change nothing.
+- Use writes the size in pixels of the GPU copy, so it waits until the loader makes that copy. Until then the helper line adds "Use waits until the map shows on the canvas".
+- The helper line reports a search that stops without an answer, and points to Measure a cell.
+- On a hex canvas the helper line says "A hex grid gives a line at each half hex". The search reads no hex grid. Two neighbor lines bound half a hex, and the two sides of one hex bound a whole one.
+- Use writes the pixels per cell to the map and the start of its grid to the snap offset, on the axis of the two lines, as one step. A map at an angle keeps the offset it had, and so does a map on a hex canvas. A hex canvas snaps to hex middles, so a line offset would set the map half a hex off. Cancel, `Escape` and a click on the scrim change nothing.
 - The search reads the whole file on a thread of its own. The picture in the dialog is a copy no larger than the largest texture the GPU takes, and the lines count in the pixels of the file.
 
 ## 10. Other overlays
