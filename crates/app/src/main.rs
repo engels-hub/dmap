@@ -22,6 +22,7 @@ mod icon;
 mod icons;
 mod images;
 mod ink;
+mod lines;
 mod maps;
 mod overlay;
 mod pointer;

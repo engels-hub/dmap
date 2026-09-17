@@ -9,6 +9,7 @@
 mod canvas;
 mod dialog;
 mod draw;
+mod finder;
 mod panel;
 mod toolbar;
 mod tree;
@@ -37,6 +38,7 @@ pub use draw::measure_overlay;
 use canvas::{canvas_area, frame_tv_box, select_tool, table_tool, undo_keys};
 use dialog::{Dialog, history_dialog, scenes_dialog, settings_dialog};
 use draw::{Draw, draw_tool};
+use finder::{Finder, find_the_grid};
 use panel::{Views, objects_panel, properties_panel, say_lengths};
 use toolbar::{Press, history_button, toolbar};
 use tree::Tree;
@@ -288,6 +290,8 @@ pub struct DmUi {
     dialog: Dialog,
     /// Whether the history dialog stands. DESIGN.md 9.8.
     history_open: bool,
+    /// The Find the grid dialog. DESIGN.md 9.9.
+    finder: Finder,
     /// The theme the context carries, so a change installs once.
     theme: theme::Mode,
     /// The language the catalog holds, for the same reason.
@@ -499,6 +503,9 @@ struct Select {
     note: String,
     drag: Option<Drag>,
     measure: Option<Measure>,
+    /// The map the DM asked the Find the grid dialog for. The frame that
+    /// raised it opens the dialog. Issue #35.
+    find_grid: Option<NodeId>,
     /// The stroke as it stood when the DM took hold of a field.
     ///
     /// A drag of a number runs over many frames, and every one of them
@@ -732,6 +739,7 @@ impl DmUi {
             tree: Tree::default(),
             dialog: Dialog::on_tab(tab),
             history_open: false,
+            finder: Finder::default(),
             theme: theme::Mode::default(),
             language: text::DEFAULT.to_owned(),
             ui_scale: theme::DEFAULT_SCALE,
@@ -795,6 +803,7 @@ impl DmUi {
         let tree = &mut self.tree;
         let dialog = &mut self.dialog;
         let history_open = &mut self.history_open;
+        let finder = &mut self.finder;
         let frame_box = &mut self.frame_box;
         let zoom_goes_to = &mut self.zoom_goes_to;
         let selected_before = select.chosen.clone();
@@ -806,7 +815,8 @@ impl DmUi {
             // floats over it. So the canvas takes the whole rect, and the
             // panels come after it and draw on top.
             let rect = ui.ctx().content_rect();
-            let over = popup_open || scenes.open || dialog.open || *history_open;
+            let over =
+                popup_open || scenes.open || dialog.open || *history_open || finder.is_open();
             if !over {
                 frame_tv_box(ui, &mut frame, rect, viewport, *frame_box);
                 // The ask lives one frame, because the panel that raised it
@@ -830,6 +840,8 @@ impl DmUi {
             edited |= objects_panel(ui.ctx(), &mut frame, select, tree, tokens);
             let mut views = Views { select, table };
             edited |= properties_panel(ui.ctx(), &mut frame, &mut views, *tool, frame_box, tokens);
+            let asked = views.select.find_grid.take();
+            edited |= find_the_grid(ui, finder, asked, &mut frame, tokens);
             if history_button(ui, tokens) {
                 *history_open = !*history_open;
             }
