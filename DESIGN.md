@@ -208,7 +208,7 @@ A fill inside one of these boxes stays inside its border. A fill that ran to the
 
 ### 8.1 Map panel, in the Select view
 
-The title of the panel is the file name. Rows: Group with a select that moves the map to another group; Pixels per cell with an input and the Measure a cell button; Size in percent; Turn in degrees. A helper line under Measure reads "Click two corners of one cell. Escape gives it up." The footer holds Turn, Flip and Delete.
+The title of the panel is the file name. Rows: Group with a select that moves the map to another group; Pixels per cell with an input, the Measure a cell button and the Find the grid button; Size in percent; Turn in degrees. A helper line under Measure reads "Click two corners of one cell. Escape gives it up." The footer holds Turn, Flip and Delete.
 
 ### 8.2 TV box panel, in the Table view
 
@@ -383,6 +383,21 @@ The release archive keeps the same three files beside the program. This tab is t
 - A step the DM took back draws in `mute`. It stays on the list, so a walk forward is one click.
 - A click on a row takes the scene to the state after that step.
 - The footer holds the helper "A click on a step takes the scene there".
+
+### 9.9 Find the grid
+
+The Find the grid button of the Map panel opens this dialog on the map the DM holds. The program finds the straight lines of the map file, and the DM picks the two that bound a cell. The program picks nothing: a tile with a joint across its middle gives a line there too, and only a person who looks at the map can tell that joint from the grid. Issue #35.
+
+- Size 1040 × 760 px, which the window shrinks when it must. A map needs more room than the dialogs above.
+- The body is the image, on the `field` background, with 18 px and 20 px of padding. It fits the body when the dialog opens. The wheel zooms around the pointer, and a drag with the middle button or with `Space` pans.
+- Each line the search found draws across the whole image: a 1 px pale stroke over a 3 px dark one, so it reads on a dark map and on a pale one. A line that runs along more of the image draws more solid.
+- The line under the pointer takes `accent` at 2 px. A picked line takes `accent` at 3 px.
+- A click on a line picks it, and a click on a picked line lets it go. A line across the first one starts the pick over, and a third line of the same way takes the place of the second.
+- With two lines picked, a preview grid of the cell they give draws in `accent` at 70 % over the whole image, from the first line. The DM sees whether it holds to the far edge of the map.
+- The footer holds Cells between with a whole-number input, then the helper line, then Cancel and Use on the right. Use stands dead until two lines give a cell.
+- The helper line says what the dialog waits for: "The program reads the lines of the map", "Click two lines that bound a cell", the size such as "199.83 px per cell", or "No line found on this map" with a pointer to Measure a cell.
+- Use writes the pixels per cell to the map and the start of its grid to the snap offset, on the axis of the two lines, as one step. A map at an angle keeps the offset it had. Cancel, `Escape` and a click on the scrim change nothing.
+- The search reads the whole file on a thread of its own. The picture in the dialog is a copy no larger than the largest texture the GPU takes, and the lines count in the pixels of the file.
 
 ## 10. Other overlays
 

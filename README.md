@@ -138,7 +138,7 @@ Pick a view in the toolbar at the bottom of the window. The toolbar comes in two
 | Grow or shrink it a tenth | `+` or `-` |
 | Move it up or down the stack | `Page Up` or `Page Down`. Nodes that sit in one group move together |
 | Delete what you hold | `Delete`, or the Delete button in the panel. A group goes with everything in it |
-| Set the pixels in one grid cell | Type the number in the panel, or press Measure a cell and click two corners of one cell |
+| Set the pixels in one grid cell | Type the number in the panel, press Measure a cell and click two corners of one cell, or press Find the grid and pick two lines of the grid |
 | Give up a measure | `Escape` |
 
 **Draw** marks the map, and lays an area of effect over it. Everything you draw sits in inches on the canvas, so it stays where you put it when a map moves under it.
@@ -191,6 +191,8 @@ The list shows one group and what is in it, never the whole tree. Click a group 
 To rename a group, go into it with a click, then double-click its name at the top of the list. `Enter` keeps the new name and `Escape` gives it up.
 
 A drawing takes the same three drags a map takes: a drag moves it, a corner handle grows it, and the handle above the top edge turns it. A growth takes the width of the line and the reach of an effect with it, so a fireball that covered four cells covers eight. One gesture is one step, whether it holds maps, drawings, or both.
+
+**Find the grid**, in the panel of a map, opens the map in a dialog of its own and marks every straight line on it. Click two lines of the grid. Two lines side by side give one cell; for a size that holds across a large map, pick two lines far apart and type how many cells lie between them. A preview grid shows whether the size holds to the far edge. Use writes it to the map, and `Ctrl+Z` takes it back. The program never picks the lines for you, because a map with a pattern inside each tile has lines that are not the grid.
 
 **Delete** takes what you hold out of the scene, by the key or by the button in the panel. A group goes with everything under it. `Ctrl+Z` brings it all back, each node in the group and the place it sat in. The image files stay in the scene folder, so nothing you delete is lost from the disk.
 

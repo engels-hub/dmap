@@ -80,7 +80,7 @@ impl Dialog {
 ///
 /// `body` draws inside the rest of the frame. Returns `true` when the DM
 /// asked to close the dialog.
-fn dialog_frame(
+pub(super) fn dialog_frame(
     ctx: &egui::Context,
     id: &str,
     title: &str,
