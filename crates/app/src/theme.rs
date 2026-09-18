@@ -143,8 +143,8 @@ pub const LIGHT: Tokens = Tokens {
     rule: Color32::from_rgb(0xb9, 0xad, 0x92),
     grid: (0x9f_b1_c4, 0.33),
     accent: Color32::from_rgb(0xb4, 0x45, 0x2c),
-    // `rgba(43, 36, 25, 0.12)`, multiplied by 31/255.
-    dim: Color32::from_rgba_premultiplied(5, 4, 3, 31),
+    // `rgba(43, 36, 25, 0.24)`, multiplied by 61/255.
+    dim: Color32::from_rgba_premultiplied(10, 9, 6, 61),
     // `rgba(43, 36, 25, 0.35)`, multiplied by 89/255.
     scrim: Color32::from_rgba_premultiplied(15, 13, 9, 89),
     shadow: Some(Color32::from_rgb(0xb9, 0xad, 0x92)),
@@ -162,8 +162,8 @@ pub const DARK: Tokens = Tokens {
     rule: Color32::from_rgb(0x2c, 0x2e, 0x31),
     grid: (0x2c_2e_31, 1.0),
     accent: Color32::from_rgb(0xf0, 0xa8, 0x30),
-    // `rgba(16, 17, 18, 0.45)`, multiplied by 115/255.
-    dim: Color32::from_rgba_premultiplied(7, 8, 8, 115),
+    // `rgba(16, 17, 18, 0.6)`, multiplied by 153/255.
+    dim: Color32::from_rgba_premultiplied(10, 10, 11, 153),
     // `rgba(0, 0, 0, 0.5)`, multiplied by 128/255.
     scrim: Color32::from_rgba_premultiplied(0, 0, 0, 128),
     shadow: None,
