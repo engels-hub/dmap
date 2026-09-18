@@ -429,7 +429,11 @@ fn draw_tv_box(
     }
     // DESIGN.md 5.4: the zoom stands above the top-right corner, and takes
     // the accent while the box is at true size. A box wider than the canvas
-    // keeps its label on screen, since the corner it belongs to is not.
+    // keeps its label on screen, since the corner it belongs to is not. A
+    // box wholly off the canvas has the marker instead. Issue #44.
+    if !canvas.intersects(inside) {
+        return;
+    }
     let corner = egui::pos2(handles[1].x, handles[1].y - ZOOM_LABEL_GAP);
     painter.text(
         canvas.shrink(ZOOM_LABEL_GAP).clamp(corner),

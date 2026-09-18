@@ -129,12 +129,15 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - Four square handles, 8 px, `accent`, centered on the corners. They stand 4 px outside the box.
 - The area outside the box gets the `dim` wash.
 - The zoom label sits above the top-right corner, 14 px bold, for example `100 %`. The label is `accent` when the box snaps to true size. Otherwise it is `ink`.
+- The label hides while no part of the box is on the canvas. The marker of section 5.5 takes its place.
 
 ### 5.5 Marker for a box off the screen
 
 - The marker shows only when no part of the TV box is on the canvas.
 - It is a solid `accent` triangle, 28 px tall and 20 px deep. It points at the box center.
 - It sits on the canvas edge, where the line from the canvas center to the box center crosses that edge. It stays whole inside the canvas.
+- It stays clear of the panels, the toolbar and the History button. Under one of them, it moves along the same line toward the canvas center until it is clear.
+- It shows in every view. The TV window never shows it.
 - The marker takes no click and no drag. It is paint only.
 
 ### 5.6 Marks on the canvas

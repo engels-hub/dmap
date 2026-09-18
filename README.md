@@ -97,6 +97,8 @@ The DM view belongs to the game master alone. The TV never moves with it.
 
 A map the TV does not show draws faint on your own screen. You see at a glance what the players cannot see.
 
+When the TV box is off your screen, a triangle on the edge of the canvas points to it. Press `T` to go back to the box.
+
 ### Your own keys
 
 Press `?` to open the list of keys. It is the **Shortcuts** tab of Settings. The view you work in comes first.
