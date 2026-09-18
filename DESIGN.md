@@ -129,6 +129,7 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - Four square handles, 8 px, `accent`, centered on the corners. They stand 4 px outside the box.
 - The area outside the box gets the `dim` wash.
 - The zoom label sits above the top-right corner, 14 px bold, for example `100 %`. The label is `accent` when the box snaps to true size. Otherwise it is `ink`.
+- The label hides while no part of the box is on the canvas. The marker of section 5.5 takes its place.
 
 ### 5.5 Marker for a box off the screen
 
