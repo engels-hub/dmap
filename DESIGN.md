@@ -77,6 +77,7 @@ Caution: a scale under 100 % takes a button under the 24 px floor of section 6. 
 - Glyphs in the toolbar: `mouse-pointer` (Select), `pencil` (Draw), `drafting-compass` (Edit), `monitor` (Table), `layers` (Scenes), `plus` (Add map), `sliders-horizontal` (Settings).
 - Glyphs on the second bar of the Edit view: `brick-wall` (Walls), `door-open` (Doors), `sun` (Light), `cloud-fog` (Fog).
 - Glyphs in a dialog: `monitor` (Table tab), `grid-3x3` (Grid tab), `sun` (Light tab), `keyboard` (Shortcuts tab), `info` (About tab), `x` (close), `chevron-down` (select), `check` (checkbox), `import` (Import).
+- Glyphs in a key chip: `arrow-big-up` (Shift), `space`, `corner-down-left` (Enter), `delete` (Backspace), `arrow-left`, `arrow-right`, `arrow-up`, `arrow-down`, `mouse-left`, `mouse-right`, `mouse` (the wheel and the middle button).
 - Glyphs in a panel or a menu: `folder`, `image`, `film`, `eye`, `eye-off`, `monitor-off`, `star`, `search`, `chevron-right`, `arrow-up`, `arrow-down`, `rotate-cw`, `flip-horizontal-2`, `flip-vertical-2`, `ruler`, `trash`, `minus` (line), `square`, `circle`, `eraser`, `play`, `pause`, `undo`, `triangle-alert`.
 
 Every name above is a name the Lucide set holds. Check a new one against the set before this document takes it: the set renames a glyph from time to time, and a name that reads well is not always a name that exists.
@@ -334,11 +335,15 @@ A Reset button is dead while the row already shows the token of the theme. A row
 
 ### 9.4 Settings, Shortcuts tab
 
-- The view the DM works in comes first. A 14 px bold line names each group.
-- Each row is 34 px high with a 1 px `rule` bottom border: the action 14 px in a 270 px column, then the key chip, then the Change button 24 px high on the right.
+- The view the DM works in comes first, then the controls of every view, then the other views. A 14 px bold line names each group.
+- Each row is 34 px high with a 1 px `rule` bottom border: the action 14 px in a 200 px column, then the key chips, then the Change button 24 px high on the right. The body of the dialog is 452 px wide, so a wider column leaves no room for `Ctrl + Shift + Z`. A long name wraps inside the column.
+- A control can hold two keys, such as Redo. Each key takes a chip of its own. A new key takes the place of both.
+- A chip draws Shift, Space, Enter, Backspace, the arrows and the mouse as glyphs. `Ctrl`, `Alt` and the other keys stay words. A gesture with two ways to do it takes two chips, never the word "or".
+- A key that rides on a drag or a click, such as `Ctrl` for a move with no snap, takes a row with no Change button. The DM cannot change it.
+- The Change button stands 12 px from the right edge, so the scroll bar does not cover it.
 - The chip takes an `accent` border and the text "Press a key" while the program waits for the new key.
 - Caution: the program refuses a key that another control holds. A 14 px `accent` line under the row names that control.
-- The footer holds "Bring back the default keys" on the left and Close on the right.
+- The footer holds "Reset to default" on the left and Close on the right.
 
 ### 9.5 Settings, About tab
 

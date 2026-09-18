@@ -8,6 +8,7 @@
 
 use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
 use crate::command::{Both, Change, Deed, Grow, SetAssets, SetStrokes, SetTvBox, Turn, reshape};
+use crate::keys::{Action, Keys};
 use crate::scene::{Asset, Node, NodeId, Placed, Scene};
 use crate::stroke::Stroke;
 use crate::text;
@@ -21,9 +22,8 @@ use crate::tvbox::{TV_WIDTH_INCHES, TvBox, at_true_size, clamp_width, snap_to_tr
 use super::panel::selection_popup;
 use super::{
     BoxDrag, Button, DASH, Drag, FRAME_MARGIN, Frame, GROUP_MARGIN, GROUP_REACH, HANDLE_REACH,
-    HANDLE_SIZE, HANDLE_STANDOFF, KEY_ZOOM_STEP, Measure, PICK_REACH, Pointer, REDO, REDO_Y,
-    ROTATION_HANDLE_OFFSET, Select, Table, UNDO, View, ZOOM_IN, ZOOM_IN_EQUALS, ZOOM_LABEL_GAP,
-    ZOOM_LABEL_SIZE, ZOOM_OUT, ZOOM_RESET,
+    HANDLE_SIZE, HANDLE_STANDOFF, KEY_ZOOM_STEP, Measure, PICK_REACH, Pointer,
+    ROTATION_HANDLE_OFFSET, Select, Table, View, ZOOM_LABEL_GAP, ZOOM_LABEL_SIZE,
 };
 
 /// The Select tool on the canvas: pick, move, scale, turn and flip maps.
@@ -37,7 +37,7 @@ pub(super) fn select_tool(
     zoom_goes_to: &mut Option<bool>,
     tokens: Tokens,
 ) -> bool {
-    let (rect, view, pointer) = canvas_area(ui, frame.camera, viewport, false, zoom_goes_to);
+    let (rect, view, pointer) = canvas_area(ui, frame, viewport, false, zoom_goes_to);
     let snap = !ui.input(|i| i.modifiers.ctrl);
 
     // The measure tool takes the canvas for two clicks. Escape gives up.
@@ -210,7 +210,7 @@ pub(super) fn table_tool(
     zoom_goes_to: &mut Option<bool>,
     tokens: Tokens,
 ) -> bool {
-    let (rect, view, pointer) = canvas_area(ui, frame.camera, viewport, true, zoom_goes_to);
+    let (rect, view, pointer) = canvas_area(ui, frame, viewport, true, zoom_goes_to);
     let corners = frame.scene.tv_box.corners(frame.tv_viewport);
     let handles: Vec<egui::Pos2> = corners.iter().map(|&c| view.to_screen(c)).collect();
     let handle_points: Vec<(f64, f64)> = handles
@@ -267,7 +267,12 @@ pub(super) fn table_tool(
     // The keys wait for the drag to end. A drag rewrites the box from its
     // start state every frame, so a key press in the middle of one is lost.
     if table.drag.is_none() {
-        edited |= arrow_keys(ui, &mut box_now, frame.settings.cells().cell);
+        edited |= arrow_keys(
+            ui,
+            &frame.settings.keys,
+            &mut box_now,
+            frame.settings.cells().cell,
+        );
     }
 
     // Ctrl and Alt with the wheel reach a zoom without a drag on a handle.
@@ -339,7 +344,7 @@ fn drag_box(tv_box: &mut TvBox, drag: BoxDrag, cursor: (f64, f64)) -> bool {
 
 /// The arrow keys move the box one grid cell. Held keys repeat, so the DM
 /// can walk the box across the canvas.
-fn arrow_keys(ui: &egui::Ui, tv_box: &mut TvBox, cell: f64) -> bool {
+fn arrow_keys(ui: &egui::Ui, keys: &Keys, tv_box: &mut TvBox, cell: f64) -> bool {
     // A number in the panel takes the keyboard first. egui leaves the left
     // and right keys to us, so the box would walk while the DM types.
     if ui.ctx().egui_wants_keyboard_input() {
@@ -349,16 +354,20 @@ fn arrow_keys(ui: &egui::Ui, tv_box: &mut TvBox, cell: f64) -> bool {
     ui.input(|input| {
         for event in &input.events {
             let egui::Event::Key {
-                key, pressed: true, ..
+                key,
+                pressed: true,
+                repeat,
+                modifiers,
+                ..
             } = event
             else {
                 continue;
             };
-            let (dx, dy) = match key {
-                egui::Key::ArrowLeft => (-cell, 0.0),
-                egui::Key::ArrowRight => (cell, 0.0),
-                egui::Key::ArrowUp => (0.0, -cell),
-                egui::Key::ArrowDown => (0.0, cell),
+            let (dx, dy) = match keys.action_of(*key, *modifiers, *repeat, &BOX_KEYS) {
+                Some(Action::BoxLeft) => (-cell, 0.0),
+                Some(Action::BoxRight) => (cell, 0.0),
+                Some(Action::BoxUp) => (0.0, -cell),
+                Some(Action::BoxDown) => (0.0, cell),
                 _ => continue,
             };
             tv_box.center = (tv_box.center.0 + dx, tv_box.center.1 + dy);
@@ -622,6 +631,26 @@ fn held_ink(scene: &Scene, chosen: &[NodeId]) -> Vec<Stroke> {
         .collect()
 }
 
+/// The controls the Select view answers to. Issue #36.
+const SELECT_KEYS: [Action; 8] = [
+    Action::Turn,
+    Action::FlipAcross,
+    Action::FlipDown,
+    Action::Grow,
+    Action::Shrink,
+    Action::Raise,
+    Action::Lower,
+    Action::Delete,
+];
+
+/// The controls the Table view answers to. Issue #36.
+const BOX_KEYS: [Action; 4] = [
+    Action::BoxLeft,
+    Action::BoxRight,
+    Action::BoxUp,
+    Action::BoxDown,
+];
+
 /// What the keyboard does to the selected map. Returns `true` when it
 /// changed one.
 fn keys(ui: &egui::Ui, select: &mut Select, frame: &mut Frame<'_>) -> bool {
@@ -644,28 +673,36 @@ fn keys(ui: &egui::Ui, select: &mut Select, frame: &mut Frame<'_>) -> bool {
             let egui::Event::Key {
                 key,
                 pressed: true,
-                repeat: false,
+                repeat,
                 modifiers,
                 ..
             } = event
             else {
                 continue;
             };
+            let Some(action) =
+                frame
+                    .settings
+                    .keys
+                    .action_of(*key, *modifiers, *repeat, &SELECT_KEYS)
+            else {
+                continue;
+            };
             // The selection goes, so nothing is left for a later key of
             // the same batch to act on.
-            if matches!(key, egui::Key::Delete | egui::Key::Backspace) {
+            if action == Action::Delete {
                 edited |= delete_held(select, frame);
                 break;
             }
             // Order lives inside one group, so these two keys move nodes
             // past their brothers and sisters and never leave the parent.
-            if matches!(key, egui::Key::PageUp | egui::Key::PageDown) {
+            if matches!(action, Action::Raise | Action::Lower) {
                 if crate::scene::share_parent(frame.scene, &held).is_none() {
                     text::panel_objects_one_group().clone_into(&mut select.note);
                     continue;
                 }
                 select.note.clear();
-                let toward_top = *key == egui::Key::PageUp;
+                let toward_top = action == Action::Raise;
                 let subject = held
                     .first()
                     .map(|id| crate::scene::name_of(frame.scene, *id))
@@ -686,16 +723,12 @@ fn keys(ui: &egui::Ui, select: &mut Select, frame: &mut Frame<'_>) -> bool {
                 continue;
             };
             let mut after = before.clone();
-            match key {
-                egui::Key::R => after.rotation += std::f64::consts::FRAC_PI_2,
-                egui::Key::F if modifiers.shift => after.flip_y = !before.flip_y,
-                egui::Key::F => after.flip_x = !before.flip_x,
-                // Plus is the numpad key; Equals is the shared "=/+" main
-                // row key, which egui reports without needing Shift.
-                egui::Key::Plus | egui::Key::Equals => {
-                    after.scale = step_scale(before.scale, true);
-                }
-                egui::Key::Minus => after.scale = step_scale(before.scale, false),
+            match action {
+                Action::Turn => after.rotation += std::f64::consts::FRAC_PI_2,
+                Action::FlipDown => after.flip_y = !before.flip_y,
+                Action::FlipAcross => after.flip_x = !before.flip_x,
+                Action::Grow => after.scale = step_scale(before.scale, true),
+                Action::Shrink => after.scale = step_scale(before.scale, false),
                 _ => continue,
             }
             frame.history.run(
@@ -727,14 +760,11 @@ pub(super) fn undo_keys(ui: &egui::Ui, frame: &mut Frame<'_>, dragging: bool) ->
     if dragging || ui.ctx().egui_wants_keyboard_input() || frame.history.holding() {
         return false;
     }
-    // Redo goes first. Ctrl and Shift with Z would answer to the undo
-    // shortcut as well, and the one that reads the event first takes it.
-    let redo =
-        ui.input_mut(|input| input.consume_shortcut(&REDO) || input.consume_shortcut(&REDO_Y));
-    if redo {
+    let keys = &frame.settings.keys;
+    if ui.input_mut(|input| keys.pressed(input, Action::Redo)) {
         return frame.history.redo(frame.scene);
     }
-    if ui.input_mut(|input| input.consume_shortcut(&UNDO)) {
+    if ui.input_mut(|input| keys.pressed(input, Action::Undo)) {
         return frame.history.undo(frame.scene);
     }
     false
@@ -778,11 +808,13 @@ fn measure_click(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64))
 /// The canvas area, and how this frame reads the pointer over it.
 pub(super) fn canvas_area(
     ui: &mut egui::Ui,
-    camera: &mut Camera,
+    frame: &mut Frame<'_>,
     viewport: (u32, u32),
     box_takes_zoom: bool,
     zoom_goes_to: &mut Option<bool>,
 ) -> (egui::Rect, View, Pointer) {
+    let camera = &mut *frame.camera;
+    let keys = &frame.settings.keys;
     let rect = ui.available_rect_before_wrap();
     let response = ui.interact(rect, ui.id().with("canvas"), egui::Sense::click_and_drag());
     let ppp = f64::from(ui.ctx().pixels_per_point());
@@ -839,6 +871,7 @@ pub(super) fn canvas_area(
     }
     key_zoom(
         ui,
+        keys,
         camera,
         pos.map(|at| (f64::from(at.x) * ppp, f64::from(at.y) * ppp)),
         viewport,
@@ -867,13 +900,19 @@ pub(super) fn canvas_area(
 /// Ctrl with plus or minus steps the zoom, and Ctrl with zero goes back to
 /// the zoom a new project opens with. The point under the pointer stays
 /// where it is, as it does for the wheel.
-fn key_zoom(ui: &egui::Ui, camera: &mut Camera, pointer: Option<(f64, f64)>, viewport: (u32, u32)) {
+fn key_zoom(
+    ui: &egui::Ui,
+    keys: &Keys,
+    camera: &mut Camera,
+    pointer: Option<(f64, f64)>,
+    viewport: (u32, u32),
+) {
     let (steps, reset) = ui.input_mut(|input| {
-        let in_ = input.consume_shortcut(&ZOOM_IN) || input.consume_shortcut(&ZOOM_IN_EQUALS);
-        let out = input.consume_shortcut(&ZOOM_OUT);
+        let in_ = keys.pressed(input, Action::ZoomIn);
+        let out = keys.pressed(input, Action::ZoomOut);
         (
             i32::from(in_) - i32::from(out),
-            input.consume_shortcut(&ZOOM_RESET),
+            keys.pressed(input, Action::ZoomReset),
         )
     });
     if steps == 0 && !reset {
@@ -907,7 +946,8 @@ pub(super) fn frame_tv_box(
     asked: bool,
 ) {
     let asked = asked
-        || (ui.input(|i| i.key_pressed(egui::Key::T)) && !ui.ctx().egui_wants_keyboard_input());
+        || (!ui.ctx().egui_wants_keyboard_input()
+            && ui.input_mut(|input| frame.settings.keys.pressed(input, Action::FrameBox)));
     if !asked {
         return;
     }

@@ -28,6 +28,7 @@ Version 0.2.0 has these features:
 - Groups of maps and drawings, each with a switch for each screen.
 - Undo, with a history that stays with the scene.
 - Freeze holds the TV on one frame while you prepare the next move.
+- A list of every key, and a key of your own for each control.
 - A light theme, a dark theme and a translation file for each language.
 
 dmap runs on Linux and on Windows. The code is Rust with wgpu, winit and egui.
@@ -42,7 +43,6 @@ These features are not in yet. Each one has an issue on the [Issues](https://git
 - Foundry VTT scenes and Universal VTT files (#16, #17)
 - Walls, doors and light that the GPU calculates (#18, #19, #20, #21)
 - Fog of war (#22)
-- A list of the keyboard controls, with keys you choose (#36)
 
 ## Install
 
@@ -91,10 +91,19 @@ The canvas takes its controls from Figma. These work in every view:
 | Take the last change back | `Ctrl` with `Z` |
 | Make the change again | `Ctrl` and `Shift` with `Z`, or `Ctrl` with `Y` |
 | Freeze the TV, or let it go | `P`, or the Freeze button |
+| Open the list of keys | `?` |
 
 The DM view belongs to the game master alone. The TV never moves with it.
 
 A map the TV does not show draws faint on your own screen. You see at a glance what the players cannot see.
+
+### Your own keys
+
+Press `?` to open the list of keys. It is the **Shortcuts** tab of Settings. The view you work in comes first.
+
+Press **Change** on a row, then press the new key. The program refuses a key that another control holds, and names that control. `Escape` gives up the change. **Reset to default** undoes every change.
+
+A key that rides on a drag or a click, such as `Ctrl` for a move with no snap, stays as it is. The list shows these keys with no Change button.
 
 ### Freeze
 
@@ -266,7 +275,7 @@ The program copies an image you add into the scene folder. The same image twice 
 
 ### The config file
 
-The program keeps its own file in `~/.config/dmap/config.json`. It holds the settings of this table: the scenes folder, the last scene, the TV display, swap mode and the snap window. A scene carries none of these, so your TV does not travel with a scene you give away. To keep your scenes in a campaign folder, change `scenes_dir`.
+The program keeps its own file in `~/.config/dmap/config.json`. It holds the settings of this table: the scenes folder, the last scene, the TV display, swap mode, the snap window and the keys you changed. A scene carries none of these, so your TV does not travel with a scene you give away. To keep your scenes in a campaign folder, change `scenes_dir`.
 
 Every choice comes back on the next run: the theme, the language, the interface scale, the grid, and the Draw panel. The size and the place of the window come back too, with the view, the last Settings tab, and your place in the open scene. Another scene starts in the middle of the world.
 
@@ -287,7 +296,7 @@ Caution: a change you make to `scene.json` by hand does not change `history.json
 - **Language** holds every language the program carries. The window changes at once, with no restart. A first run takes the language of your system when a file matches it, and English when no file does.
 - **Interface scale** sets the size of the toolbar, the panels and the dialogs, from 75 % to 175 % in steps of 5 %. The maps keep their size, so a change here never moves what the players see.
 
-The **Grid** tab holds the rows in [The grid](#the-grid). The **About** tab says what dmap carries and under what terms.
+The **Grid** tab holds the rows in [The grid](#the-grid). The **Shortcuts** tab holds [your own keys](#your-own-keys). The **About** tab says what dmap carries and under what terms.
 
 ### Add a language
 

@@ -23,6 +23,7 @@ mod icon;
 mod icons;
 mod images;
 mod ink;
+mod keys;
 mod lines;
 mod maps;
 mod overlay;
@@ -377,6 +378,7 @@ impl Running {
                 grid_cell: config.grid_cell,
                 paper_light: config.paper_light.clone(),
                 paper_dark: config.paper_dark.clone(),
+                keys: config.keys.clone(),
             },
             placed: false,
             // The first frame owes the players the scene the DM opened.
@@ -835,6 +837,7 @@ impl Running {
         config.grid_kind = self.settings.grid_kind;
         config.grid_cell = self.settings.grid_cell;
         config.paper_light.clone_from(&self.settings.paper_light);
+        config.keys.clone_from(&self.settings.keys);
         config.paper_dark.clone_from(&self.settings.paper_dark);
         config.tool = self.ui.tool();
         config.settings_tab = self.ui.settings_tab();
