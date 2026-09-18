@@ -159,7 +159,7 @@ Delete takes what you hold out of the scene. `Ctrl+Z` brings it all back, each n
 | Lay a cone | Drag from its point out to where it ends. It ends as wide as it is long |
 | Lay a beam | Drag for the length and let go, then drag again for the width |
 
-A new stroke joins the Drawings group of the scene. The program keeps the color, the width, the last square you used and the way you count a diagonal. The next stroke takes them.
+A new stroke joins the Drawings group of the scene. The group goes when its last stroke goes, and the next stroke makes it again. The program keeps the color, the width, the last square you used and the way you count a diagonal. The next stroke takes them.
 
 ## Table
 

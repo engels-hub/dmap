@@ -132,6 +132,27 @@ fn take_in(group: &mut Group, id: NodeId) -> Option<Node> {
     None
 }
 
+/// Takes away every group the program made that holds nothing now.
+///
+/// The Drawings group and a group of pieces go with their last child, and
+/// a group that empties with them goes as well. A group the DM made stays,
+/// even when it holds nothing. Issue #85.
+pub fn prune(scene: &mut Scene) {
+    prune_in(&mut scene.root);
+}
+
+fn prune_in(group: &mut Group) {
+    for child in &mut group.children {
+        if let Node::Group(inside) = child {
+            prune_in(inside);
+        }
+    }
+    group.children.retain(|node| {
+        !matches!(node, Node::Group(inside)
+            if inside.children.is_empty() && (inside.ink || inside.pieces))
+    });
+}
+
 /// The group that holds every node in a selection, when one does.
 ///
 /// Order lives inside one group, so a move in order asks this first.

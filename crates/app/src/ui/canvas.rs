@@ -662,6 +662,9 @@ pub fn delete_held(select: &mut Select, frame: &mut Frame<'_>) -> bool {
         for id in &held {
             crate::scene::take_node(scene, *id);
         }
+        // A group the program made goes with its last child, inside the
+        // same change, so one undo brings both back. Issue #85.
+        crate::scene::prune(scene);
     });
     let Some(change) = change else {
         return false;
