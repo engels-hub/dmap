@@ -60,12 +60,15 @@
   "dialog.settings.tab.about": "О программе",
   "dialog.settings.display": "Экран",
   "dialog.settings.display_window": "Окно",
+  "dialog.settings.display_gone": "Экран отключён",
   "dialog.settings.size": "Размер",
   "dialog.settings.size_helper": "Диагональ экрана игроков, пиксели на дюйм - TODO: #6",
   "dialog.settings.snap": "Притягивание к 100%",
   "dialog.settings.snap_helper": "по обе стороны",
   "dialog.settings.windows": "Окна (wayland)",
   "dialog.settings.swap": "Менять окна местами вместо переноса",
+  "dialog.settings.check": "Проверка",
+  "dialog.settings.check_overlay": "Показать на телевизоре сетку в 1 дюйм и линейку в 6 дюймов",
   "dialog.settings.theme": "Тема",
   "dialog.settings.language": "Язык",
   "dialog.settings.scale": "Масштаб интерфейса",
@@ -178,5 +181,6 @@
   "history.detail.tree": "{lists} в дереве",
   "unit.px": "px",
   "unit.percent": "%",
-  "unit.degrees": "°"
+  "unit.degrees": "°",
+  "overlay.ruler": "6 дюйм."
 }

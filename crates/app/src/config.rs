@@ -140,6 +140,11 @@ pub struct Config {
     pub tv_display: TvPlacement,
     /// Swap the roles of the two windows instead of moving the DM window.
     pub swap_windows: bool,
+    /// Show the 1 inch grid and the 6 inch ruler on the TV. Issue #7.
+    ///
+    /// A DM checks the calibration once, against a real ruler, so this
+    /// starts off.
+    pub tv_check: bool,
     /// How close to true size the TV box must come before it snaps.
     pub snap_percent: f64,
     /// The theme the DM window draws. DESIGN.md 2.
@@ -233,6 +238,7 @@ impl Default for Config {
             last_scene: None,
             tv_display: TvPlacement::default(),
             swap_windows: true,
+            tv_check: false,
             snap_percent: DEFAULT_SNAP_PERCENT,
             theme: crate::theme::Mode::default(),
             language: first_language(),
@@ -341,11 +347,20 @@ pub fn scene_list(scenes_dir: &Path) -> Vec<String> {
 
 /// Whether a name can be a folder inside the scenes folder.
 ///
-/// A name with a separator in it would put the scene somewhere else, and
-/// the two dot names would climb out of the scenes folder.
+/// A scene name must be one plain folder name and nothing else. `Path`
+/// reads a name the way the platform does, so this turns away a separator,
+/// the two dot names, a root, and a Windows drive such as `C:evil`. The
+/// last one matters because `Path::join` drops the folder it was given
+/// when what it joins carries a drive, and the scene would then land
+/// outside the scenes folder.
 pub fn valid_scene_name(name: &str) -> bool {
     let trimmed = name.trim();
-    !trimmed.is_empty() && trimmed != "." && trimmed != ".." && !trimmed.contains(['/', '\\'])
+    let mut parts = Path::new(trimmed).components();
+    let one_plain_name = matches!(
+        parts.next(),
+        Some(std::path::Component::Normal(part)) if part == std::ffi::OsStr::new(trimmed)
+    );
+    one_plain_name && parts.next().is_none()
 }
 
 /// A scene name that no folder in `scenes_dir` uses yet.
@@ -382,7 +397,7 @@ pub fn new_scene(scenes_dir: &Path, wanted: &str) -> Result<String> {
 pub fn rename_scene(scenes_dir: &Path, from: &str, to: &str) -> Result<String> {
     let to = to.trim();
     if !valid_scene_name(to) {
-        bail!("{to}: a scene name cannot hold a slash, and cannot be empty");
+        bail!("{to}: a scene name must be one folder name, and cannot be empty");
     }
     if to == from {
         return Ok(to.to_owned());
@@ -497,6 +512,7 @@ mod tests {
             last_scene: Some(PathBuf::from("The Crypt")),
             tv_display: TvPlacement::Display("HDMI-1".to_owned()),
             swap_windows: true,
+            tv_check: true,
             snap_percent: 12.0,
             theme: crate::theme::Mode::Dark,
             language: "ru".to_owned(),
@@ -659,6 +675,24 @@ mod tests {
         assert!(!super::valid_scene_name(".."));
         assert!(!super::valid_scene_name("../secrets"));
         assert!(!super::valid_scene_name("maps/crypt"));
+        assert!(!super::valid_scene_name("."));
+    }
+
+    /// `Path::join` drops the folder it was given when what it joins
+    /// carries a drive, so `scenes.join("C:evil")` is `C:evil` and the
+    /// scene would land outside the scenes folder.
+    #[cfg(windows)]
+    #[test]
+    fn a_scene_name_cannot_carry_a_windows_drive() {
+        assert!(!super::valid_scene_name("C:evil"));
+        assert!(!super::valid_scene_name("C:"));
+        assert!(!super::valid_scene_name(r"C:\evil"));
+        assert!(!super::valid_scene_name(r"\\server\share"));
+        assert_eq!(
+            Path::new("/campaign/scenes").join("C:evil"),
+            PathBuf::from("C:evil"),
+            "the join this check exists to turn away"
+        );
     }
 
     #[test]

@@ -70,6 +70,14 @@ const DM_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(1440.0, 900.0);
 /// Size of the TV window when no display is free for it.
 const TV_FALLBACK_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 540.0);
 
+/// How many points the TV draws for one of its pixels.
+///
+/// No DM sits at the TV to ask for a larger interface, so the TV takes
+/// its own pixels as its points and the desktop scale factor stays out of
+/// it. [`crate::overlay::Overlay`] pins its `pixels_per_point` to the same
+/// value, and the grid line beside its labels must agree.
+const TV_POINTS_PER_PIXEL: f32 = 1.0;
+
 /// The file that holds one scene, inside the scene's own folder.
 const SCENE_FILE: &str = "scene.json";
 
@@ -171,15 +179,23 @@ fn scene_to_open(config: &mut Config) -> Result<PathBuf> {
 }
 
 /// Reads the scene file, or starts an empty scene when there is none.
+///
+/// This is the one door a scene comes through from a file, so the TV box
+/// is held inside the range the camera can draw here. A DM may edit the
+/// file by hand, and a box the camera cannot divide by blanks the TV.
 fn load_scene(dir: &Path) -> Result<Scene> {
     let path = dir.join(SCENE_FILE);
-    match std::fs::read_to_string(&path) {
+    let mut scene = match std::fs::read_to_string(&path) {
         Ok(json) => {
-            Scene::from_json(&json).with_context(|| format!("{}: broken scene", path.display()))
+            Scene::from_json(&json).with_context(|| format!("{}: broken scene", path.display()))?
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Scene::default()),
-        Err(error) => Err(error).with_context(|| format!("{}: cannot read", path.display())),
-    }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Scene::default(),
+        Err(error) => {
+            return Err(error).with_context(|| format!("{}: cannot read", path.display()));
+        }
+    };
+    scene.tv_box = scene.tv_box.clamped();
+    Ok(scene)
 }
 
 /// Reads the history of a scene, or starts an empty one.
@@ -227,7 +243,7 @@ impl Outcome {
     fn saving(scene_changed: bool) -> Self {
         Self {
             scene_changed,
-            config_changed: scene_changed,
+            config_changed: false,
             scene: None,
         }
     }
@@ -341,11 +357,8 @@ impl Running {
         let loader = Loader::spawn(gpu.device.limits().max_texture_dimension_2d, move || {
             wake_window.request_redraw();
         });
-        for asset in scene::assets(scene) {
-            loader.request(scene_dir.join(&asset.path));
-        }
         let history = load_history(&scene_dir);
-        Ok(Self {
+        let mut running = Self {
             gpu,
             dm,
             tv,
@@ -355,6 +368,7 @@ impl Running {
             settings: Settings {
                 tv_display,
                 swap_windows: config.swap_windows,
+                tv_check: config.tv_check,
                 snap_percent: clamp_snap_percent(config.snap_percent),
                 theme: config.theme,
                 language: config.language.clone(),
@@ -387,7 +401,13 @@ impl Running {
             live: None,
             loader,
             camera: config.camera.map_or(DM_CAMERA, Camera::usable),
-        })
+        };
+        // The images go through `request_images`, which is what keeps the
+        // list of files already asked for. A loop of its own here would
+        // read, decode and upload the whole scene a second time on the
+        // first frame that asks again.
+        running.request_images();
+        Ok(running)
     }
 
     /// Handles a window event. Returns what the program must do next.
@@ -490,7 +510,11 @@ impl Running {
         let gpu = &self.gpu;
         let mode = self.settings.theme;
         let paper = self.settings.paper();
-        let line = paper.line(mode, pane.window.scale_factor() as f32);
+        // The TV takes its own pixels as its points, which is what
+        // `Overlay::paint` pins its `pixels_per_point` to. A scale factor
+        // here would draw the grid thicker than the labels beside it on a
+        // TV whose desktop asks for a larger interface.
+        let line = paper.line(mode, TV_POINTS_PER_PIXEL);
         let cells = self.settings.cells();
         let canvas = paper.canvas(mode);
         // A clone of the handle, because the pane goes into the call that
@@ -504,6 +528,7 @@ impl Running {
             cells,
             mode,
             canvas,
+            self.settings.tv_check,
             |pass| {
                 map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
             },
@@ -713,9 +738,9 @@ impl Running {
         self.dm.window.set_title("dmap");
         self.dm.window.set_fullscreen(None);
         self.dm.window.set_decorations(true);
-        self.dm
-            .window
-            .set_outer_position(self.displays[target].position());
+        if let Some(display) = self.displays.get(target) {
+            self.dm.window.set_outer_position(display.position());
+        }
         self.dm.window.set_maximized(true);
         self.tv.window.set_title("dmap TV");
         self.tv.window.set_decorations(false);
@@ -755,7 +780,6 @@ impl Running {
         // starts in the middle of the world again.
         self.camera = DM_CAMERA;
         self.scene = scene.clone();
-        self.scene.tv_box = scene.tv_box.clamped();
         // Every scene brings the changes of its own folder.
         self.history = history;
         self.map_layer.clear();
@@ -794,6 +818,7 @@ impl Running {
     fn update(&self, config: &mut Config, scene: &mut Scene) {
         config.tv_display = placement_for(self.settings.tv_display, &display_names(&self.displays));
         config.swap_windows = self.settings.swap_windows;
+        config.tv_check = self.settings.tv_check;
         config.snap_percent = self.settings.snap_percent;
         config.theme = self.settings.theme;
         config.language.clone_from(&self.settings.language);
@@ -823,8 +848,8 @@ impl Running {
 /// so it leaves full screen and moves there first.
 fn place_tv(tv_window: &Window, displays: &[MonitorHandle], tv_display: Option<usize>) {
     tv_window.set_fullscreen(None);
-    if let Some(i) = tv_display {
-        tv_window.set_outer_position(displays[i].position());
+    if let Some(display) = tv_display.and_then(|i| displays.get(i)) {
+        tv_window.set_outer_position(display.position());
     }
     tv_window.set_fullscreen(fullscreen_on(displays, tv_display));
 }
@@ -862,12 +887,14 @@ fn display_of(window: &Window, displays: &[MonitorHandle]) -> Option<usize> {
 /// Moves the DM window to another display when the TV took its display.
 fn move_dm_off_tv(dm_window: &Window, displays: &[MonitorHandle], tv_display: Option<usize>) {
     let dm_display = display_of(dm_window, displays);
-    if let Some(target) = dm_move_target(tv_display, dm_display, displays.len()) {
+    if let Some(display) = dm_move_target(tv_display, dm_display, displays.len())
+        .and_then(|target| displays.get(target))
+    {
         // A maximized window ignores a move, so release it first. Maximize
         // again after the move, so the window fits a display with another
         // scale factor.
         dm_window.set_maximized(false);
-        dm_window.set_outer_position(displays[target].position());
+        dm_window.set_outer_position(display.position());
         dm_window.set_maximized(true);
     }
 }
@@ -966,8 +993,12 @@ fn save_config(config: &Config) -> Result<()> {
 }
 
 /// Borderless full screen on the chosen display, or `None` for a normal window.
+///
+/// A display the DM unplugged leaves an index no list holds any more, and
+/// that gives a normal window rather than a panic.
 fn fullscreen_on(displays: &[MonitorHandle], index: Option<usize>) -> Option<Fullscreen> {
-    index.map(|i| Fullscreen::Borderless(Some(displays[i].clone())))
+    let display = displays.get(index?)?;
+    Some(Fullscreen::Borderless(Some(display.clone())))
 }
 
 impl App {
@@ -999,23 +1030,31 @@ impl App {
         event: &WindowEvent,
     ) -> Result<()> {
         let outcome = running.window_event(window_id, event)?;
+        let acted = outcome.scene_changed || outcome.config_changed || outcome.scene.is_some();
+        let mut trouble = String::new();
         if outcome.scene_changed || outcome.config_changed {
             running.update(&mut self.config, &mut self.scene);
             // A write that fails leaves the session alone. The DM keeps
             // working, and the message says what went wrong.
             if let Err(error) = self.write(running, &outcome) {
                 eprintln!("{error:#}");
-                running.scene_error = format!("{error:#}");
+                trouble = format!("{error:#}");
             }
         }
         if let Some(command) = outcome.scene {
             // A dialog that asks for the impossible, such as a name another
             // scene holds, says so and the session carries on.
-            running.scene_error = match self.run_scene_command(running, command) {
-                Ok(()) => String::new(),
-                Err(error) => format!("{error:#}"),
-            };
+            if let Err(error) = self.run_scene_command(running, command) {
+                eprintln!("{error:#}");
+                trouble = format!("{error:#}");
+            }
             running.dm.window.request_redraw();
+        }
+        // The message stands until the next write or command. An event
+        // that does neither, such as a move of the pointer, leaves it
+        // alone, and one that works clears what the last failure wrote.
+        if acted {
+            running.scene_error = trouble;
         }
         Ok(())
     }
@@ -1058,7 +1097,10 @@ impl App {
                     self.load_scene(running, &next)?;
                 }
             }
-            SceneCommand::Reveal(name) => reveal(&scenes_dir.join(&name))?,
+            // Nothing here changed, so this one does not reach the write
+            // at the end. A scene file grows with the scene, and showing a
+            // folder is no reason to write every stroke of it again.
+            SceneCommand::Reveal(name) => return reveal(&scenes_dir.join(&name)),
             SceneCommand::ScenesFolder => {
                 let Some(picked) = rfd::FileDialog::new()
                     .set_directory(&scenes_dir)
@@ -1166,6 +1208,18 @@ impl ApplicationHandler for App {
         let Some(mut running) = self.running.take() else {
             return;
         };
+        // winit sends no event for a display plugged in or unplugged, and
+        // a stale list holds handles of displays that are gone. A window
+        // moves or changes its scale when the set of displays changes, so
+        // the list is read again there.
+        // ponytail: these two events carry a hotplug; a poll in
+        // `about_to_wait` is the upgrade if one ever slips through.
+        if matches!(
+            event,
+            WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }
+        ) {
+            running.displays = event_loop.available_monitors().collect();
+        }
         let result = self.handle_event(&mut running, window_id, &event);
         self.running = Some(running);
         if let Err(error) = result {

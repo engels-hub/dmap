@@ -69,14 +69,17 @@ impl TvBox {
         tv_width / self.width
     }
 
-    /// The same box, with a width the camera can divide by.
+    /// The same box, with a center and a width the camera can draw.
     ///
-    /// A project file is text that a DM can edit by hand, so the width that
-    /// comes back is not always a number this program can draw.
+    /// A project file is text that a DM can edit by hand, so the values
+    /// that come back are not always numbers this program can draw. Both
+    /// are held here, as [`Camera::usable`] holds the camera: a center
+    /// that is not a number puts every corner of the world off the screen,
+    /// and the TV then shows nothing at all.
     pub fn clamped(self) -> Self {
         Self {
+            center: (usable(self.center.0), usable(self.center.1)),
             width: clamp_width(self.width),
-            ..self
         }
     }
 
@@ -99,6 +102,19 @@ impl TvBox {
             (self.center.0 - half_w, self.center.1 + half_h),
         ]
     }
+}
+
+/// How many TV pixels one real inch of the TV takes.
+///
+/// This is the size of the screen itself, not of the box drawn on it, so
+/// it holds still while the DM drags the box. Anything that must match a
+/// real ruler laid on the TV is measured with this.
+///
+/// Issue #6 lets the DM enter the resolution and the diagonal of the real
+/// TV. Until then the width is [`TV_WIDTH_INCHES`], and a TV of another
+/// size reads off by the ratio of the two.
+pub fn pixels_per_inch(viewport: (u32, u32)) -> f64 {
+    f64::from(viewport.0) / TV_WIDTH_INCHES
 }
 
 /// Whether a zoom stands at true size, so the label can say so.
@@ -132,6 +148,11 @@ pub fn clamp_snap_percent(percent: f64) -> f64 {
     } else {
         DEFAULT_SNAP_PERCENT
     }
+}
+
+/// A world coordinate the camera can subtract, or the origin.
+fn usable(place: f64) -> f64 {
+    if place.is_finite() { place } else { 0.0 }
 }
 
 /// Holds a box width inside the range the program draws.
@@ -287,8 +308,29 @@ mod tests {
         };
         let fixed = loaded.clamped();
         assert!(close(fixed.width, MIN_WIDTH));
-        // The center is not touched. Only the width can break the camera.
+        // A center the camera can subtract is left as the DM placed it.
         assert_eq!(fixed.center, (2.0, 3.0));
+    }
+
+    #[test]
+    fn a_center_that_is_not_a_number_goes_back_to_the_origin() {
+        // `serde_json` reads a float too large for an f64, such as 1e400,
+        // as infinity rather than turning the file away.
+        let loaded = TvBox {
+            center: (f64::INFINITY, f64::NAN),
+            width: 30.0,
+        };
+        let fixed = loaded.clamped();
+        assert_eq!(fixed.center, (0.0, 0.0));
+        assert!(close(fixed.width, 30.0));
+        // A camera that can subtract the center keeps the TV drawing.
+        let camera = fixed.camera((1920, 1080));
+        assert!(
+            camera
+                .world_to_screen((0.0, 0.0), (1920, 1080))
+                .0
+                .is_finite()
+        );
     }
 
     #[test]

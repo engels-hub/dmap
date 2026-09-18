@@ -182,7 +182,7 @@ pub(super) fn settings_dialog(
                 body_ui.spacing_mut().item_spacing.y = ROW_GAP;
                 match dialog.tab {
                     Tab::Table => {
-                        edited = table_tab(body_ui, frame, &mut dialog.scale_drag, tokens);
+                        edited = table_tab(body_ui, frame, &mut dialog.scale_drag);
                     }
                     Tab::Grid => {
                         edited = grid_tab(body_ui, frame.settings);
@@ -295,17 +295,29 @@ fn dialog_row(ui: &mut egui::Ui, label: &str, controls: impl FnOnce(&mut egui::U
     });
 }
 
+/// The Theme row of the Table tab. DESIGN.md 9.1.
+///
+/// DESIGN.md 2 gives two themes and no place to pick one, so the choice
+/// sits here, beside the other settings about the screens. Returns `true`
+/// when the DM changed it.
+fn theme_field(ui: &mut egui::Ui, mode: &mut theme::Mode) -> bool {
+    let choices = [
+        (theme::Mode::Light, theme::Mode::Light.label()),
+        (theme::Mode::Dark, theme::Mode::Dark.label()),
+    ];
+    widget::segmented(ui, mode, &choices)
+}
+
 /// The Table tab of DESIGN.md 9.1. Returns `true` when a value changed.
-fn table_tab(
-    ui: &mut egui::Ui,
-    frame: &mut Frame<'_>,
-    scale_drag: &mut Option<f64>,
-    tokens: Tokens,
-) -> bool {
+fn table_tab(ui: &mut egui::Ui, frame: &mut Frame<'_>, scale_drag: &mut Option<f64>) -> bool {
     let mut edited = false;
     let displays = frame.displays;
     let label = |i: usize| {
-        let display = &displays[i];
+        let Some(display) = displays.get(i) else {
+            // The config holds the display the DM picked, and that one may
+            // be unplugged by now. The row says so instead of panicking.
+            return text::dialog_settings_display_gone().to_owned();
+        };
         let size = display.size();
         display_label(display.name().as_deref(), size.width, size.height)
     };
@@ -362,19 +374,15 @@ fn table_tab(
             edited = true;
         }
     });
-    dialog_row(ui, text::dialog_settings_theme(), |ui| {
-        // DESIGN.md 2 gives two themes and no place to pick one, so the
-        // choice sits here, beside the other settings about the screens.
-        let mut mode = frame.settings.theme;
-        let choices = [
-            (theme::Mode::Light, theme::Mode::Light.label()),
-            (theme::Mode::Dark, theme::Mode::Dark.label()),
-        ];
-        if widget::segmented(ui, &mut mode, &choices) {
-            frame.settings.theme = mode;
+    dialog_row(ui, text::dialog_settings_check(), |ui| {
+        let mut check = frame.settings.tv_check;
+        if widget::checkbox(ui, &mut check, text::dialog_settings_check_overlay()).clicked() {
+            frame.settings.tv_check = check;
             edited = true;
         }
-        let _ = tokens;
+    });
+    dialog_row(ui, text::dialog_settings_theme(), |ui| {
+        edited |= theme_field(ui, &mut frame.settings.theme);
     });
     dialog_row(ui, text::dialog_settings_language(), |ui| {
         edited |= language_field(ui, &mut frame.settings.language);
@@ -447,11 +455,10 @@ fn grid_tab(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     if !paper.automatic {
         dialog_row(ui, text::dialog_settings_line_color(), |ui| {
             let token = mode.tokens().grid.0;
-            let mut color = paper.line.unwrap_or([
-                (token >> 16) as u8,
-                (token >> 8) as u8,
-                u8::try_from(token & 0xff).unwrap_or(u8::MAX),
-            ]);
+            let mut color =
+                paper
+                    .line
+                    .unwrap_or([(token >> 16) as u8, (token >> 8) as u8, token as u8]);
             ui.horizontal(|ui| {
                 if widget::color_swatch_rgb(ui, &mut color) {
                     paper.line = Some(color);
@@ -739,8 +746,12 @@ pub(super) fn scenes_dialog(
     tokens: Tokens,
 ) -> Option<SceneCommand> {
     if !scenes.open {
+        // The next open reads the folder again, so a scene made outside
+        // the program while the dialog was shut still shows up.
+        scenes.listed = false;
         return None;
     }
+    let names = scene_names(scenes, frame.list_scenes);
     let mut command = None;
     let close = dialog_frame(
         ui.ctx(),
@@ -785,7 +796,7 @@ pub(super) fn scenes_dialog(
                 }
             });
             if !frame.scene_error.is_empty() {
-                ui.label(
+                body_ui.label(
                     egui::RichText::new(frame.scene_error)
                         .font(theme::font(theme::SMALL, false))
                         .color(tokens.accent),
@@ -795,12 +806,12 @@ pub(super) fn scenes_dialog(
                 .auto_shrink([false, false])
                 .show(&mut body_ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    for name in (frame.list_scenes)() {
+                    for name in &names {
                         // Two scenes of one name can live in two folders, so
                         // the row that stands out is the one whose folder is
                         // open.
-                        let open = frame.scenes_dir.join(&name) == *frame.scene_dir;
-                        scene_row(ui, scenes, open, &name, &mut command, tokens, SCENE_ROW);
+                        let open = frame.scenes_dir.join(name) == *frame.scene_dir;
+                        scene_row(ui, scenes, open, name, &mut command, tokens, SCENE_ROW);
                     }
                 });
             let mut foot = ui.new_child(
@@ -828,16 +839,35 @@ pub(super) fn scenes_dialog(
             }
         },
     );
+    scenes.list = names;
     if close {
         scenes.open = false;
     }
     // A half-typed name, or a question no one answered, does not wait for
-    // the next time the dialog opens.
+    // the next time the dialog opens. A command makes, renames or deletes
+    // a folder, so the list it came from is stale the moment it runs.
     if command.is_some() || !scenes.open {
         scenes.renaming = None;
         scenes.deleting = None;
+        scenes.listed &= command.is_none();
     }
     command
+}
+
+/// The scenes of the folder, read again only when the last read is stale.
+///
+/// The dialog draws on every move of the pointer, and reading the folder
+/// means a `read_dir`, a stat for each entry and a lowercase key for the
+/// sort. That is the price of a change, not of a frame.
+///
+/// The list comes out of `scenes`, because each row asks for the rest of
+/// it while the list is walked. The caller puts it back.
+fn scene_names(scenes: &mut Scenes, read: &dyn Fn() -> Vec<String>) -> Vec<String> {
+    if !scenes.listed {
+        scenes.list = read();
+        scenes.listed = true;
+    }
+    std::mem::take(&mut scenes.list)
 }
 
 /// One scene in the dialog: its name, and what the DM can do to it.

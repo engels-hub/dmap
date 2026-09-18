@@ -202,6 +202,8 @@ A fill inside one of these boxes stays inside its border. A fill that ran to the
 - Height 28 px, horizontal padding 10 px, icon 16 px, text 14 px, gap 8 px.
 - A message that reports work uses the `check` glyph in `mute` and `ink` text.
 - Caution: a message that reports a failure uses the `alert` glyph and the text in `accent`. Write the cause in the message.
+- The strip stops before the toolbar. A message too long for that room ends in an ellipsis. The scenes dialog shows the whole text.
+- A failure stays on the screen until the next write or the next scene command. A message that goes away by itself is a message the DM can miss.
 - Work that takes time gets a strip of its own: the file name, the percent on the right, and a 2 px bar under them. The track is `rule` and the filled part is `ink`.
 
 ## 8. Panels for each view
@@ -300,11 +302,11 @@ The `Delete` key takes every node the DM holds, from the list and from the canva
 
 ### 9.1 Settings, Table tab
 
-1. Display: select with the display name and its resolution.
+1. Display: select with the display name and its resolution. The row reads "Display is gone" when that display is no longer connected.
 2. Size: segmented control (Diagonal, Pixels per inch, Width), then one input with its unit, then a helper line with the computed pixels per inch and the size of the table area at true size.
 3. Sticks to 100 %: input in percent, helper text "either side of 100 %".
 4. Windows (wayland compat): checkbox "Swap window roles instead of moving". It starts on, because a Wayland compositor lets no program place its own window.
-5. Check: checkbox "Show a 1 inch grid and a 6 inch ruler on the TV".
+5. Check: checkbox "Show a 1 inch grid and a 6 inch ruler on the TV". The overlay measures the TV, not the box on it, so the zoom of the box does not change it. The grid starts at the top left corner, and the ruler stands in the middle. The cell of the game grid takes no part: this grid is one inch, and the DM holds a real ruler against it.
 6. Theme: segmented control (Light, Dark). See section 2.
 7. Language: select with the name of each language in its own words.
 8. Interface scale: slider with the percent to its right. Helper: "Changes size of the UI. Maps keep their size". See section 3.1.

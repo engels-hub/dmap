@@ -34,6 +34,13 @@ pub(super) enum Press {
 /// It floats over the canvas, centered, `MARGIN` from the bottom edge. A
 /// view that is not built yet has no entry, so the toolbar never offers
 /// what the program cannot do.
+/// The name of the toolbar's own layer.
+///
+/// The message line of DESIGN.md 7.3 shares the bottom row with the
+/// toolbar, and asks the context where this one ended up so that it can
+/// stop short of it.
+pub(super) const TOOLBAR_ID: &str = "toolbar";
+
 pub(super) fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
     let views = [
         (
@@ -78,7 +85,7 @@ pub(super) fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press
         screen.bottom() - MARGIN - TOOL_HEIGHT,
     );
     let mut pressed = None;
-    egui::Area::new(egui::Id::new("toolbar"))
+    egui::Area::new(egui::Id::new(TOOLBAR_ID))
         .order(egui::Order::Middle)
         .fixed_pos(top_left)
         .show(ui.ctx(), |ui| {

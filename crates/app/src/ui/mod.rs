@@ -28,8 +28,9 @@ use crate::icons::Icon;
 use crate::scene::{Asset, NodeId, Placed, Scene};
 use crate::stroke::{Ink, Rule, Stroke};
 use crate::text;
-use crate::theme;
+use crate::theme::{self, Tokens};
 use crate::tvbox::TvBox;
+use crate::widget;
 
 pub use dialog::Tab;
 pub use draw::measure_overlay;
@@ -38,7 +39,7 @@ use canvas::{canvas_area, frame_tv_box, select_tool, table_tool, undo_keys};
 use dialog::{Dialog, history_dialog, scenes_dialog, settings_dialog};
 use draw::{Draw, draw_tool};
 use panel::{Views, objects_panel, properties_panel, say_lengths};
-use toolbar::{Press, history_button, toolbar};
+use toolbar::{Press, TOOLBAR_ID, history_button, toolbar};
 use tree::Tree;
 
 /// The gap between the chrome and the window edge, in points. DESIGN.md 5.3.
@@ -391,6 +392,8 @@ pub struct Settings {
     pub tv_display: Option<usize>,
     /// Swap window roles instead of moving the DM window. See `Project`.
     pub swap_windows: bool,
+    /// Show the 1 inch grid and the 6 inch ruler on the TV. Issue #7.
+    pub tv_check: bool,
     /// How close to true size the TV box must come before it snaps, in
     /// percent.
     pub snap_percent: f64,
@@ -528,6 +531,103 @@ pub enum SceneCommand {
     Reveal(String),
 }
 
+/// How far the message line sits from the corner of the canvas, in points.
+const MESSAGE_GAP: f32 = 12.0;
+
+/// The height of the message line. DESIGN.md 7.3.
+const MESSAGE_HEIGHT: f32 = 28.0;
+
+/// The padding at each end of the message line. DESIGN.md 7.3.
+const MESSAGE_PAD: f32 = 10.0;
+
+/// The gap between the glyph of the message line and its text.
+const MESSAGE_TEXT_GAP: f32 = 8.0;
+
+/// How wide the glyph of the message line draws. DESIGN.md 7.3.
+const MESSAGE_ICON: f32 = 16.0;
+
+/// The least room the text of the message line ever gets, in points.
+///
+/// A window narrow enough to put the toolbar over the left corner leaves
+/// no room by the measure above. A few words still beat none.
+const MESSAGE_ROOM: f32 = 120.0;
+
+/// Draws the message line at the bottom left of the canvas. DESIGN.md 7.3.
+///
+/// Caution: this reports a failure, so it takes the alert glyph and the
+/// `accent` color, and the text is the cause itself. A DM whose disk is
+/// full or whose scene folder is read-only learns it here. The release
+/// build opens no console, so a message that only went to `stderr` went
+/// nowhere, and the DM kept working in a scene that never reached a file.
+///
+/// The line stands until the next write or scene command, which is where
+/// `scene_error` is written again. Nothing times out, because a failure
+/// the DM did not read is a failure they never learned about.
+///
+/// ponytail: the `check` glyph of a message that reports work has no
+/// caller yet, and the `triangle` glyph stands in for `alert` until that
+/// one joins `assets/icons`.
+fn message_line(ctx: &egui::Context, canvas: egui::Rect, says: &str, tokens: Tokens) {
+    if says.is_empty() {
+        return;
+    }
+    // The toolbar is centered on this same row, so the strip stops short
+    // of it. A cause long enough to reach it ends in an ellipsis instead
+    // of running underneath and saying nothing.
+    let bar_left = ctx
+        .memory(|memory| memory.area_rect(egui::Id::new(TOOLBAR_ID)))
+        .map_or_else(|| canvas.center().x, |bar| bar.left());
+    let chrome = 2.0f32.mul_add(MESSAGE_PAD, MESSAGE_ICON + MESSAGE_TEXT_GAP);
+    let room = 2.0f32
+        .mul_add(-MESSAGE_GAP, bar_left - canvas.left() - chrome)
+        .max(MESSAGE_ROOM);
+    let galley = ctx.fonts_mut(|fonts| {
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            says.to_owned(),
+            theme::font(theme::BODY, false),
+            tokens.accent,
+        );
+        job.wrap.max_width = room;
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        job.wrap.overflow_character = Some('\u{2026}');
+        fonts.layout_job(job)
+    });
+    let width = chrome + galley.size().x;
+    let left_top = egui::pos2(
+        canvas.left() + MESSAGE_GAP,
+        canvas.bottom() - MESSAGE_GAP - MESSAGE_HEIGHT,
+    );
+    let strip = egui::Rect::from_min_size(left_top, egui::vec2(width, MESSAGE_HEIGHT));
+    egui::Area::new(egui::Id::new("message"))
+        .order(egui::Order::Middle)
+        .fixed_pos(left_top)
+        // The strip says something and asks nothing, so a click on it goes
+        // to the map under it.
+        .interactable(false)
+        .show(ctx, |ui| {
+            widget::shadow_box(ui, strip, tokens);
+            crate::icon::paint(
+                ui.painter(),
+                Icon::Triangle,
+                egui::pos2(
+                    strip.left() + MESSAGE_PAD + MESSAGE_ICON / 2.0,
+                    strip.center().y,
+                ),
+                MESSAGE_ICON,
+                tokens.accent,
+            );
+            ui.painter().galley(
+                egui::pos2(
+                    strip.left() + MESSAGE_PAD + MESSAGE_ICON + MESSAGE_TEXT_GAP,
+                    strip.center().y - galley.size().y / 2.0,
+                ),
+                galley,
+                tokens.accent,
+            );
+        });
+}
+
 /// The scenes dialog between frames.
 #[derive(Debug, Default)]
 struct Scenes {
@@ -536,6 +636,10 @@ struct Scenes {
     renaming: Option<(String, String)>,
     /// The scene the DM asked to delete, before they answered the question.
     deleting: Option<String>,
+    /// The scenes of the folder, as the last read of it found them.
+    list: Vec<String>,
+    /// Whether `list` holds that read. A fresh dialog reads the folder.
+    listed: bool,
 }
 
 /// The Table tool's state between frames.
@@ -841,6 +945,7 @@ impl DmUi {
                 Some(Press::Settings) => dialog.open = !dialog.open,
                 None => {}
             }
+            message_line(ui.ctx(), rect, frame.scene_error, tokens);
             // A dialog over the canvas takes the keyboard too. egui holds
             // the pointer back on its own, but `R` and the arrow keys would
             // still reach the map behind it.
@@ -1097,6 +1202,7 @@ mod tests {
             ui_scale: theme::DEFAULT_SCALE,
             tv_display: Some(1),
             swap_windows: false,
+            tv_check: false,
             snap_percent: 8.0,
             paper_light: Paper::default(),
             paper_dark: Paper::default(),
