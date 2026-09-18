@@ -189,6 +189,12 @@ pub struct Config {
     /// How wide a cell is, in inches. A hex measures flat to flat.
     #[serde(default)]
     pub grid_cell: Option<f32>,
+    /// The keys the DM put on the controls, and no others. Issue #36.
+    ///
+    /// The keys belong to the DM at this machine, like the theme, so a
+    /// scene the DM gives away carries none of them.
+    #[serde(default, skip_serializing_if = "crate::keys::Keys::is_default")]
+    pub keys: crate::keys::Keys,
     /// Where the DM window stood, in the pixels of the display.
     ///
     /// A DM who gives the window a size and a place keeps it. Wayland
@@ -246,6 +252,7 @@ impl Default for Config {
             paper_dark: Paper::default(),
             grid_kind: crate::grid::Kind::default(),
             grid_cell: None,
+            keys: crate::keys::Keys::default(),
             dm_window: None,
             tool: crate::ui::Tool::default(),
             settings_tab: crate::ui::Tab::default(),
@@ -509,6 +516,13 @@ mod tests {
             paper_light: Paper::default(),
             grid_kind: crate::grid::Kind::default(),
             grid_cell: None,
+            keys: {
+                let mut keys = crate::keys::Keys::default();
+                let chord = crate::keys::Chord::of(egui::Key::B, egui::Modifiers::NONE);
+                keys.set(crate::keys::Action::Freeze, chord)
+                    .expect("no control holds B");
+                keys
+            },
             paper_dark: Paper {
                 canvas: Some([10, 20, 30]),
                 line: Some([40, 50, 60]),

@@ -59,7 +59,7 @@ pub(super) fn draw_tool(
     viewport: (u32, u32),
     zoom_goes_to: &mut Option<bool>,
 ) -> bool {
-    let (_, view, pointer) = canvas_area(ui, frame.camera, viewport, false, zoom_goes_to);
+    let (_, view, pointer) = canvas_area(ui, frame, viewport, false, zoom_goes_to);
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     let at = pointer.pos.map(|pos| view.to_world(pos));
     let nib = frame.settings.ink_nib;

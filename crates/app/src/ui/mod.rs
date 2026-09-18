@@ -11,6 +11,7 @@ mod dialog;
 mod draw;
 mod finder;
 mod panel;
+mod shortcuts;
 mod toolbar;
 mod tree;
 
@@ -26,6 +27,7 @@ use crate::command::History;
 use crate::config::Paper;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::icons::Icon;
+use crate::keys::{Action, Keys};
 use crate::scene::{Asset, NodeId, Placed, Scene};
 use crate::stroke::{Ink, Rule, Stroke};
 use crate::text;
@@ -242,44 +244,6 @@ const FRAME_MARGIN: f64 = 0.9;
 /// How much one press of the zoom keys changes the DM zoom.
 const KEY_ZOOM_STEP: f64 = 1.1;
 
-/// Zoom in. Figma, a browser and touchegg all send this for a pinch.
-const ZOOM_IN: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Plus);
-
-/// Zoom in from the main row, where `+` needs Shift and `=` does not.
-const ZOOM_IN_EQUALS: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Equals);
-
-/// Zoom out.
-const ZOOM_OUT: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Minus);
-
-/// Takes the last change to the scene back.
-const UNDO: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
-
-/// Writes the last change the DM took back again.
-const REDO: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
-    egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
-    egui::Key::Z,
-);
-
-/// The same, for a DM who learned redo in a Windows program.
-const REDO_Y: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
-
-/// Back to the zoom a new project opens with.
-/// The key that holds what the TV shows, and lets it go. Issue #76.
-///
-/// `P` stands for the `pause` glyph the toolbar entry takes. `F` would
-/// stand for freeze, and a flip of a map holds that key already. The key
-/// takes no modifier, because a DM reaches for it with the scene under
-/// their other hand.
-const FREEZE: egui::Key = egui::Key::P;
-
-const ZOOM_RESET: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Num0);
-
 /// The smallest and the largest zoom the box properties accept, in percent.
 const MIN_ZOOM_PERCENT: f64 = 5.0;
 const MAX_ZOOM_PERCENT: f64 = 500.0;
@@ -443,6 +407,8 @@ pub struct Settings {
     pub grid_kind: crate::grid::Kind,
     /// How wide a cell is, in inches. A hex measures flat to flat.
     pub grid_cell: Option<f32>,
+    /// The key of every control. Issue #36.
+    pub keys: crate::keys::Keys,
 }
 
 impl Settings {
@@ -874,9 +840,7 @@ impl DmUi {
             if let Some(press) = toolbar(ui, *tool, *frozen, tokens) {
                 add_map |= take_press(press, tool, scenes, dialog, frozen);
             }
-            if asked_to_freeze(ui, over) {
-                *frozen = !*frozen;
-            }
+            every_view_keys(ui, &frame.settings.keys, over, frozen, dialog);
             // A dialog over the canvas takes the keyboard too. egui holds
             // the pointer back on its own, but `R` and the arrow keys would
             // still reach the map behind it.
@@ -885,7 +849,7 @@ impl DmUi {
             // `edited` for that reason. The scene file grows with the
             // scene, and a drag of a slider in Settings would write every
             // stroke of it again for each frame of the drag. Issue #66.
-            settings_edited = settings_dialog(ui.ctx(), &mut frame, dialog, tokens);
+            settings_edited = settings_dialog(ui.ctx(), &mut frame, dialog, *tool, tokens);
             scene = scenes_dialog(ui, scenes, &frame, tokens);
         });
         let egui::FullOutput {
@@ -1114,12 +1078,27 @@ pub struct UiOutput {
     pub frozen: bool,
 }
 
-/// Whether the DM asked for the freeze with the key. Issue #76.
+/// The keys that work in every view and over no dialog: Freeze, and the
+/// list of keys. Issues #76 and #36.
+fn every_view_keys(ui: &egui::Ui, keys: &Keys, over: bool, frozen: &mut bool, dialog: &mut Dialog) {
+    if asked_for(ui, keys, Action::Freeze, over) {
+        *frozen = !*frozen;
+    }
+    if asked_for(ui, keys, Action::Shortcuts, over) {
+        dialog.open = true;
+        dialog.tab = Tab::Shortcuts;
+    }
+}
+
+/// Whether the DM pressed the key of `action`. Takes the press.
 ///
-/// Freeze works in every view. A dialog over the canvas takes the keyboard
-/// first, and so does a field the DM types in.
-fn asked_to_freeze(ui: &egui::Ui, over: bool) -> bool {
-    !over && !ui.ctx().egui_wants_keyboard_input() && ui.input(|input| input.key_pressed(FREEZE))
+/// Freeze and the list of keys work in every view. A dialog over the
+/// canvas takes the keyboard first, and so does a field the DM types in.
+/// Issues #76 and #36.
+fn asked_for(ui: &egui::Ui, keys: &Keys, action: Action, over: bool) -> bool {
+    !over
+        && !ui.ctx().egui_wants_keyboard_input()
+        && ui.input_mut(|input| keys.pressed(input, action))
 }
 
 /// Takes what the toolbar asked for. Returns `true` for Add map.
@@ -1209,6 +1188,7 @@ mod tests {
 
     fn settings() -> Settings {
         Settings {
+            keys: crate::keys::Keys::default(),
             theme: theme::Mode::default(),
             language: crate::text::DEFAULT.to_owned(),
             ink_color: [0, 0, 0, 255],
