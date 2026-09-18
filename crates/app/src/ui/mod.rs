@@ -10,6 +10,7 @@ mod canvas;
 mod dialog;
 mod draw;
 mod finder;
+mod marker;
 mod panel;
 mod shortcuts;
 mod toolbar;
@@ -41,6 +42,7 @@ use canvas::{canvas_area, frame_tv_box, select_tool, table_tool, undo_keys};
 use dialog::{Dialog, history_dialog, scenes_dialog, settings_dialog};
 use draw::{Draw, draw_tool};
 use finder::{Finder, find_the_grid};
+use marker::mark_tv_box;
 use panel::{Views, objects_panel, properties_panel, say_lengths};
 use toolbar::{Press, history_button, toolbar};
 use tree::Tree;
@@ -826,6 +828,9 @@ impl DmUi {
                         table_tool(ui, table, &mut frame, viewport, zoom_goes_to, tokens)
                     }
                 };
+                // The marker goes over the dim wash of the Table view, so
+                // it paints after the tools. Issue #44.
+                mark_tv_box(ui, &frame, rect, viewport, tokens);
                 say_lengths(ui, &frame, draw.live.as_ref(), viewport, tokens);
             }
             edited |= objects_panel(ui.ctx(), &mut frame, select, tree, tokens);

@@ -135,6 +135,8 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - The marker shows only when no part of the TV box is on the canvas.
 - It is a solid `accent` triangle, 28 px tall and 20 px deep. It points at the box center.
 - It sits on the canvas edge, where the line from the canvas center to the box center crosses that edge. It stays whole inside the canvas.
+- It stays clear of the panels, the toolbar and the History button. Under one of them, it moves along the same line toward the canvas center until it is clear.
+- It shows in every view. The TV window never shows it.
 - The marker takes no click and no drag. It is paint only.
 
 ### 5.6 Marks on the canvas
