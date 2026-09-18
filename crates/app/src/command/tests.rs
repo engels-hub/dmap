@@ -561,3 +561,55 @@ fn a_restructure_puts_a_whole_list_back() {
     change.revert(&mut scene);
     assert_eq!(scene.root.children, before);
 }
+
+/// A group the program made, holding these nodes.
+fn made(id: u64, ink: bool, children: Vec<Node>) -> Node {
+    let mut group = Group::new(id, "Made".to_owned());
+    group.ink = ink;
+    group.pieces = !ink;
+    group.children = children;
+    Node::Group(group)
+}
+
+#[test]
+fn a_delete_takes_the_groups_it_empties_and_one_undo_brings_them_back() {
+    // Drawings > Pieces > one map, and a group the DM made that holds
+    // nothing, beside a Drawings group that keeps a map. Issue #85.
+    let mut scene = Scene::default();
+    let pieces = made(11, false, vec![Node::Asset(asset(12, (0.0, 0.0)))]);
+    scene.root.children.push(made(10, true, vec![pieces]));
+    scene
+        .root
+        .children
+        .push(Node::Group(Group::new(20, "Mine".to_owned())));
+    let start = scene.clone();
+    let change = reshape(&mut scene, Deed::Delete, "the map".to_owned(), |scene| {
+        crate::scene::take_node(scene, 12);
+        crate::scene::prune(scene);
+    })
+    .unwrap();
+    let left: Vec<u64> = scene.root.children.iter().map(Node::id).collect();
+    assert_eq!(left, vec![20], "both made groups go, the DM's stays");
+    let mut history = History::default();
+    history.kept(change);
+    assert!(history.undo(&mut scene));
+    assert_eq!(scene, start);
+}
+
+#[test]
+fn a_made_group_that_still_holds_something_stays() {
+    let mut scene = Scene::default();
+    let pieces = made(11, false, vec![Node::Asset(asset(12, (0.0, 0.0)))]);
+    scene.root.children.push(made(
+        10,
+        true,
+        vec![pieces, Node::Asset(asset(13, (1.0, 0.0)))],
+    ));
+    crate::scene::take_node(&mut scene, 12);
+    crate::scene::prune(&mut scene);
+    let Node::Group(drawings) = &scene.root.children[0] else {
+        panic!("the Drawings group went");
+    };
+    let held: Vec<u64> = drawings.children.iter().map(Node::id).collect();
+    assert_eq!(held, vec![13]);
+}

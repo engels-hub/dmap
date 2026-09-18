@@ -457,6 +457,7 @@ fn bite(scene: &mut Scene, at: (f64, f64), radius: f64) -> bool {
             let id = scene.next_id();
             let mut group = Group::new(id, text::panel_objects_pieces().to_owned());
             group.shown = stroke.shown;
+            group.pieces = true;
             put_back(scene, parent, place, Node::Group(group));
             id
         } else {
@@ -476,6 +477,9 @@ fn bite(scene: &mut Scene, at: (f64, f64), radius: f64) -> bool {
             put_back(scene, holder, place, Node::Stroke(piece));
         }
     }
+    // A group the program made goes with its last stroke, and the change
+    // the drag keeps holds the whole tree, so one undo brings both back.
+    crate::scene::prune(scene);
     cut_one
 }
 
@@ -613,14 +617,15 @@ mod tests {
         let mut scene = drawn(vec![stroke(1, Ink::Beam, &[(0.0, 0.0), (10.0, 0.0)])]);
         assert!(bite(&mut scene, (5.0, 0.0), 0.2));
         // The beam is gone, and no piece of its outline stands in for it.
-        assert_eq!(inside(&scene), vec![(0, "Drawings".to_owned())]);
+        // The Drawings group held nothing else, so it goes too.
+        assert!(inside(&scene).is_empty(), "{:?}", inside(&scene));
     }
 
     #[test]
     fn the_eraser_takes_a_kept_measure_whole_as_well() {
         let mut scene = drawn(vec![stroke(1, Ink::Measure, &[(0.0, 0.0), (10.0, 0.0)])]);
         assert!(bite(&mut scene, (5.0, 0.0), 0.2));
-        assert_eq!(inside(&scene), vec![(0, "Drawings".to_owned())]);
+        assert!(inside(&scene).is_empty(), "{:?}", inside(&scene));
     }
 
     #[test]
@@ -649,6 +654,41 @@ mod tests {
         let pieces = held.iter().filter(|(_, name)| name == "Pen").count();
         assert_eq!((groups, pieces), (1, 3), "{held:?}");
         assert!(held.iter().all(|(depth, _)| *depth <= 2), "{held:?}");
+    }
+
+    #[test]
+    fn rubbing_out_every_piece_takes_both_groups_and_one_undo_brings_them_back() {
+        let mut scene = drawn(vec![stroke(1, Ink::Pen, &[(0.0, 0.0), (10.0, 0.0)])]);
+        assert!(bite(&mut scene, (5.0, 0.0), 1.0));
+        let cut = scene.root.children.clone();
+        // The drag keeps one change from the tree before it to the tree
+        // after it, as `erase` does.
+        let before = scene.root.children.clone();
+        assert!(bite(&mut scene, (2.0, 0.0), 3.0));
+        assert!(bite(&mut scene, (8.0, 0.0), 3.0));
+        assert!(inside(&scene).is_empty(), "{:?}", inside(&scene));
+        let change = crate::command::Restructure {
+            what: crate::command::Deed::Erase,
+            subject: String::new(),
+            before: vec![(crate::scene::ROOT_ID, before)],
+            after: vec![(crate::scene::ROOT_ID, scene.root.children.clone())],
+        };
+        change.revert(&mut scene);
+        assert_eq!(scene.root.children, cut);
+    }
+
+    #[test]
+    fn a_group_the_dm_made_keeps_its_place_when_its_last_stroke_goes() {
+        let mut scene = Scene::default();
+        let mut mine = Group::new(3, "Mine".to_owned());
+        mine.children = vec![Node::Stroke(stroke(
+            1,
+            Ink::Beam,
+            &[(0.0, 0.0), (10.0, 0.0)],
+        ))];
+        scene.root.children.push(Node::Group(mine));
+        assert!(bite(&mut scene, (5.0, 0.0), 0.2));
+        assert_eq!(inside(&scene), vec![(0, "Mine".to_owned())]);
     }
 
     #[test]

@@ -18,7 +18,7 @@ pub use draw::{assets, dm_draw_order, draw_order, groups, ink_order, ink_under, 
 pub use files::copy_into_scene;
 pub use tree::{
     ancestors, asset_mut, assets_of, find, group_mut, group_names, group_selection, has_group,
-    ink_group, move_above, move_into, name_of, normalize, parent_of, path_to, push_into,
+    ink_group, move_above, move_into, name_of, normalize, parent_of, path_to, prune, push_into,
     reorder_all, share_parent, shown_mut, stroke_mut, strokes_of, take_node, ungroup,
 };
 
@@ -151,6 +151,12 @@ pub struct Group {
     /// DM renamed it to and reads the same in every language.
     #[serde(default)]
     pub ink: bool,
+    /// Whether the eraser made this group for the pieces of one stroke.
+    ///
+    /// A group the program made goes with its last child, and this mark
+    /// tells a group of pieces from a group the DM made. Issue #85.
+    #[serde(default)]
+    pub pieces: bool,
 }
 
 fn group_name() -> String {
@@ -166,6 +172,7 @@ impl Group {
             shown: Shown::default(),
             children: Vec::new(),
             ink: false,
+            pieces: false,
         }
     }
 

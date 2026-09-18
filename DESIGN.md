@@ -237,6 +237,8 @@ A burst takes one drag, from its middle to its edge. A cone takes one as well, f
 
 The eraser takes a bite out of every stroke it passes over, and it bites its way along the path the pointer took. What is left of a shape is a free line: a box with a bite out of it is no longer a box. The pieces of one stroke join a group, so the objects list holds them together, and a later bite keeps to that group.
 
+A group the program made goes with its last child: the Drawings group, and a group of pieces. The eraser and `Delete` both take it, and one undo brings it back with its strokes. A group the DM made stays, even when it holds nothing. Issue #85.
+
 An area of effect and a kept measure come away whole. Each one stands for one thing, a spell over a patch of the map or a distance read off it, and a piece of either says nothing. The eraser takes them from anywhere inside them, not from their line alone.
 
 **The panel of a stroke, in the Select view**
