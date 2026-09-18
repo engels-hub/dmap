@@ -27,7 +27,7 @@ The UI has a light theme and a dark theme. The light theme is the default. Both 
 | `rule` | `#b9ad92` | `#2c2e31` | 1 px borders and dividers |
 | `grid` | `#9fb1c4` at 33 % | `#2c2e31` | Canvas grid lines |
 | `accent` | `#b4452c` | `#f0a830` | See section 1 |
-| `dim` | `rgba(43, 36, 25, 0.12)` | `rgba(16, 17, 18, 0.45)` | Wash outside the TV box |
+| `dim` | `rgba(43, 36, 25, 0.24)` | `rgba(16, 17, 18, 0.6)` | Wash outside the TV box |
 | `scrim` | `rgba(43, 36, 25, 0.35)` | `rgba(0, 0, 0, 0.5)` | Behind a dialog |
 | `shadow` | `#b9ad92` | none | Hard offset shadow under map previews and dialogs |
 

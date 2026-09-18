@@ -819,6 +819,7 @@ impl DmUi {
                 // tool never writes over what it put back this frame.
                 let dragging = select.drag.is_some() || table.drag.is_some() || draw.busy();
                 edited |= undo_keys(ui, &mut frame, dragging);
+                let outline = ui.painter().add(egui::Shape::Noop);
                 edited |= match *tool {
                     Tool::Select => {
                         select_tool(ui, select, &mut frame, viewport, zoom_goes_to, tokens)
@@ -829,8 +830,8 @@ impl DmUi {
                     }
                 };
                 // The marker goes over the dim wash of the Table view, so
-                // it paints after the tools. Issue #44.
-                mark_tv_box(ui, &frame, rect, viewport, tokens);
+                // it paints after the tools. Issues #43 and #44.
+                mark_tv_box(ui, &frame, rect, viewport, (*tool, outline), tokens);
                 say_lengths(ui, &frame, draw.live.as_ref(), viewport, tokens);
             }
             edited |= objects_panel(ui.ctx(), &mut frame, select, tree, tokens);

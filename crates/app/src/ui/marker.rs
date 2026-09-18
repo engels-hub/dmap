@@ -5,7 +5,8 @@
 
 use crate::theme::Tokens;
 
-use super::{Frame, View};
+use super::canvas::outline_tv_box;
+use super::{Frame, Tool, View};
 
 /// How wide the triangle stands across the line to the box, in points.
 const MARKER_WIDTH: f32 = 28.0;
@@ -130,13 +131,21 @@ fn chrome(ctx: &egui::Context) -> Vec<egui::Rect> {
 ///
 /// The marker is paint only: it takes no click and no drag. The TV draws
 /// no egui, so the players never see it.
+///
+/// `outline` is the view the DM works in, and the slot the outline of the
+/// box goes into. The Table view draws its own outline, with the wash and
+/// the handles. Issue #43.
 pub(super) fn mark_tv_box(
     ui: &egui::Ui,
     frame: &Frame<'_>,
     canvas: egui::Rect,
     viewport: (u32, u32),
+    outline: (Tool, egui::layers::ShapeIdx),
     tokens: Tokens,
 ) {
+    if let (Tool::Select | Tool::Draw, slot) = outline {
+        outline_tv_box(ui, frame, canvas, viewport, slot, tokens);
+    }
     let view = View::new(ui, *frame.camera, viewport);
     let corners = frame.scene.tv_box.corners(frame.tv_viewport);
     let tv_box = egui::Rect::from_two_pos(view.to_screen(corners[0]), view.to_screen(corners[2]));
