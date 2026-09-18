@@ -378,6 +378,8 @@ fn arrow_keys(ui: &egui::Ui, keys: &Keys, tv_box: &mut TvBox, cell: f64) -> bool
 }
 
 /// The wash outside the box, the outline of the box and its handles.
+///
+/// The Table view alone draws the wash and the handles. DESIGN.md 5.4.
 fn draw_tv_box(
     painter: &egui::Painter,
     canvas: egui::Rect,
@@ -403,16 +405,7 @@ fn draw_tv_box(
     ] {
         painter.rect_filled(wash.intersect(canvas), 0.0, tokens.dim);
     }
-    let stroke = egui::Stroke::new(2.0, tokens.accent);
-    if frozen {
-        // A frozen TV keeps the frame it had, and a solid outline would say
-        // that the box still rules what the table sees. Issue #76.
-        let mut round = handles.to_vec();
-        round.push(handles[0]);
-        painter.add(egui::Shape::dashed_line(&round, stroke, DASH, DASH));
-    } else {
-        painter.add(egui::Shape::closed_line(handles.to_vec(), stroke));
-    }
+    painter.extend(box_outline(painter, canvas, handles, zoom, frozen, tokens));
     // DESIGN.md 5.4: a handle stands 4 points outside the box, so the
     // outline stays whole under it.
     let middle = handles
@@ -427,25 +420,87 @@ fn draw_tv_box(
             tokens.accent,
         );
     }
+}
+
+/// The outline of the TV box and its zoom label, which every view shows.
+/// DESIGN.md 5.4. Issue #43.
+///
+/// `corners` are the four corners of the box on the screen, from the top
+/// left and clockwise.
+fn box_outline(
+    painter: &egui::Painter,
+    canvas: egui::Rect,
+    corners: &[egui::Pos2],
+    zoom: f64,
+    frozen: bool,
+    tokens: Tokens,
+) -> Vec<egui::Shape> {
+    let stroke = egui::Stroke::new(2.0, tokens.accent);
+    let mut shapes = Vec::new();
+    if frozen {
+        // A frozen TV keeps the frame it had, and a solid outline would say
+        // that the box still rules what the table sees. Issue #76.
+        let mut round = corners.to_vec();
+        round.push(corners[0]);
+        shapes.extend(egui::Shape::dashed_line(&round, stroke, DASH, DASH));
+    } else {
+        shapes.push(egui::Shape::closed_line(corners.to_vec(), stroke));
+    }
     // DESIGN.md 5.4: the zoom stands above the top-right corner, and takes
     // the accent while the box is at true size. A box wider than the canvas
     // keeps its label on screen, since the corner it belongs to is not. A
     // box wholly off the canvas has the marker instead. Issue #44.
+    let inside = egui::Rect::from_two_pos(corners[0], corners[2]);
     if !canvas.intersects(inside) {
-        return;
+        return shapes;
     }
-    let corner = egui::pos2(handles[1].x, handles[1].y - ZOOM_LABEL_GAP);
-    painter.text(
-        canvas.shrink(ZOOM_LABEL_GAP).clamp(corner),
-        egui::Align2::RIGHT_BOTTOM,
+    let corner = egui::pos2(corners[1].x, corners[1].y - ZOOM_LABEL_GAP);
+    let color = if at_true_size(zoom) {
+        tokens.accent
+    } else {
+        tokens.ink
+    };
+    let galley = painter.layout_no_wrap(
         format!("{} %", (zoom * 100.0).round()),
         theme::font(ZOOM_LABEL_SIZE, true),
-        if at_true_size(zoom) {
-            tokens.accent
-        } else {
-            tokens.ink
-        },
+        color,
     );
+    // The whole label stays on the canvas, not only the corner it hangs
+    // from, or a box that runs off the top would cut its label in half.
+    let size = galley.size();
+    let room = canvas.shrink(ZOOM_LABEL_GAP);
+    let room = egui::Rect::from_min_max(room.min, (room.max - size).max(room.min));
+    let at = room.clamp(egui::Align2::RIGHT_BOTTOM.anchor_size(corner, size).min);
+    shapes.push(egui::Shape::galley(at, galley, color));
+    shapes
+}
+
+/// Fills `slot` with the outline and the zoom label of the TV box, for a
+/// view other than Table. Issue #43.
+///
+/// The slot sits before the shapes of the tool, so the selection and the
+/// measure line stay on top. The tool fills it after it moves the camera,
+/// so the outline never lags a pan by a frame.
+pub(super) fn outline_tv_box(
+    ui: &egui::Ui,
+    frame: &Frame<'_>,
+    canvas: egui::Rect,
+    viewport: (u32, u32),
+    slot: egui::layers::ShapeIdx,
+    tokens: Tokens,
+) {
+    let view = View::new(ui, *frame.camera, viewport);
+    let corners: Vec<egui::Pos2> = frame
+        .scene
+        .tv_box
+        .corners(frame.tv_viewport)
+        .iter()
+        .map(|&c| view.to_screen(c))
+        .collect();
+    let zoom = frame.scene.tv_box.zoom(TV_WIDTH_INCHES);
+    let painter = ui.painter_at(canvas);
+    let shapes = box_outline(&painter, canvas, &corners, zoom, frame.frozen, tokens);
+    painter.set(slot, egui::Shape::Vec(shapes));
 }
 
 /// The world corners of what the DM holds, when they hold one thing.
