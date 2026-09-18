@@ -140,10 +140,11 @@ pub struct Config {
     pub tv_display: TvPlacement,
     /// Swap the roles of the two windows instead of moving the DM window.
     pub swap_windows: bool,
-    /// Show the 1 inch grid and the 6 inch ruler on the TV. Issue #7.
+    /// Show the ruler on the TV, to check its size. Issue #7.
     ///
-    /// A DM checks the calibration once, against a real ruler, so this
-    /// starts off.
+    /// The overlay draws no grid. The canvas already carries one, and the
+    /// ruler is measured in the same inch it is. A DM checks the size
+    /// once, against a real rule, so this starts off.
     pub tv_check: bool,
     /// How close to true size the TV box must come before it snaps.
     pub snap_percent: f64,

@@ -81,7 +81,7 @@
   "dialog.settings.windows": "Окна (wayland)",
   "dialog.settings.swap": "Менять окна местами вместо переноса",
   "dialog.settings.check": "Проверка",
-  "dialog.settings.check_overlay": "Показать на телевизоре сетку в 1 дюйм и линейку в 6 дюймов",
+  "dialog.settings.check_overlay": "Показать линейку на телевизоре",
   "dialog.settings.theme": "Тема",
   "dialog.settings.language": "Язык",
   "dialog.settings.scale": "Масштаб интерфейса",
@@ -241,5 +241,6 @@
   "unit.px": "px",
   "unit.percent": "%",
   "unit.degrees": "°",
-  "overlay.ruler": "6 дюйм."
+  "overlay.ruler_inches": "дюйм",
+  "overlay.ruler_cm": "см"
 }

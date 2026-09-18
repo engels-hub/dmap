@@ -311,7 +311,12 @@ The `Delete` key takes every node the DM holds, from the list and from the canva
 2. Size: segmented control (Diagonal, Pixels per inch, Width), then one input with its unit, then a helper line with the computed pixels per inch and the size of the table area at true size.
 3. Sticks to 100 %: input in percent, helper text "either side of 100 %".
 4. Windows (wayland compat): checkbox "Swap window roles instead of moving". It starts on, because a Wayland compositor lets no program place its own window.
-5. Check: checkbox "Show a 1 inch grid and a 6 inch ruler on the TV". The overlay measures the TV, not the box on it, so the zoom of the box does not change it. The grid starts at the top left corner, and the ruler stands in the middle. The cell of the game grid takes no part: this grid is one inch, and the DM holds a real ruler against it.
+5. Check: checkbox "Show a ruler on the TV". The ruler lies across the middle of the TV. It draws no grid of its own. The canvas already has one. A second grid over that one reads as two grids that disagree.
+   - The ruler measures the inch of the canvas, the one the camera draws the grid with. So it grows and shrinks with the TV box, and it never disagrees with the cells beside it.
+   - One edge carries inches, marked at the inch, the half and the eighth. The other carries centimetres, marked at the centimetre, the half and the millimetre. Both start at the left end of the bar, as the two scales of a real rule share one zero.
+   - A mark bank the screen cannot separate is left out, and the coarser bank carries the reading. A millimetre is under two pixels on a 1080p TV of this size.
+   - The ruler wants six inches. A box zoomed in gives up whole inches until what is left fits across the screen.
+   - At 100 % zoom one canvas inch is one real inch. There the DM holds a real rule against the drawn one. A difference is the error in the TV size the program assumes. Issue #6 is where the DM corrects it.
 6. Theme: segmented control (Light, Dark). See section 2.
 7. Language: select with the name of each language in its own words.
 8. Interface scale: slider with the percent to its right. Helper: "Changes size of the UI. Maps keep their size". See section 3.1.

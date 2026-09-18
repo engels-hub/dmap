@@ -380,7 +380,7 @@ pub struct Settings {
     pub tv_display: Option<usize>,
     /// Swap window roles instead of moving the DM window. See `Project`.
     pub swap_windows: bool,
-    /// Show the 1 inch grid and the 6 inch ruler on the TV. Issue #7.
+    /// Show the ruler on the TV, to check its size. Issue #7.
     pub tv_check: bool,
     /// How close to true size the TV box must come before it snaps, in
     /// percent.

@@ -81,7 +81,7 @@
   "dialog.settings.windows": "Windows (wayland compat)",
   "dialog.settings.swap": "Swap window roles instead of moving",
   "dialog.settings.check": "Check",
-  "dialog.settings.check_overlay": "Show a 1 inch grid and a 6 inch ruler on the TV",
+  "dialog.settings.check_overlay": "Show a ruler on the TV",
   "dialog.settings.theme": "Theme",
   "dialog.settings.language": "Language",
   "dialog.settings.scale": "Interface scale",
@@ -241,5 +241,6 @@
   "unit.px": "px",
   "unit.percent": "%",
   "unit.degrees": "°",
-  "overlay.ruler": "6 in"
+  "overlay.ruler_inches": "in",
+  "overlay.ruler_cm": "cm"
 }
