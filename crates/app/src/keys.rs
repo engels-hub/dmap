@@ -382,26 +382,29 @@ impl Taken {
 /// control a later version brings arrives with its default key.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(
-    from = "BTreeMap<Action, Vec<String>>",
+    from = "BTreeMap<String, serde_json::Value>",
     into = "BTreeMap<Action, Vec<String>>"
 )]
 pub struct Keys {
     chosen: BTreeMap<Action, Vec<Chord>>,
 }
 
-impl From<BTreeMap<Action, Vec<String>>> for Keys {
+impl From<BTreeMap<String, serde_json::Value>> for Keys {
     /// Reads the keys the config file holds.
     ///
     /// A key this version cannot read drops out, so a file from another
     /// version costs the DM one key and not every setting of the file.
-    fn from(stored: BTreeMap<Action, Vec<String>>) -> Self {
+    /// The same goes for a control this version does not know, and for a
+    /// value that is not a list of keys.
+    fn from(stored: BTreeMap<String, serde_json::Value>) -> Self {
         let chosen = stored
             .into_iter()
-            .map(|(action, chords)| {
+            .filter_map(|(name, chords)| {
+                let action = serde_json::from_value(serde_json::Value::String(name)).ok()?;
+                let chords: Vec<String> = serde_json::from_value(chords).ok()?;
                 let chords: Vec<Chord> = chords.iter().filter_map(|c| Chord::parse(c)).collect();
-                (action, chords)
+                (!chords.is_empty()).then_some((action, chords))
             })
-            .filter(|(_, chords)| !chords.is_empty())
             .collect();
         Self { chosen }
     }
@@ -636,6 +639,14 @@ mod tests {
     #[test]
     fn a_key_this_version_cannot_read_drops_out() {
         let back: Keys = serde_json::from_str(r#"{"freeze":["Hyper+Q"],"turn":["B"]}"#).unwrap();
+        assert_eq!(back.of(Action::Freeze), vec![Chord::plain(egui::Key::P)]);
+        assert_eq!(back.of(Action::Turn), vec![Chord::plain(egui::Key::B)]);
+    }
+
+    #[test]
+    fn a_control_this_version_does_not_know_drops_out() {
+        let back: Keys =
+            serde_json::from_str(r#"{"zoom_fit":["Z"],"freeze":"B","turn":["B"]}"#).unwrap();
         assert_eq!(back.of(Action::Freeze), vec![Chord::plain(egui::Key::P)]);
         assert_eq!(back.of(Action::Turn), vec![Chord::plain(egui::Key::B)]);
     }
