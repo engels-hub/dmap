@@ -5,8 +5,11 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
+
 use egui_wgpu::wgpu;
 use egui_winit::winit::window::Window;
+
+use crate::hold::{HoldLayer, Picture};
 
 /// The GPU device shared by all windows.
 pub struct Gpu {
@@ -50,11 +53,15 @@ impl Gpu {
             .context("the GPU adapter cannot draw to this window")?;
         surface.configure(&self.device, &config);
         let beneath = Beneath::new(&self.device, &config);
+        let picture = Picture::new(&self.device, config.format, (config.width, config.height));
+        let hold = HoldLayer::new(&self.device, config.format);
         Ok(Pane {
             window,
             surface,
             config,
             beneath,
+            picture,
+            hold,
         })
     }
 }
@@ -113,6 +120,14 @@ pub struct Pane {
     pub config: wgpu::SurfaceConfiguration,
     /// The maps of this frame, for the grid to read.
     pub beneath: Beneath,
+    /// This frame, whole, before it goes on the surface.
+    ///
+    /// The window draws here and the `hold` pass lays it down. A TV that
+    /// stands frozen keeps the picture it had and lays that down instead,
+    /// so nothing the DM does behind it reaches the table. Issue #78.
+    pub picture: Picture,
+    /// The pass that lays a picture on this surface.
+    pub hold: HoldLayer,
 }
 
 impl std::fmt::Debug for Pane {
@@ -161,7 +176,48 @@ impl Pane {
         self.config.height = height;
         self.surface.configure(device, &self.config);
         self.beneath = Beneath::new(device, &self.config);
+        self.picture = Picture::new(device, self.config.format, (width, height));
         true
+    }
+
+    /// Takes the picture of the last frame, and leaves a fresh one here.
+    ///
+    /// The picture that comes back is what the window shows now, so a TV
+    /// that freezes holds the frame the players are looking at.
+    pub fn take_picture(&mut self, device: &wgpu::Device) -> Picture {
+        let fresh = Picture::new(
+            device,
+            self.config.format,
+            (self.config.width, self.config.height),
+        );
+        std::mem::replace(&mut self.picture, fresh)
+    }
+
+    /// Lays `picture` on the surface, and shows it.
+    ///
+    /// Nothing else draws. The window takes the picture whatever size it
+    /// has now, because the pass reads it with a sampler.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the surface fails validation.
+    pub fn lay_down(&mut self, gpu: &Gpu, picture: &Picture) -> Result<bool> {
+        let Some(frame) = self.acquire(&gpu.device)? else {
+            return Ok(false);
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = begin_clear_pass(&mut encoder, &view, wgpu::Color::BLACK);
+            self.hold.draw(&gpu.device, &mut pass, picture);
+        };
+        gpu.queue.submit([encoder.finish()]);
+        gpu.queue.present(frame);
+        Ok(true)
     }
 }
 

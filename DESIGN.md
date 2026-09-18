@@ -407,10 +407,12 @@ The Find the grid button of the Map panel opens this dialog on the map the DM ho
 
 The DM sets up the next scene in front of the players, and the TV takes every change at once. Freeze holds the frame the TV had, so the table keeps the scene it was on. Issue #76.
 
-- The TV keeps the maps, the strokes, the TV box, the grid and the colors it had at the press.
-- A scene the DM opens lets the freeze go. The images live in the map layer by the name of their file, and another scene brings its own. A frozen tree would draw the new images under the old names, which is the one thing the freeze must not show.
+- At the press the TV keeps a picture of the frame it shows. It lays that picture down until the DM lets it go, and reads no scene. Issue #78.
+- A map that moves, a stroke, the TV box, the grid and the colors all wait behind the picture.
+- A scene the DM opens waits as well. A copy of the tree could not hold there, because two scenes may each hold a `map.png`.
+- A TV window that changes size lays the same picture over its new size.
 - A swap of the two windows keeps the freeze. The swap builds the interface again, and a TV that came back live would show the players the work behind it.
-- The pointer of the DM leaves the TV, because a hand that moves over a held frame says that the DM is at work.
+- The TV draws no pointer while the freeze stands, so a hand that moves tells the players nothing.
 - The DM window takes every change at once, and undo and redo work as they do. Only the TV waits.
 - The TV box draws a dashed outline while the freeze stands. A solid one would say that the box still rules what the table sees.
 - `P` does what the button does, in every view. It stands for the `pause` glyph, because `F` for freeze already flips a map. A dialog over the canvas takes the keyboard first, and so does a field the DM types in.

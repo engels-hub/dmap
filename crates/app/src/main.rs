@@ -18,6 +18,7 @@ mod command;
 mod config;
 mod gpu;
 mod grid;
+mod hold;
 mod icon;
 mod icons;
 mod images;
@@ -245,20 +246,6 @@ struct App {
     error: Option<anyhow::Error>,
 }
 
-/// The scene and the look of the TV, as they stood at the freeze.
-///
-/// The DM works on the scene behind this copy, and the players keep the
-/// frame the TV had. Issue #76.
-#[derive(Debug)]
-struct Frozen {
-    scene: Scene,
-    /// The stroke that stood under the DM's hand, which the TV was drawing.
-    live: Option<crate::stroke::Stroke>,
-    paper: crate::config::Paper,
-    mode: crate::theme::Mode,
-    cells: crate::grid::Cells,
-}
-
 /// Everything that exists once the windows and the GPU are up.
 #[derive(Debug)]
 struct Running {
@@ -306,12 +293,13 @@ struct Running {
     overlay: Overlay,
     /// The stroke the DM is drawing, which is in no scene yet.
     live: Option<crate::stroke::Stroke>,
-    /// What the TV holds while the DM sets up the next scene. Issue #76.
+    /// The picture the TV lays down while the DM works. Issue #78.
     ///
-    /// The TV draws this copy in place of the scene, so a map that moves,
-    /// a stroke, the TV box and the paper all wait for the DM. A tree holds
-    /// no pixels, so the copy costs little.
-    frozen: Option<Frozen>,
+    /// The TV reads no scene while this stands. A copy of the tree held the
+    /// maps, the strokes and the box, and it could not hold the pixels of a
+    /// map: another scene clears the map layer and brings its own file of
+    /// the same name. A picture holds against all of it.
+    held: Option<hold::Picture>,
     loader: Loader,
     camera: Camera,
 }
@@ -394,7 +382,7 @@ impl Running {
             // The first frame owes the players the scene the DM opened.
             tv_dirty: true,
             tv_pointer: None,
-            frozen: None,
+            held: None,
             scene_dir,
             scenes_dir: config.scenes_dir.clone(),
             scene_error: String::new(),
@@ -490,38 +478,36 @@ impl Running {
     ///
     /// Returns an error when the GPU cannot draw the frame.
     fn draw_tv(&mut self) -> Result<bool> {
+        // A frozen TV reads no scene. It lays down the picture it held, so
+        // a map that moves, a stroke, and a scene the DM opens all wait for
+        // them to let it go. Issue #78.
+        if let Some(held) = &self.held {
+            return self.tv.lay_down(&self.gpu, held);
+        }
         let pane = &mut self.tv;
         let viewport = (pane.config.width, pane.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
         let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
-        // A frozen TV reads the copy it froze on, so nothing the DM does
-        // reaches the table until they let it go. Issue #76.
-        let held = self.frozen.as_ref();
-        // A pointer that moves over the map would tell the players that the
-        // DM is at work behind the frame they hold.
-        let tv_pointer = tv_pointer.filter(|_| held.is_none());
-        let scene = held.map_or(&self.scene, |frozen| &frozen.scene);
-        let drawn = held.map_or(self.live.as_ref(), |frozen| frozen.live.as_ref());
-        let tv_camera = scene.tv_box.camera(viewport);
+        let tv_camera = self.scene.tv_box.camera(viewport);
         // The TV draws what it shows, and every map at full strength.
-        let shown: Vec<(&Asset, f32)> = draw_order(scene, Audience::Tv)
+        let shown: Vec<(&Asset, f32)> = draw_order(&self.scene, Audience::Tv)
             .into_iter()
             .map(|asset| (asset, maps::FULL_STRENGTH))
             .collect();
         // The strokes draw over every map and over the grid, and what the
         // DM has under their hand draws with them.
-        let mut ink = scene::ink_order(scene, Audience::Tv);
-        if let Some(stroke) = drawn {
+        let mut ink = scene::ink_order(&self.scene, Audience::Tv);
+        if let Some(stroke) = self.live.as_ref() {
             ink.push(stroke);
         }
         let map_layer = &mut self.map_layer;
         let grid_layer = &self.grid_layer;
         let ink_layer = &mut self.ink_layer;
         let gpu = &self.gpu;
-        let mode = held.map_or(self.settings.theme, |frozen| frozen.mode);
-        let paper = held.map_or_else(|| self.settings.paper(), |frozen| &frozen.paper);
+        let mode = self.settings.theme;
+        let paper = self.settings.paper();
         let line = paper.line(mode, pane.window.scale_factor() as f32);
-        let cells = held.map_or_else(|| self.settings.cells(), |frozen| frozen.cells);
+        let cells = self.settings.cells();
         let canvas = paper.canvas(mode);
         // A clone of the handle, because the pane goes into the call that
         // draws it.
@@ -629,22 +615,17 @@ impl Running {
                 scenes_dir: &self.scenes_dir,
                 tv_viewport: (self.tv.config.width, self.tv.config.height),
                 size_of: &|path| map_layer.size_of(path),
-                frozen: self.frozen.is_some(),
+                frozen: self.held.is_some(),
             },
         );
         // A change may have put an asset back in the tree, such as a redo
         // of an add. It is settled by now, because a drag adds nothing.
-        // The freeze takes the copy on the frame the DM presses it, and
-        // drops it on the frame they press it again. Both ask the TV for a
-        // frame: one to draw the copy, one to catch up. Issue #76.
-        if output.frozen != self.frozen.is_some() {
-            self.frozen = output.frozen.then(|| Frozen {
-                scene: self.scene.clone(),
-                live: self.live.clone(),
-                paper: self.settings.paper().clone(),
-                mode: self.settings.theme,
-                cells: self.settings.cells(),
-            });
+        // The freeze takes the picture of the frame the TV shows now, and
+        // gives it back when the DM presses again. Issue #78.
+        if output.frozen != self.held.is_some() {
+            self.held = output
+                .frozen
+                .then(|| self.tv.take_picture(&self.gpu.device));
             self.tv_dirty = true;
         }
         if output.save {
@@ -798,16 +779,6 @@ impl Running {
     /// by the file beside it, so two scenes can hold a `grid.png` and the
     /// new one must not draw the old one.
     fn open_scene(&mut self, dir: PathBuf, scene: &Scene, history: History) {
-        // A freeze holds the tree of the scene, and the images live in the
-        // map layer by the name of their file. Another scene clears that
-        // layer and asks for its own files, and two scenes may each hold a
-        // `map.png`. The frozen tree would then draw the images of the new
-        // scene, which is the one thing the DM froze the TV to hide. So the
-        // scene lets the freeze go, and the TV takes the new scene at once.
-        // Issue #76 says the TV should hold instead, and that wants a
-        // picture of the frame and not a copy of the tree.
-        self.frozen = None;
-        self.ui.set_frozen(false);
         self.scene_dir = dir;
         // A place in one scene says nothing about another, so the camera
         // starts in the middle of the world again.
