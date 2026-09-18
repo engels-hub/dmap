@@ -27,13 +27,10 @@ pub(super) enum Press {
     AddMap,
     /// Open the settings dialog.
     Settings,
+    /// Hold what the TV shows, or let it go. Issue #76.
+    Freeze,
 }
 
-/// The toolbar of DESIGN.md 5.2: the views, a rule, then the rest.
-///
-/// It floats over the canvas, centered, `MARGIN` from the bottom edge. A
-/// view that is not built yet has no entry, so the toolbar never offers
-/// what the program cannot do.
 /// The name of the toolbar's own layer.
 ///
 /// The message line of DESIGN.md 7.3 shares the bottom row with the
@@ -41,7 +38,12 @@ pub(super) enum Press {
 /// stop short of it.
 pub(super) const TOOLBAR_ID: &str = "toolbar";
 
-pub(super) fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press> {
+/// The toolbar of DESIGN.md 5.2: the views, a rule, then the rest.
+///
+/// It floats over the canvas, centered, `MARGIN` from the bottom edge. A
+/// view that is not built yet has no entry, so the toolbar never offers
+/// what the program cannot do.
+pub(super) fn toolbar(ui: &egui::Ui, tool: Tool, frozen: bool, tokens: Tokens) -> Option<Press> {
     let views = [
         (
             Press::View(Tool::Select),
@@ -59,6 +61,7 @@ pub(super) fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press
             text::tool_settings(),
             Icon::SlidersHorizontal,
         ),
+        (Press::Freeze, text::tool_freeze(), Icon::Pause),
     ];
     let font = theme::font(theme::SMALL, false);
     let width_of = |label: &str| {
@@ -128,15 +131,17 @@ pub(super) fn toolbar(ui: &egui::Ui, tool: Tool, tokens: Tokens) -> Option<Press
                     painter_dashes(ui, &line, tokens.ink);
                 }
             }
-            // The rest are buttons. None of them stays on, and no line
-            // gathers them into one control.
+            // The rest are buttons, and no line gathers them into one
+            // control. Freeze is the one of them that stays on, because
+            // the TV holds its frame until the DM presses it again.
             let mut left = actions_box.left();
             for (index, (press, label, glyph)) in actions.iter().enumerate() {
                 let cell = egui::Rect::from_min_size(
                     egui::pos2(left, actions_box.top()),
                     egui::vec2(action_widths[index], TOOL_HEIGHT),
                 );
-                if tool_entry(ui, cell, actions_inside, label, *glyph, false, tokens).clicked() {
+                let active = *press == Press::Freeze && frozen;
+                if tool_entry(ui, cell, actions_inside, label, *glyph, active, tokens).clicked() {
                     pressed = Some(*press);
                 }
                 left += action_widths[index];

@@ -77,6 +77,7 @@ Caution: a scale under 100 % takes a button under the 24 px floor of section 6. 
 - Glyphs in the toolbar: `mouse-pointer` (Select), `pencil` (Draw), `drafting-compass` (Edit), `monitor` (Table), `layers` (Scenes), `plus` (Add map), `sliders-horizontal` (Settings).
 - Glyphs on the second bar of the Edit view: `brick-wall` (Walls), `door-open` (Doors), `sun` (Light), `cloud-fog` (Fog).
 - Glyphs in a dialog: `monitor` (Table tab), `grid-3x3` (Grid tab), `sun` (Light tab), `keyboard` (Shortcuts tab), `info` (About tab), `x` (close), `chevron-down` (select), `check` (checkbox), `import` (Import).
+- Glyphs in a key chip: `arrow-big-up` (Shift), `space`, `corner-down-left` (Enter), `delete` (Backspace), `arrow-left`, `arrow-right`, `arrow-up`, `arrow-down`, `mouse-left`, `mouse-right`, `mouse` (the wheel and the middle button).
 - Glyphs in a panel or a menu: `folder`, `image`, `film`, `eye`, `eye-off`, `monitor-off`, `star`, `search`, `chevron-right`, `arrow-up`, `arrow-down`, `rotate-cw`, `flip-horizontal-2`, `flip-vertical-2`, `ruler`, `trash`, `minus` (line), `square`, `circle`, `eraser`, `play`, `pause`, `undo`, `triangle-alert`.
 
 Every name above is a name the Lucide set holds. Check a new one against the set before this document takes it: the set renames a glyph from time to time, and a name that reads well is not always a name that exists.
@@ -108,7 +109,8 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - The first box holds the views: Select, Draw, Edit, Table. It is a segmented control, so one of them is always on.
 - A dashed 1 px line stands between each pair of views, dash and gap 3 px. It takes the `ink` of the box, not the `rule` of section 6: a lighter line beside an `ink` border reads as a seam, not as a join.
 - The dash is what tells the two boxes apart. A solid line would give the views the same divided look as the buttons beside them, and the eye would read one long control in two halves.
-- The second box holds Scenes, Add map and Settings. They are buttons, not views: none of them stays on, and no rule gathers them into one control. Each opens something at once.
+- The second box holds Scenes, Add map, Settings and Freeze. No rule gathers them into one control. The first three open something at once.
+- Freeze is the one entry of the box that stays on. It takes the `pause` glyph, and the `raised` background, the `accent` bar and the `accent` label of an active view while it stands. The TV holds the frame it had until the DM presses it again. Issue #76.
 - Two boxes say this louder than one rule between two groups. A DM reads the shape before the label.
 - The active entry has background `raised`, a 3 px `accent` bar on its top edge, and `accent` icon and label.
 - The Edit view brings a second bar of the same shape. It sits 8 px over the toolbar and holds Walls, Doors, Light and Fog. The views stay on the screen under it.
@@ -127,12 +129,15 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - Four square handles, 8 px, `accent`, centered on the corners. They stand 4 px outside the box.
 - The area outside the box gets the `dim` wash.
 - The zoom label sits above the top-right corner, 14 px bold, for example `100 %`. The label is `accent` when the box snaps to true size. Otherwise it is `ink`.
+- The label hides while no part of the box is on the canvas. The marker of section 5.5 takes its place.
 
 ### 5.5 Marker for a box off the screen
 
 - The marker shows only when no part of the TV box is on the canvas.
 - It is a solid `accent` triangle, 28 px tall and 20 px deep. It points at the box center.
 - It sits on the canvas edge, where the line from the canvas center to the box center crosses that edge. It stays whole inside the canvas.
+- It stays clear of the panels, the toolbar and the History button. Under one of them, it moves along the same line toward the canvas center until it is clear.
+- It shows in every view. The TV window never shows it.
 - The marker takes no click and no drag. It is paint only.
 
 ### 5.6 Marks on the canvas
@@ -210,7 +215,7 @@ A fill inside one of these boxes stays inside its border. A fill that ran to the
 
 ### 8.1 Map panel, in the Select view
 
-The title of the panel is the file name. Rows: Group with a select that moves the map to another group; Pixels per cell with an input and the Measure a cell button; Size in percent; Turn in degrees. A helper line under Measure reads "Click two corners of one cell. Escape gives it up." The footer holds Turn, Flip and Delete.
+The title of the panel is the file name. Rows: Group with a select that moves the map to another group; Pixels per cell with an input, the Measure a cell button and the Find the grid button; Size in percent; Turn in degrees. A helper line under Measure reads "Click two corners of one cell. Escape gives it up." The footer holds Turn, Flip and Delete.
 
 ### 8.2 TV box panel, in the Table view
 
@@ -335,11 +340,15 @@ A Reset button is dead while the row already shows the token of the theme. A row
 
 ### 9.4 Settings, Shortcuts tab
 
-- The view the DM works in comes first. A 14 px bold line names each group.
-- Each row is 34 px high with a 1 px `rule` bottom border: the action 14 px in a 270 px column, then the key chip, then the Change button 24 px high on the right.
+- The view the DM works in comes first, then the controls of every view, then the other views. A 14 px bold line names each group.
+- Each row is 34 px high with a 1 px `rule` bottom border: the action 14 px in a 200 px column, then the key chips, then the Change button 24 px high on the right. The body of the dialog is 452 px wide, so a wider column leaves no room for `Ctrl + Shift + Z`. A long name wraps inside the column.
+- A control can hold two keys, such as Redo. Each key takes a chip of its own. A new key takes the place of both.
+- A chip draws Shift, Space, Enter, Backspace, the arrows and the mouse as glyphs. `Ctrl`, `Alt` and the other keys stay words. A gesture with two ways to do it takes two chips, never the word "or".
+- A key that rides on a drag or a click, such as `Ctrl` for a move with no snap, takes a row with no Change button. The DM cannot change it.
+- The Change button stands 12 px from the right edge, so the scroll bar does not cover it.
 - The chip takes an `accent` border and the text "Press a key" while the program waits for the new key.
 - Caution: the program refuses a key that another control holds. A 14 px `accent` line under the row names that control.
-- The footer holds "Bring back the default keys" on the left and Close on the right.
+- The footer holds "Reset to default" on the left and Close on the right.
 
 ### 9.5 Settings, About tab
 
@@ -385,6 +394,39 @@ The release archive keeps the same three files beside the program. This tab is t
 - A step the DM took back draws in `mute`. It stays on the list, so a walk forward is one click.
 - A click on a row takes the scene to the state after that step.
 - The footer holds the helper "A click on a step takes the scene there".
+
+### 9.9 Find the grid
+
+The Find the grid button of the Map panel opens this dialog on the map the DM holds. The program finds the straight lines of the map file, and the DM picks the two that bound a cell. The program picks nothing: a tile with a joint across its middle gives a line there too, and only a person who looks at the map can tell that joint from the grid. Issue #35.
+
+- Size 1040 × 760 px, which the window shrinks when it must. A map needs more room than the dialogs above.
+- The body is the image, on the `field` background, with 18 px and 20 px of padding. It fits the body when the dialog opens. The wheel zooms around the pointer, and a drag with the middle button or with `Space` pans.
+- Each line the search found draws across the whole image: a 1 px pale stroke over a 3 px dark one, so it reads on a dark map and on a pale one. A line that runs along more of the image draws more solid.
+- The line under the pointer takes `accent` at 2 px. A picked line takes `accent` at 3 px.
+- A click on a line picks it, and a click on a picked line lets it go. A line across the first one starts the pick over, and a third line of the same way takes the place of the second.
+- With two lines picked, a preview grid of the cell they give draws in `accent` at 70 % over the whole image, from the first line. The DM sees whether it holds to the far edge of the map.
+- The footer holds Cells between with a whole-number input, then the helper line, then Cancel and Use on the right. Use stands dead until two lines give a cell and the map shows on the canvas.
+- The helper line says what the dialog waits for: "The program reads the lines of the map", "Click two lines that bound a cell", the size such as "199.83 px per cell", or "No line found on this map" with a pointer to Measure a cell.
+- Use writes the size in pixels of the GPU copy, so it waits until the loader makes that copy. Until then the helper line adds "Use waits until the map shows on the canvas".
+- The helper line reports a search that stops without an answer, and points to Measure a cell.
+- On a hex canvas the helper line says "A hex grid gives a line at each half hex". The search reads no hex grid. Two neighbor lines bound half a hex, and the two sides of one hex bound a whole one.
+- Use writes the pixels per cell to the map and the start of its grid to the snap offset, on the axis of the two lines, as one step. A map at an angle keeps the offset it had, and so does a map on a hex canvas. A hex canvas snaps to hex middles, so a line offset would set the map half a hex off. Cancel, `Escape` and a click on the scrim change nothing.
+- The search reads the whole file on a thread of its own. The picture in the dialog is a copy no larger than the largest texture the GPU takes, and the lines count in the pixels of the file.
+
+### 5.10 A frozen TV
+
+The DM sets up the next scene in front of the players, and the TV takes every change at once. Freeze holds the frame the TV had, so the table keeps the scene it was on. Issue #76.
+
+- At the press the TV keeps a picture of the frame it shows. It lays that picture down until the DM lets it go, and reads no scene. Issue #78.
+- A map that moves, a stroke, the TV box, the grid and the colors all wait behind the picture.
+- A scene the DM opens waits as well. A copy of the tree could not hold there, because two scenes may each hold a `map.png`.
+- A TV window that changes size lays the same picture over its new size.
+- A swap of the two windows keeps the freeze. The swap builds the interface again, and a TV that came back live would show the players the work behind it.
+- The TV draws no pointer while the freeze stands, so a hand that moves tells the players nothing.
+- The DM window takes every change at once, and undo and redo work as they do. Only the TV waits.
+- The TV box draws a dashed outline while the freeze stands. A solid one would say that the box still rules what the table sees.
+- `P` does what the button does, in every view. It stands for the `pause` glyph, because `F` for freeze already flips a map. A dialog over the canvas takes the keyboard first, and so does a field the DM types in.
+- A run starts with a live TV. A freeze reaches no config file, so one the DM left on never meets the next run.
 
 ## 10. Other overlays
 

@@ -18,10 +18,13 @@ mod command;
 mod config;
 mod gpu;
 mod grid;
+mod hold;
 mod icon;
 mod icons;
 mod images;
 mod ink;
+mod keys;
+mod lines;
 mod maps;
 mod overlay;
 mod pointer;
@@ -307,6 +310,13 @@ struct Running {
     overlay: Overlay,
     /// The stroke the DM is drawing, which is in no scene yet.
     live: Option<crate::stroke::Stroke>,
+    /// The picture the TV lays down while the DM works. Issue #78.
+    ///
+    /// The TV reads no scene while this stands. A copy of the tree held the
+    /// maps, the strokes and the box, and it could not hold the pixels of a
+    /// map: another scene clears the map layer and brings its own file of
+    /// the same name. A picture holds against all of it.
+    held: Option<hold::Picture>,
     loader: Loader,
     camera: Camera,
 }
@@ -382,11 +392,13 @@ impl Running {
                 grid_cell: config.grid_cell,
                 paper_light: config.paper_light.clone(),
                 paper_dark: config.paper_dark.clone(),
+                keys: config.keys.clone(),
             },
             placed: false,
             // The first frame owes the players the scene the DM opened.
             tv_dirty: true,
             tv_pointer: None,
+            held: None,
             scene_dir,
             scenes_dir: config.scenes_dir.clone(),
             scene_error: String::new(),
@@ -488,6 +500,12 @@ impl Running {
     ///
     /// Returns an error when the GPU cannot draw the frame.
     fn draw_tv(&mut self) -> Result<bool> {
+        // A frozen TV reads no scene. It lays down the picture it held, so
+        // a map that moves, a stroke, and a scene the DM opens all wait for
+        // them to let it go. Issue #78.
+        if let Some(held) = &self.held {
+            return self.tv.lay_down(&self.gpu, held);
+        }
         let pane = &mut self.tv;
         let viewport = (pane.config.width, pane.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
@@ -501,8 +519,8 @@ impl Running {
         // The strokes draw over every map and over the grid, and what the
         // DM has under their hand draws with them.
         let mut ink = scene::ink_order(&self.scene, Audience::Tv);
-        if let Some(live) = self.live.as_ref() {
-            ink.push(live);
+        if let Some(stroke) = self.live.as_ref() {
+            ink.push(stroke);
         }
         let map_layer = &mut self.map_layer;
         let grid_layer = &self.grid_layer;
@@ -624,10 +642,19 @@ impl Running {
                 scenes_dir: &self.scenes_dir,
                 tv_viewport: (self.tv.config.width, self.tv.config.height),
                 size_of: &|path| map_layer.size_of(path),
+                frozen: self.held.is_some(),
             },
         );
         // A change may have put an asset back in the tree, such as a redo
         // of an add. It is settled by now, because a drag adds nothing.
+        // The freeze takes the picture of the frame the TV shows now, and
+        // gives it back when the DM presses again. Issue #78.
+        if output.frozen != self.held.is_some() {
+            self.held = output
+                .frozen
+                .then(|| self.tv.take_picture(&self.gpu.device));
+            self.tv_dirty = true;
+        }
         if output.save {
             self.request_images();
         }
@@ -745,9 +772,13 @@ impl Running {
         self.tv.window.set_title("dmap TV");
         self.tv.window.set_decorations(false);
         // The swap builds the interface again, and the DM keeps the tool
-        // and the tab they were working in.
+        // and the tab they were working in. A frozen TV stays frozen: a
+        // swap that let it go would show the players the work behind it.
+        // Issue #76.
         let (tool, tab) = (self.ui.tool(), self.ui.settings_tab());
+        let frozen = self.ui.frozen();
         self.ui = DmUi::new(&self.gpu, &self.dm, tool, tab);
+        self.ui.set_frozen(frozen);
     }
 
     /// Where the DM window stands, or `None` when the desktop hides it.
@@ -831,6 +862,7 @@ impl Running {
         config.grid_kind = self.settings.grid_kind;
         config.grid_cell = self.settings.grid_cell;
         config.paper_light.clone_from(&self.settings.paper_light);
+        config.keys.clone_from(&self.settings.keys);
         config.paper_dark.clone_from(&self.settings.paper_dark);
         config.tool = self.ui.tool();
         config.settings_tab = self.ui.settings_tab();

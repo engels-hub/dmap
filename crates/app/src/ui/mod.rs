@@ -9,7 +9,10 @@
 mod canvas;
 mod dialog;
 mod draw;
+mod finder;
+mod marker;
 mod panel;
+mod shortcuts;
 mod toolbar;
 mod tree;
 
@@ -25,6 +28,7 @@ use crate::command::History;
 use crate::config::Paper;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::icons::Icon;
+use crate::keys::{Action, Keys};
 use crate::scene::{Asset, NodeId, Placed, Scene};
 use crate::stroke::{Ink, Rule, Stroke};
 use crate::text;
@@ -38,6 +42,8 @@ pub use draw::measure_overlay;
 use canvas::{canvas_area, frame_tv_box, select_tool, table_tool, undo_keys};
 use dialog::{Dialog, history_dialog, scenes_dialog, settings_dialog};
 use draw::{Draw, draw_tool};
+use finder::{Finder, find_the_grid};
+use marker::mark_tv_box;
 use panel::{Views, objects_panel, properties_panel, say_lengths};
 use toolbar::{Press, TOOLBAR_ID, history_button, toolbar};
 use tree::Tree;
@@ -241,41 +247,15 @@ const FRAME_MARGIN: f64 = 0.9;
 /// How much one press of the zoom keys changes the DM zoom.
 const KEY_ZOOM_STEP: f64 = 1.1;
 
-/// Zoom in. Figma, a browser and touchegg all send this for a pinch.
-const ZOOM_IN: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Plus);
-
-/// Zoom in from the main row, where `+` needs Shift and `=` does not.
-const ZOOM_IN_EQUALS: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Equals);
-
-/// Zoom out.
-const ZOOM_OUT: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Minus);
-
-/// Takes the last change to the scene back.
-const UNDO: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
-
-/// Writes the last change the DM took back again.
-const REDO: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
-    egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
-    egui::Key::Z,
-);
-
-/// The same, for a DM who learned redo in a Windows program.
-const REDO_Y: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
-
-/// Back to the zoom a new project opens with.
-const ZOOM_RESET: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Num0);
-
 /// The smallest and the largest zoom the box properties accept, in percent.
 const MIN_ZOOM_PERCENT: f64 = 5.0;
 const MAX_ZOOM_PERCENT: f64 = 500.0;
 
 /// egui state and renderer for one window.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one switch of the window, and no two of them pair"
+)]
 pub struct DmUi {
     state: egui_winit::State,
     renderer: egui_wgpu::Renderer,
@@ -289,6 +269,14 @@ pub struct DmUi {
     dialog: Dialog,
     /// Whether the history dialog stands. DESIGN.md 9.8.
     history_open: bool,
+    /// Whether the TV holds the frame it had. Issue #76.
+    ///
+    /// The DM sets up the next scene behind a frozen TV, and the players
+    /// keep the last one. A run never starts frozen, so this reaches no
+    /// config file.
+    frozen: bool,
+    /// The Find the grid dialog. DESIGN.md 9.9.
+    finder: Finder,
     /// The theme the context carries, so a change installs once.
     theme: theme::Mode,
     /// The language the catalog holds, for the same reason.
@@ -424,6 +412,8 @@ pub struct Settings {
     pub grid_kind: crate::grid::Kind,
     /// How wide a cell is, in inches. A hex measures flat to flat.
     pub grid_cell: Option<f32>,
+    /// The key of every control. Issue #36.
+    pub keys: crate::keys::Keys,
 }
 
 impl Settings {
@@ -483,6 +473,11 @@ pub struct Frame<'a> {
     pub scene_error: &'a str,
     /// The folder that holds the scenes.
     pub scenes_dir: &'a Path,
+    /// Whether the TV holds the frame it had. Issue #76.
+    ///
+    /// The canvas draws the TV box dashed while it stands, so the DM reads
+    /// the freeze off the box as well as off the toolbar.
+    pub frozen: bool,
 }
 
 impl std::fmt::Debug for Frame<'_> {
@@ -502,6 +497,9 @@ struct Select {
     note: String,
     drag: Option<Drag>,
     measure: Option<Measure>,
+    /// The map the DM asked the Find the grid dialog for. The frame that
+    /// raised it opens the dialog. Issue #35.
+    find_grid: Option<NodeId>,
     /// The stroke as it stood when the DM took hold of a field.
     ///
     /// A drag of a number runs over many frames, and every one of them
@@ -836,6 +834,8 @@ impl DmUi {
             tree: Tree::default(),
             dialog: Dialog::on_tab(tab),
             history_open: false,
+            frozen: false,
+            finder: Finder::default(),
             theme: theme::Mode::default(),
             language: text::DEFAULT.to_owned(),
             ui_scale: theme::DEFAULT_SCALE,
@@ -899,6 +899,8 @@ impl DmUi {
         let tree = &mut self.tree;
         let dialog = &mut self.dialog;
         let history_open = &mut self.history_open;
+        let frozen = &mut self.frozen;
+        let finder = &mut self.finder;
         let frame_box = &mut self.frame_box;
         let zoom_goes_to = &mut self.zoom_goes_to;
         let selected_before = select.chosen.clone();
@@ -910,7 +912,8 @@ impl DmUi {
             // floats over it. So the canvas takes the whole rect, and the
             // panels come after it and draw on top.
             let rect = ui.ctx().content_rect();
-            let over = popup_open || scenes.open || dialog.open || *history_open;
+            let over =
+                popup_open || scenes.open || dialog.open || *history_open || finder.is_open();
             if !over {
                 frame_tv_box(ui, &mut frame, rect, viewport, *frame_box);
                 // The ask lives one frame, because the panel that raised it
@@ -929,22 +932,26 @@ impl DmUi {
                         table_tool(ui, table, &mut frame, viewport, zoom_goes_to, tokens)
                     }
                 };
+                // The marker goes over the dim wash of the Table view, so
+                // it paints after the tools. Issue #44.
+                mark_tv_box(ui, &frame, rect, viewport, tokens);
                 say_lengths(ui, &frame, draw.live.as_ref(), viewport, tokens);
             }
             edited |= objects_panel(ui.ctx(), &mut frame, select, tree, tokens);
             let mut views = Views { select, table };
             edited |= properties_panel(ui.ctx(), &mut frame, &mut views, *tool, frame_box, tokens);
+            let asked = views.select.find_grid.take();
+            edited |= find_the_grid(ui, finder, asked, &mut frame, tokens);
             if history_button(ui, tokens) {
                 *history_open = !*history_open;
             }
             edited |= history_dialog(ui, history_open, &mut frame, tokens);
-            match toolbar(ui, *tool, tokens) {
-                Some(Press::View(view)) => *tool = view,
-                Some(Press::Scenes) => scenes.open = !scenes.open,
-                Some(Press::AddMap) => add_map = true,
-                Some(Press::Settings) => dialog.open = !dialog.open,
-                None => {}
+            if let Some(press) = toolbar(ui, *tool, *frozen, tokens) {
+                add_map |= take_press(press, tool, scenes, dialog, frozen);
             }
+            every_view_keys(ui, &frame.settings.keys, over, frozen, dialog);
+            // After the toolbar, which the strip asks the context about so
+            // that it can stop short of it. DESIGN.md 7.3.
             message_line(ui.ctx(), rect, frame.scene_error, tokens);
             // A dialog over the canvas takes the keyboard too. egui holds
             // the pointer back on its own, but `R` and the arrow keys would
@@ -954,7 +961,7 @@ impl DmUi {
             // `edited` for that reason. The scene file grows with the
             // scene, and a drag of a slider in Settings would write every
             // stroke of it again for each frame of the drag. Issue #66.
-            settings_edited = settings_dialog(ui.ctx(), &mut frame, dialog, tokens);
+            settings_edited = settings_dialog(ui.ctx(), &mut frame, dialog, *tool, tokens);
             scene = scenes_dialog(ui, scenes, &frame, tokens);
         });
         let egui::FullOutput {
@@ -996,6 +1003,7 @@ impl DmUi {
             save,
             scene,
             active_group: self.tree.active,
+            frozen: self.frozen,
             paint: Paint {
                 jobs: paint_jobs,
                 textures_delta,
@@ -1028,6 +1036,20 @@ impl DmUi {
     /// The tab the settings dialog marks, for the same reason.
     pub fn settings_tab(&self) -> Tab {
         self.dialog.tab
+    }
+
+    /// Whether the TV holds the frame it had. Issue #76.
+    pub fn frozen(&self) -> bool {
+        self.frozen
+    }
+
+    /// Holds the TV, or lets it go, from outside a frame.
+    ///
+    /// A swap of the two windows builds this interface again. Without this
+    /// the new one would start live, and the players would see the work the
+    /// DM was hiding from them.
+    pub fn set_frozen(&mut self, frozen: bool) {
+        self.frozen = frozen;
     }
 
     /// Draws the maps, then the canvas, then the UI on top of both.
@@ -1114,9 +1136,16 @@ pub fn render_pane(
                 draw_maps(&mut pass);
             };
             {
-                let mut pass = begin_clear_pass(&mut encoder, &view, ground);
+                let mut pass = begin_clear_pass(&mut encoder, pane.picture.view(), ground);
                 draw_canvas(&mut pass);
                 renderer.render(&mut pass, &jobs, &screen);
+            };
+            // The window draws the whole frame into a picture, and one pass
+            // lays that picture on the surface. A TV that freezes keeps the
+            // picture it had and lays it down again. Issue #78.
+            {
+                let mut pass = begin_clear_pass(&mut encoder, &view, ground);
+                pane.hold.draw(&gpu.device, &mut pass, &pane.picture);
             };
             gpu.queue
                 .submit(buffers.into_iter().chain([encoder.finish()]));
@@ -1136,6 +1165,10 @@ pub fn render_pane(
 
 /// What one UI frame decided.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one answer of the frame, and no two of them pair"
+)]
 pub struct UiOutput {
     /// The stroke under the DM's hand, which is in no scene yet.
     ///
@@ -1153,6 +1186,52 @@ pub struct UiOutput {
     pub active_group: NodeId,
     /// What `DmUi::render` needs.
     pub paint: Paint,
+    /// Whether the TV holds the frame it had. Issue #76.
+    pub frozen: bool,
+}
+
+/// The keys that work in every view and over no dialog: Freeze, and the
+/// list of keys. Issues #76 and #36.
+fn every_view_keys(ui: &egui::Ui, keys: &Keys, over: bool, frozen: &mut bool, dialog: &mut Dialog) {
+    if asked_for(ui, keys, Action::Freeze, over) {
+        *frozen = !*frozen;
+    }
+    if asked_for(ui, keys, Action::Shortcuts, over) {
+        dialog.open = true;
+        dialog.tab = Tab::Shortcuts;
+    }
+}
+
+/// Whether the DM pressed the key of `action`. Takes the press.
+///
+/// Freeze and the list of keys work in every view. A dialog over the
+/// canvas takes the keyboard first, and so does a field the DM types in.
+/// Issues #76 and #36.
+fn asked_for(ui: &egui::Ui, keys: &Keys, action: Action, over: bool) -> bool {
+    !over
+        && !ui.ctx().egui_wants_keyboard_input()
+        && ui.input_mut(|input| keys.pressed(input, action))
+}
+
+/// Takes what the toolbar asked for. Returns `true` for Add map.
+///
+/// Add map opens a file dialog, which belongs to the caller and not to a
+/// frame of the UI, so it comes back as an answer.
+fn take_press(
+    press: Press,
+    tool: &mut Tool,
+    scenes: &mut Scenes,
+    dialog: &mut Dialog,
+    frozen: &mut bool,
+) -> bool {
+    match press {
+        Press::View(view) => *tool = view,
+        Press::Scenes => scenes.open = !scenes.open,
+        Press::Settings => dialog.open = !dialog.open,
+        Press::Freeze => *frozen = !*frozen,
+        Press::AddMap => return true,
+    }
+    false
 }
 
 /// The tessellated UI of one frame, ready to draw.
@@ -1188,10 +1267,40 @@ fn painter_dashes(ui: &egui::Ui, line: &[egui::Pos2; 2], color: egui::Color32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Paper, Settings, theme};
+    use super::{Dialog, Paper, Press, Scenes, Settings, Tool, take_press, theme};
+
+    #[test]
+    fn the_freeze_button_holds_the_tv_and_lets_it_go() {
+        let (mut tool, mut scenes) = (Tool::Select, Scenes::default());
+        let (mut dialog, mut frozen) = (Dialog::default(), false);
+        let mut press =
+            |what, frozen: &mut bool| take_press(what, &mut tool, &mut scenes, &mut dialog, frozen);
+        assert!(
+            !press(Press::Freeze, &mut frozen),
+            "Freeze asks the caller for nothing"
+        );
+        assert!(frozen, "one press holds the TV");
+        press(Press::Freeze, &mut frozen);
+        assert!(!frozen, "the next press lets it go");
+        // Add map is the one press the caller answers.
+        assert!(press(Press::AddMap, &mut frozen));
+        assert!(!frozen, "Add map says nothing about the TV");
+    }
+
+    #[test]
+    fn another_press_leaves_the_freeze_as_it_stands() {
+        let (mut tool, mut scenes) = (Tool::Select, Scenes::default());
+        let (mut dialog, mut frozen) = (Dialog::default(), true);
+        for what in [Press::View(Tool::Draw), Press::Scenes, Press::Settings] {
+            take_press(what, &mut tool, &mut scenes, &mut dialog, &mut frozen);
+            assert!(frozen, "{what:?} let the TV go");
+        }
+        assert_eq!(tool, Tool::Draw);
+    }
 
     fn settings() -> Settings {
         Settings {
+            keys: crate::keys::Keys::default(),
             theme: theme::Mode::default(),
             language: crate::text::DEFAULT.to_owned(),
             ink_color: [0, 0, 0, 255],

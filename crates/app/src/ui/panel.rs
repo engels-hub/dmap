@@ -924,6 +924,18 @@ fn map_properties(
     {
         select.measure = Some(Measure::Start);
     }
+    // The dialog reads the whole file and shows its lines, and the DM
+    // picks two of them. Issue #35.
+    if widget::button(
+        ui,
+        text::panel_map_find_grid(),
+        Some(Icon::Grid3x3),
+        Height::Panel,
+    )
+    .clicked()
+    {
+        select.find_grid = Some(id);
+    }
     if select.measure.is_some() {
         widget::helper(ui, text::panel_map_measure_helper());
     }

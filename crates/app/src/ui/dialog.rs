@@ -19,8 +19,10 @@ use crate::widget::{self, Height};
 use super::{
     DIALOG, DIALOG_HEADER, DIALOG_NAV, FOOTER, Frame, LABEL_COLUMN, MARGIN, PANEL_PAD, PATH_WIDTH,
     ROW_GAP, ROW_HEIGHT, SCENE_ROW, STEP_LINE, STEP_PAD, STEP_ROW, SceneCommand, Scenes, Settings,
+    Tool,
 };
 
+use super::shortcuts::{Shortcuts, footer, listen, shortcuts_tab};
 use super::tree::row_name;
 
 /// A tab of the settings dialog. DESIGN.md 9.
@@ -64,6 +66,8 @@ pub(super) struct Dialog {
     scale_drag: Option<f64>,
     /// The license the About tab shows.
     license: License,
+    /// The control of the Shortcuts tab that waits for a key. Issue #36.
+    shortcuts: Shortcuts,
 }
 
 impl Dialog {
@@ -80,7 +84,7 @@ impl Dialog {
 ///
 /// `body` draws inside the rest of the frame. Returns `true` when the DM
 /// asked to close the dialog.
-fn dialog_frame(
+pub(super) fn dialog_frame(
     ctx: &egui::Context,
     id: &str,
     title: &str,
@@ -151,23 +155,49 @@ fn dialog_frame(
 }
 
 /// The settings dialog of DESIGN.md 9. Returns `true` when a value changed.
+///
+/// `tool` is the view the DM works in, which the Shortcuts tab lists
+/// first.
 pub(super) fn settings_dialog(
     ctx: &egui::Context,
     frame: &mut Frame<'_>,
     dialog: &mut Dialog,
+    tool: Tool,
     tokens: Tokens,
 ) -> bool {
     if !dialog.open {
         return false;
     }
-    let mut edited = false;
+    // The key the DM gives a control must reach nothing else, not even the
+    // `Escape` that closes this dialog, so it goes before the frame reads
+    // any key. Issue #36.
+    let mut edited = dialog.tab == Tab::Shortcuts
+        && listen(ctx, &mut frame.settings.keys, &mut dialog.shortcuts);
+    let mut footer_close = false;
     let title = text::dialog_settings_title();
     let close = dialog_frame(ctx, "settings", title, DIALOG, tokens, |ui, rest| {
         let nav = egui::Rect::from_min_size(rest.left_top(), egui::vec2(DIALOG_NAV, rest.height()));
         dialog_nav(ui, nav, &mut dialog.tab, tokens);
+        // DESIGN.md 9.4 gives the Shortcuts tab a footer of its own.
+        let bottom = if dialog.tab == Tab::Shortcuts {
+            let rect =
+                egui::Rect::from_min_max(egui::pos2(nav.right(), rest.bottom() - FOOTER), rest.max);
+            let (reset, close) = footer(
+                ui,
+                rect,
+                &mut frame.settings.keys,
+                &mut dialog.shortcuts,
+                tokens,
+            );
+            edited |= reset;
+            footer_close = close;
+            rect.top()
+        } else {
+            rest.bottom()
+        };
         let body = egui::Rect::from_min_max(
             egui::pos2(nav.right() + 20.0, rest.top() + 18.0),
-            egui::pos2(rest.right() - 20.0, rest.bottom() - 18.0),
+            egui::pos2(rest.right() - 20.0, bottom - 18.0),
         );
         let mut body_ui = ui.new_child(
             egui::UiBuilder::new()
@@ -191,14 +221,22 @@ pub(super) fn settings_dialog(
                         not_built(body_ui, text::dialog_settings_light_soon());
                     }
                     Tab::About => about_tab(body_ui, &mut dialog.license, tokens),
-                    Tab::Shortcuts => {
-                        not_built(body_ui, text::dialog_settings_shortcuts_soon());
-                    }
+                    Tab::Shortcuts => shortcuts_tab(
+                        body_ui,
+                        &frame.settings.keys,
+                        &mut dialog.shortcuts,
+                        tool,
+                        tokens,
+                    ),
                 }
             });
     });
-    if close {
+    if close || footer_close {
         dialog.open = false;
+    }
+    // A wait for a key ends with the dialog, and with a move to another tab.
+    if !dialog.open || dialog.tab != Tab::Shortcuts {
+        dialog.shortcuts.stop();
     }
     edited
 }
