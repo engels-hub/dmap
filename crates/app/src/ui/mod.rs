@@ -1060,9 +1060,16 @@ pub fn render_pane(
                 draw_maps(&mut pass);
             };
             {
-                let mut pass = begin_clear_pass(&mut encoder, &view, ground);
+                let mut pass = begin_clear_pass(&mut encoder, pane.picture.view(), ground);
                 draw_canvas(&mut pass);
                 renderer.render(&mut pass, &jobs, &screen);
+            };
+            // The window draws the whole frame into a picture, and one pass
+            // lays that picture on the surface. A TV that freezes keeps the
+            // picture it had and lays it down again. Issue #78.
+            {
+                let mut pass = begin_clear_pass(&mut encoder, &view, ground);
+                pane.hold.draw(&gpu.device, &mut pass, &pane.picture);
             };
             gpu.queue
                 .submit(buffers.into_iter().chain([encoder.finish()]));
