@@ -14,6 +14,7 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use crate::command::SetAssets;
 use crate::grid::Cells;
+use crate::images;
 use crate::lines::{self, Line, Way};
 use crate::scene::{Node, NodeId};
 use crate::text;
@@ -214,7 +215,7 @@ impl Finder {
 ///
 /// `longest` is the longest side the copy for the dialog may take.
 fn search(file: &Path, longest: u32) -> Result<Found, String> {
-    let image = image::open(file).map_err(|error| format!("{}: {error}", file.display()))?;
+    let image = images::open(file)?;
     let size = (image.width(), image.height());
     let lines = {
         let gray = image.to_luma8();

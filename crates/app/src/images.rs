@@ -2,12 +2,21 @@
 
 // Rust guideline compliant 2026-02-21
 
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 
 // These aliases are the instrumented endpoints when the `hotpath` feature is
 // on, and the plain `std::sync::mpsc` types when it is off.
 use hotpath::wrap::std::sync::mpsc::{Receiver, Sender};
+use image::{DynamicImage, ImageReader};
+
+/// The file extensions of the images a map can come from.
+///
+/// These are the formats the `image` crate builds with, in `Cargo.toml`.
+/// A name added here and not there shows files the decoder refuses.
+pub const EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp"];
 
 /// A decoded image: RGBA8 rows, top row first.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,7 +25,7 @@ pub struct Decoded {
     pub rgba: Vec<u8>,
 }
 
-/// Decodes PNG or JPEG bytes. Images beyond `max_side` pixels are shrunk.
+/// Decodes PNG, JPEG or WebP bytes. Images beyond `max_side` pixels are shrunk.
 ///
 /// # Errors
 ///
@@ -95,20 +104,101 @@ impl Loader {
     }
 }
 
+/// Opens an image file and finds its format from its first bytes.
+///
+/// The extension counts only when the bytes match no format. A JPEG saved
+/// as `map.png` then opens as the JPEG it is, the same as in [`decode`].
+fn reader(file: &Path) -> Result<ImageReader<BufReader<File>>, String> {
+    ImageReader::open(file)
+        .and_then(ImageReader::with_guessed_format)
+        .map_err(|error| format!("{}: {error}", file.display()))
+}
+
+/// Checks that `file` is an image the decoder reads.
+///
+/// Only the header is read, so a large map costs no more than a small one.
+///
+/// # Errors
+///
+/// Returns a message that names the file when it cannot be opened, or when
+/// its format is not one of [`EXTENSIONS`].
+pub fn check(file: &Path) -> Result<(), String> {
+    reader(file)?
+        .into_dimensions()
+        .map(drop)
+        .map_err(|error| format!("{}: {error}", file.display()))
+}
+
+/// Decodes a whole image file at its full size.
+///
+/// # Errors
+///
+/// Returns a message that names the file when it cannot be opened or
+/// decoded.
+pub fn open(file: &Path) -> Result<DynamicImage, String> {
+    reader(file)?
+        .decode()
+        .map_err(|error| format!("{}: {error}", file.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
-    use super::{decode, shrink_to_fit};
+    use super::{check, decode, open, shrink_to_fit};
 
-    fn png(width: u32, height: u32) -> Vec<u8> {
+    fn encode(width: u32, height: u32, format: image::ImageFormat) -> Vec<u8> {
         let mut bytes = Vec::new();
         let image =
             image::RgbaImage::from_fn(width, height, |x, _| image::Rgba([x as u8, 0, 0, 255]));
         image
-            .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .write_to(&mut Cursor::new(&mut bytes), format)
             .unwrap();
         bytes
+    }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        encode(width, height, image::ImageFormat::Png)
+    }
+
+    #[test]
+    fn decodes_webp_bytes_to_rgba() {
+        let decoded = decode(&encode(4, 2, image::ImageFormat::WebP), 8192).unwrap();
+        assert_eq!(decoded.size, (4, 2));
+        assert_eq!(&decoded.rgba[4..8], &[1, 0, 0, 255]);
+    }
+
+    #[test]
+    fn check_passes_an_image_and_refuses_other_files() {
+        let dir = std::env::temp_dir().join(format!("dmap-check-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let map = dir.join("map.webp");
+        std::fs::write(&map, encode(4, 2, image::ImageFormat::WebP)).unwrap();
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"not an image").unwrap();
+        check(&map).unwrap();
+        check(&notes).unwrap_err();
+        check(&dir.join("gone.png")).unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_under_the_wrong_name_opens_as_what_it_is() {
+        let dir = std::env::temp_dir().join(format!("dmap-misnamed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // JPEG holds no alpha, so this image is RGB.
+        let mut jpeg = Vec::new();
+        image::RgbImage::new(4, 2)
+            .write_to(&mut Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
+            .unwrap();
+        for name in ["map.png", "map"] {
+            let file = dir.join(name);
+            std::fs::write(&file, &jpeg).unwrap();
+            check(&file).unwrap();
+            let image = open(&file).unwrap();
+            assert_eq!((image.width(), image.height()), (4, 2));
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

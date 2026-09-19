@@ -21,7 +21,7 @@ The game master works in one window. A second window shows the players' view on 
 
 Version 0.2.0 has these features:
 
-- One canvas with no limits holds many maps. Drop a PNG or a JPEG on the window to add one.
+- One canvas with no limits holds many maps. Drop a PNG, a JPEG or a WebP on the window to add one.
 - A box on the canvas decides what the TV shows. The box snaps to true size.
 - Square grids and hex grids, with a tool that finds the grid on a map.
 - Pens, shapes, a ruler and areas of effect for spells.
