@@ -542,6 +542,12 @@ impl Running {
     ///
     /// Returns `true` when the scene changed.
     fn add_map(&mut self, file: &Path) -> bool {
+        // A dropped file skips the filter of the file picker. A file the
+        // decoder refuses would stay in the scene as a map that never shows.
+        if let Err(error) = images::check(file) {
+            eprintln!("{error}");
+            return false;
+        }
         let stored = match copy_into_scene(&self.scene_dir, file) {
             Ok(name) => name,
             Err(error) => {
@@ -571,7 +577,7 @@ impl Running {
     /// Asks for an image file and adds it. Returns `true` when a file was added.
     fn pick_map_file(&mut self) -> bool {
         let picked = rfd::FileDialog::new()
-            .add_filter(text::dialog_file_images(), &["png", "jpg", "jpeg"])
+            .add_filter(text::dialog_file_images(), images::EXTENSIONS)
             .set_directory(&self.scene_dir)
             .pick_file();
         picked.is_some_and(|file| self.add_map(&file))

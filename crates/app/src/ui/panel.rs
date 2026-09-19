@@ -874,7 +874,7 @@ fn reach_row(ui: &mut egui::Ui, cells: Cells, mark: &Stroke, after: &mut Stroke)
 ///
 /// The grid size decides the true size of the map: one grid cell is one
 /// inch on the canvas. Only a Foundry or a Universal VTT file carries that
-/// number, so for a plain PNG or JPEG the DM types it or measures it.
+/// number, so for a plain PNG, JPEG or WebP the DM types it or measures it.
 fn map_properties(
     ui: &mut egui::Ui,
     id: NodeId,

@@ -378,7 +378,7 @@ The release archive keeps the same three files beside the program. This tab is t
 ### 9.7 Import
 
 - Row: File, with the file name in an input and the Choose button.
-- Helper: "dmap reads PNG, JPEG, MP4, WebM, a Foundry VTT scene and a Universal VTT file".
+- Helper: "dmap reads PNG, JPEG, WebP, MP4, WebM, a Foundry VTT scene and a Universal VTT file".
 - Row: The file holds, with one checkbox for each thing the importer found. Each checkbox starts on.
 - Row: Foundry folder, with the path and the Change button. Helper: "A Foundry scene needs this. A Universal VTT file does not".
 - The footer holds Import on the left and Cancel on the right.
