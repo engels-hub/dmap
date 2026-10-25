@@ -221,6 +221,12 @@ pub struct Config {
     /// it once, at the first import that needs it, or in Settings.
     #[serde(default)]
     pub foundry_data: Option<PathBuf>,
+    /// How walls and doors treat the light. Issue #19.
+    #[serde(default)]
+    pub light: crate::lighting::Rules,
+    /// Which screens draw the light. DESIGN.md 9.3.
+    #[serde(default)]
+    pub light_show: crate::lighting::Show,
 }
 
 /// Where a window stands, in the pixels of the display.
@@ -264,6 +270,8 @@ impl Default for Config {
             settings_tab: crate::ui::Tab::default(),
             camera: None,
             foundry_data: None,
+            light: crate::lighting::Rules::default(),
+            light_show: crate::lighting::Show::Both,
         }
     }
 }
@@ -551,6 +559,11 @@ mod tests {
                 pixels_per_inch: 40.0,
             }),
             foundry_data: Some(PathBuf::from("/foundry/Data")),
+            light: crate::lighting::Rules {
+                walls_block: false,
+                open_doors_pass: false,
+            },
+            light_show: crate::lighting::Show::Tv,
         };
         assert_eq!(Config::from_json(&config.to_json()).unwrap(), config);
     }

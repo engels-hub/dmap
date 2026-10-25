@@ -5,7 +5,7 @@
 
 // Rust guideline compliant 2026-02-21
 
-use crate::command::Note;
+use crate::command::{Note, SetMood};
 use crate::config::{MAX_GRID_WIDTH, MIN_GRID_WIDTH};
 use crate::grid::{Kind, MAX_CELL, MIN_CELL};
 use crate::icon;
@@ -68,6 +68,9 @@ pub(super) struct Dialog {
     license: License,
     /// The control of the Shortcuts tab that waits for a key. Issue #36.
     shortcuts: Shortcuts,
+    /// The darkness of the scene as it stood when the DM took hold of a
+    /// control of the Light tab, so a drag of the slider is one step.
+    pub(super) opened_mood: Option<crate::lighting::Mood>,
 }
 
 impl Dialog {
@@ -218,7 +221,7 @@ pub(super) fn settings_dialog(
                         edited = grid_tab(body_ui, frame.settings);
                     }
                     Tab::Light => {
-                        not_built(body_ui, text::dialog_settings_light_soon());
+                        edited = light_tab(body_ui, frame, &mut dialog.opened_mood);
                     }
                     Tab::About => about_tab(body_ui, &mut dialog.license, tokens),
                     Tab::Shortcuts => shortcuts_tab(
@@ -573,6 +576,70 @@ fn grid_tab(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     });
     edited |= cell_rows(ui, settings);
     not_built(ui, text::dialog_settings_grid_soon());
+    edited
+}
+
+/// The Light tab of Settings. Returns `true` when the DM changed
+/// something. DESIGN.md 9.3. Issues #19 and #20.
+///
+/// The darkness and the ambient color belong to the scene, so a change to
+/// them is a step of its history. The walls and the screens belong to
+/// this table.
+fn light_tab(
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+    opened: &mut Option<crate::lighting::Mood>,
+) -> bool {
+    let mut edited = false;
+    let mut mood = frame.scene.light;
+    dialog_row(ui, text::dialog_settings_darkness(), |ui| {
+        let mut darkness = mood.darkness;
+        let shown = text::dialog_settings_opacity_value((darkness * 100.0).round());
+        if widget::slider(ui, &mut darkness, 0.0..=1.0, 180.0, &shown).changed() {
+            // The row shows whole percent, so it keeps whole percent.
+            mood.darkness = (darkness * 100.0).round() / 100.0;
+        }
+        widget::helper(ui, text::dialog_settings_darkness_helper());
+    });
+    dialog_row(ui, text::dialog_settings_ambient(), |ui| {
+        widget::color_swatch_rgb(ui, &mut mood.ambient);
+    });
+    if mood != frame.scene.light {
+        let before = *opened.get_or_insert(frame.scene.light);
+        frame.history.hold(
+            frame.scene,
+            SetMood {
+                before,
+                after: mood,
+            },
+        );
+        edited = true;
+    }
+    let settings = &mut *frame.settings;
+    let light = &mut settings.light;
+    dialog_row(ui, text::dialog_settings_walls(), |ui| {
+        edited |= widget::checkbox(
+            ui,
+            &mut light.walls_block,
+            text::dialog_settings_walls_block(),
+        )
+        .clicked();
+        edited |= widget::checkbox(
+            ui,
+            &mut light.open_doors_pass,
+            text::dialog_settings_open_doors(),
+        )
+        .clicked();
+    });
+    dialog_row(ui, text::dialog_settings_light_show(), |ui| {
+        use crate::lighting::Show;
+        let choices = [
+            (Show::Both, text::dialog_settings_light_both()),
+            (Show::Dm, text::dialog_settings_light_dm()),
+            (Show::Tv, text::dialog_settings_light_tv()),
+        ];
+        edited |= widget::segmented(ui, &mut settings.light_show, &choices);
+    });
     edited
 }
 

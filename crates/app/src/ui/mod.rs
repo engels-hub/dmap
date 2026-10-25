@@ -424,6 +424,10 @@ pub struct Settings {
     pub keys: crate::keys::Keys,
     /// The Data folder of a Foundry VTT install. Issue #16.
     pub foundry_data: Option<std::path::PathBuf>,
+    /// How walls and doors treat the light. Issue #19.
+    pub light: crate::lighting::Rules,
+    /// Which screens draw the light. DESIGN.md 9.3.
+    pub light_show: crate::lighting::Show,
 }
 
 impl Settings {
@@ -946,6 +950,7 @@ impl DmUi {
         self.select.opened_ink = None;
         self.select.opened_sight = None;
         self.table.opened = None;
+        self.dialog.opened_mood = None;
     }
 
     /// The tool the rail marks, so a new run opens on it.
@@ -1222,6 +1227,8 @@ mod tests {
         Settings {
             keys: crate::keys::Keys::default(),
             foundry_data: None,
+            light: crate::lighting::Rules::default(),
+            light_show: crate::lighting::Show::Both,
             theme: theme::Mode::default(),
             language: crate::text::DEFAULT.to_owned(),
             ink_color: [0, 0, 0, 255],

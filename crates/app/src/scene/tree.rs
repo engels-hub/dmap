@@ -316,7 +316,9 @@ pub fn assets_of(scene: &Scene, id: NodeId) -> Vec<NodeId> {
     match find(scene, id) {
         Some(Node::Asset(asset)) => vec![asset.id],
         Some(Node::Group(group)) => under(group).iter().map(|asset| asset.id).collect(),
-        Some(Node::Stroke(_) | Node::Walls(_) | Node::Light(_)) | None => Vec::new(),
+        Some(Node::Stroke(_) | Node::Walls(_) | Node::Light(_) | Node::Darkness(_)) | None => {
+            Vec::new()
+        }
     }
 }
 
@@ -331,7 +333,9 @@ pub fn strokes_of(scene: &Scene, id: NodeId) -> Vec<NodeId> {
             .iter()
             .map(|stroke| stroke.id)
             .collect(),
-        Some(Node::Asset(_) | Node::Walls(_) | Node::Light(_)) | None => Vec::new(),
+        Some(Node::Asset(_) | Node::Walls(_) | Node::Light(_) | Node::Darkness(_)) | None => {
+            Vec::new()
+        }
     }
 }
 
@@ -342,7 +346,7 @@ pub fn strokes_of(scene: &Scene, id: NodeId) -> Vec<NodeId> {
 /// drag of that group carries them with the map. Issue #16.
 pub fn sight_of(scene: &Scene, id: NodeId) -> Vec<NodeId> {
     match find(scene, id) {
-        Some(node @ (Node::Walls(_) | Node::Light(_))) => vec![node.id()],
+        Some(node @ (Node::Walls(_) | Node::Light(_) | Node::Darkness(_))) => vec![node.id()],
         Some(Node::Group(group)) => super::sight_under(group)
             .iter()
             .map(|node| node.id())
@@ -464,6 +468,7 @@ pub fn name_of_node(node: &Node) -> String {
         Node::Stroke(stroke) => stroke.ink.name().to_owned(),
         Node::Walls(_) => crate::text::sight_walls().to_owned(),
         Node::Light(_) => crate::text::sight_light().to_owned(),
+        Node::Darkness(_) => crate::text::sight_darkness().to_owned(),
     }
 }
 
@@ -481,7 +486,11 @@ fn find_asset(nodes: &mut [Node], id: NodeId) -> Option<&mut Asset> {
                     return Some(found);
                 }
             }
-            Node::Asset(_) | Node::Stroke(_) | Node::Walls(_) | Node::Light(_) => {}
+            Node::Asset(_)
+            | Node::Stroke(_)
+            | Node::Walls(_)
+            | Node::Light(_)
+            | Node::Darkness(_) => {}
         }
     }
     None
@@ -498,10 +507,13 @@ pub fn shown_mut(scene: &mut Scene, id: NodeId) -> Option<&mut Shown> {
     if has_stroke(scene, id) {
         return stroke_mut(scene, id).map(|stroke| &mut stroke.shown);
     }
-    if find(scene, id).is_some_and(|node| matches!(node, Node::Walls(_) | Node::Light(_))) {
+    if find(scene, id)
+        .is_some_and(|node| matches!(node, Node::Walls(_) | Node::Light(_) | Node::Darkness(_)))
+    {
         return match sight_mut(scene, id)? {
             Node::Walls(walls) => Some(&mut walls.shown),
             Node::Light(light) => Some(&mut light.shown),
+            Node::Darkness(area) => Some(&mut area.shown),
             _ => None,
         };
     }
@@ -542,7 +554,11 @@ fn find_stroke(nodes: &mut [Node], id: NodeId) -> Option<&mut Stroke> {
                     return Some(found);
                 }
             }
-            Node::Stroke(_) | Node::Asset(_) | Node::Walls(_) | Node::Light(_) => {}
+            Node::Stroke(_)
+            | Node::Asset(_)
+            | Node::Walls(_)
+            | Node::Light(_)
+            | Node::Darkness(_) => {}
         }
     }
     None
@@ -559,13 +575,19 @@ pub fn sight_mut(scene: &mut Scene, id: NodeId) -> Option<&mut Node> {
 fn find_sight(nodes: &mut [Node], id: NodeId) -> Option<&mut Node> {
     for node in nodes {
         match node {
-            Node::Walls(_) | Node::Light(_) if node.id() == id => return Some(node),
+            Node::Walls(_) | Node::Light(_) | Node::Darkness(_) if node.id() == id => {
+                return Some(node);
+            }
             Node::Group(group) => {
                 if let Some(found) = find_sight(&mut group.children, id) {
                     return Some(found);
                 }
             }
-            Node::Stroke(_) | Node::Asset(_) | Node::Walls(_) | Node::Light(_) => {}
+            Node::Stroke(_)
+            | Node::Asset(_)
+            | Node::Walls(_)
+            | Node::Light(_)
+            | Node::Darkness(_) => {}
         }
     }
     None

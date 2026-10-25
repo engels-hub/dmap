@@ -572,7 +572,7 @@ mod tests {
                         walk(&group.children, depth + 1, found);
                     }
                     Node::Stroke(stroke) => found.push((depth, format!("{:?}", stroke.ink))),
-                    Node::Asset(_) | Node::Walls(_) | Node::Light(_) => {}
+                    Node::Asset(_) | Node::Walls(_) | Node::Light(_) | Node::Darkness(_) => {}
                 }
             }
         }

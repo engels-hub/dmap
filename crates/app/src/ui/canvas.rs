@@ -12,7 +12,7 @@ use crate::command::{
 };
 use crate::keys::{Action, Keys};
 use crate::scene::{Asset, Node, NodeId, Placed, Scene};
-use crate::sight::{Light, Walls};
+use crate::sight::Darkness;
 use crate::stroke::Stroke;
 use crate::text;
 use crate::theme::{self, Tokens};
@@ -538,6 +538,9 @@ fn held_corners(select: &Select, frame: &Frame<'_>) -> Option<[(f64, f64); 4]> {
             let (min, max) = walls.bounds()?;
             Some([min, (max.0, min.1), max, (min.0, max.1)])
         }
+        // An area of darkness turns with its own corners, so the handles
+        // stand on them.
+        Node::Darkness(area) => Some(area.corners),
         Node::Light(light) => {
             let (min, max) = light.bounds();
             Some([min, (max.0, min.1), max, (min.0, max.1)])
@@ -606,6 +609,7 @@ fn press(
     let aimed = group_at(frame, view, pos)
         .or_else(|| ink_at(frame, cursor))
         .or_else(|| light_at(frame, view, cursor))
+        .or_else(|| darkness_at(frame, view, cursor))
         .or_else(|| walls_at(frame, view, cursor, false).map(|(id, _)| id))
         .or_else(|| {
             // The topmost asset under the pointer takes the press. The tree
@@ -660,7 +664,7 @@ fn ink_at(frame: &Frame<'_>, cursor: (f64, f64)) -> Option<NodeId> {
 /// glyph before the map under it does.
 fn light_at(frame: &Frame<'_>, view: &View, cursor: (f64, f64)) -> Option<NodeId> {
     let reach = points_in_inches(view, LIGHT_REACH);
-    crate::scene::sight_order(frame.scene)
+    crate::scene::sight_order(frame.scene, crate::scene::Audience::Dm)
         .into_iter()
         .rev()
         .find_map(|node| match node {
@@ -683,7 +687,7 @@ fn walls_at(
     doors: bool,
 ) -> Option<(NodeId, usize)> {
     let reach = points_in_inches(view, WALL_REACH);
-    crate::scene::sight_order(frame.scene)
+    crate::scene::sight_order(frame.scene, crate::scene::Audience::Dm)
         .into_iter()
         .rev()
         .find_map(|node| match node {
@@ -692,6 +696,81 @@ fn walls_at(
                 .map(|place| (walls.id, place)),
             _ => None,
         })
+}
+
+/// The area of darkness whose outline is under the pointer, if any.
+///
+/// The outline takes the press and the inside does not, so a press inside
+/// still reaches the map the area covers. Issue #20.
+fn darkness_at(frame: &Frame<'_>, view: &View, cursor: (f64, f64)) -> Option<NodeId> {
+    let reach = points_in_inches(view, WALL_REACH);
+    crate::scene::sight_order(frame.scene, crate::scene::Audience::Dm)
+        .into_iter()
+        .rev()
+        .find_map(|node| match node {
+            Node::Darkness(area) if area.edge_distance(cursor) <= reach => Some(area.id),
+            _ => None,
+        })
+}
+
+/// Lays an area of darkness over everything the DM holds. Returns `true`
+/// when it did. Issue #20.
+///
+/// The area joins the group of the first thing held, so it moves with an
+/// import. It starts black and fully dark, and the DM holds it next.
+pub(super) fn add_darkness(select: &mut Select, frame: &mut Frame<'_>) -> bool {
+    let held = crate::scene::normalize(frame.scene, &select.chosen);
+    let reach =
+        held.iter()
+            .filter_map(|id| box_of(frame, *id))
+            .reduce(|(a_min, a_max), (b_min, b_max)| {
+                (
+                    (a_min.0.min(b_min.0), a_min.1.min(b_min.1)),
+                    (a_max.0.max(b_max.0), a_max.1.max(b_max.1)),
+                )
+            });
+    let (Some(reach), Some(first)) = (reach, held.first()) else {
+        return false;
+    };
+    let into =
+        crate::scene::parent_of(frame.scene, *first).map_or(crate::scene::ROOT_ID, |(id, _)| id);
+    let id = frame.scene.next_id();
+    let area = Darkness::covering(id, reach, 1.0);
+    let name = crate::text::sight_darkness().to_owned();
+    let Some(change) = reshape(frame.scene, Deed::AddDarkness, name, |scene| {
+        crate::scene::push_into(scene, into, Node::Darkness(area));
+    }) else {
+        return false;
+    };
+    frame.history.kept(change);
+    select.chosen = vec![id];
+    select.popup = false;
+    true
+}
+
+/// The world box around one node, as `(min, max)` in inches.
+fn box_of(frame: &Frame<'_>, id: NodeId) -> Option<((f64, f64), (f64, f64))> {
+    let corners = |points: &[(f64, f64)]| {
+        points
+            .iter()
+            .fold(None, |reach: Option<((f64, f64), (f64, f64))>, at| {
+                Some(match reach {
+                    None => (*at, *at),
+                    Some((min, max)) => (
+                        (min.0.min(at.0), min.1.min(at.1)),
+                        (max.0.max(at.0), max.1.max(at.1)),
+                    ),
+                })
+            })
+    };
+    match crate::scene::find(frame.scene, id)? {
+        Node::Asset(asset) => corners(&asset.corners((frame.size_of)(&asset.path)?)),
+        Node::Group(group) => crate::scene::bounds(group, frame.size_of),
+        Node::Stroke(stroke) => stroke.bounds(),
+        Node::Walls(walls) => walls.bounds(),
+        Node::Light(light) => Some(light.bounds()),
+        Node::Darkness(area) => Some(area.bounds()),
+    }
 }
 
 /// How many inches `points` of the window cover at this zoom.
@@ -722,7 +801,7 @@ fn whole_import(scene: &Scene, select: &Select, id: NodeId) -> NodeId {
             group
                 .children
                 .iter()
-                .any(|node| matches!(node, Node::Walls(_) | Node::Light(_)))
+                .any(|node| matches!(node, Node::Walls(_) | Node::Light(_) | Node::Darkness(_)))
         });
     if is_import && parent != crate::scene::ROOT_ID {
         parent
@@ -1261,7 +1340,7 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
                 after,
             });
             let drawn = ink_change(ink, |stroke| stroke.moved(step));
-            let marks = sight_change(sight, |walls| walls.moved(step), |light| light.moved(step));
+            let marks = sight_change(sight, Placing::Move(step));
             hold_drag(frame, maps.map(Change::from), drawn, marks)
         }
         Drag::Scale {
@@ -1280,11 +1359,7 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             });
             let pivot = *pivot;
             let drawn = ink_change(ink, |stroke| stroke.scaled(pivot, factor));
-            let marks = sight_change(
-                sight,
-                |walls| walls.scaled(pivot, factor),
-                |light| light.scaled(pivot, factor),
-            );
+            let marks = sight_change(sight, Placing::Scale(pivot, factor));
             hold_drag(frame, maps.map(Change::from), drawn, marks)
         }
         Drag::Rotate {
@@ -1309,11 +1384,7 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             });
             let pivot = *pivot;
             let drawn = ink_change(ink, |stroke| stroke.turned(pivot, angle));
-            let marks = sight_change(
-                sight,
-                |walls| walls.turned(pivot, angle),
-                |light| light.turned(pivot, angle),
-            );
+            let marks = sight_change(sight, Placing::Turn(pivot, angle));
             hold_drag(frame, maps.map(Change::from), drawn, marks)
         }
     }
@@ -1333,21 +1404,48 @@ fn ink_change(ink: &[Stroke], place: impl Fn(&Stroke) -> Stroke) -> Option<Chang
     )
 }
 
-/// The change a drag makes to the wall sets and lights it holds, if any.
-fn sight_change(
-    sight: &[Node],
-    walls: impl Fn(&Walls) -> Walls,
-    light: impl Fn(&Light) -> Light,
-) -> Option<Change> {
+/// How a drag places what it holds.
+#[derive(Debug, Clone, Copy)]
+enum Placing {
+    /// A move by a step, in inches.
+    Move((f64, f64)),
+    /// A growth by a factor around a pivot.
+    Scale((f64, f64), f64),
+    /// A turn by an angle around a pivot.
+    Turn((f64, f64), f64),
+}
+
+/// The change a drag makes to the wall sets, lights and dark areas it
+/// holds, if any.
+fn sight_change(sight: &[Node], placing: Placing) -> Option<Change> {
     if sight.is_empty() {
         return None;
     }
     let after = sight
         .iter()
-        .map(|node| match node {
-            Node::Walls(set) => Node::Walls(walls(set)),
-            Node::Light(one) => Node::Light(light(one)),
-            other => other.clone(),
+        .map(|node| match (node, placing) {
+            (Node::Walls(set), Placing::Move(step)) => Node::Walls(set.moved(step)),
+            (Node::Walls(set), Placing::Scale(pivot, factor)) => {
+                Node::Walls(set.scaled(pivot, factor))
+            }
+            (Node::Walls(set), Placing::Turn(pivot, angle)) => {
+                Node::Walls(set.turned(pivot, angle))
+            }
+            (Node::Light(one), Placing::Move(step)) => Node::Light(one.moved(step)),
+            (Node::Light(one), Placing::Scale(pivot, factor)) => {
+                Node::Light(one.scaled(pivot, factor))
+            }
+            (Node::Light(one), Placing::Turn(pivot, angle)) => {
+                Node::Light(one.turned(pivot, angle))
+            }
+            (Node::Darkness(area), Placing::Move(step)) => Node::Darkness(area.moved(step)),
+            (Node::Darkness(area), Placing::Scale(pivot, factor)) => {
+                Node::Darkness(area.scaled(pivot, factor))
+            }
+            (Node::Darkness(area), Placing::Turn(pivot, angle)) => {
+                Node::Darkness(area.turned(pivot, angle))
+            }
+            (other, _) => other.clone(),
         })
         .collect();
     Some(

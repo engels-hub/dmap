@@ -25,6 +25,7 @@ mod images;
 mod import;
 mod ink;
 mod keys;
+mod lighting;
 mod lines;
 mod maps;
 mod overlay;
@@ -60,6 +61,7 @@ use crate::gpu::{Gpu, Pane};
 use crate::grid::GridLayer;
 use crate::images::Loader;
 use crate::ink::InkLayer;
+use crate::lighting::LightLayer;
 use crate::maps::{MapLayer, relative_path};
 use crate::overlay::Overlay;
 use crate::pointer::PointerDisc;
@@ -292,6 +294,10 @@ struct Running {
     map_layer: MapLayer,
     grid_layer: GridLayer,
     ink_layer: InkLayer,
+    /// The light of the DM screen. Issues #19 and #20.
+    dm_light: LightLayer,
+    /// The light of the TV. Issues #19 and #20.
+    tv_light: LightLayer,
     /// The `egui` of the TV window, for the labels of a measure.
     overlay: Overlay,
     /// The stroke the DM is drawing, which is in no scene yet.
@@ -348,6 +354,8 @@ impl Running {
         let map_layer = MapLayer::new(&gpu.device, dm.config.format);
         let grid_layer = GridLayer::new(&gpu.device, dm.config.format);
         let ink_layer = InkLayer::new(&gpu.device, dm.config.format);
+        let dm_light = LightLayer::new(&gpu.device, dm.config.format);
+        let tv_light = LightLayer::new(&gpu.device, tv.config.format);
         let overlay = Overlay::new(&gpu, &tv);
         let wake_window = Arc::clone(&dm.window);
         let loader = Loader::spawn(gpu.device.limits().max_texture_dimension_2d, move || {
@@ -382,6 +390,8 @@ impl Running {
                 paper_dark: config.paper_dark.clone(),
                 keys: config.keys.clone(),
                 foundry_data: config.foundry_data.clone(),
+                light: config.light,
+                light_show: config.light_show,
             },
             placed: false,
             // The first frame owes the players the scene the DM opened.
@@ -398,6 +408,8 @@ impl Running {
             map_layer,
             grid_layer,
             ink_layer,
+            dm_light,
+            tv_light,
             overlay,
             live: None,
             loader,
@@ -489,11 +501,12 @@ impl Running {
         if let Some(held) = &self.held {
             return self.tv.lay_down(&self.gpu, held);
         }
+        let viewport = (self.tv.config.width, self.tv.config.height);
+        let tv_camera = self.scene.tv_box.camera(viewport);
+        self.prepare_light(Audience::Tv, &tv_camera, viewport);
         let pane = &mut self.tv;
-        let viewport = (pane.config.width, pane.config.height);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
         let (pointer, tv_pointer) = (&self.pointer, self.tv_pointer);
-        let tv_camera = self.scene.tv_box.camera(viewport);
         // The TV draws what it shows, and every map at full strength.
         let shown: Vec<(&Asset, f32)> = draw_order(&self.scene, Audience::Tv)
             .into_iter()
@@ -505,6 +518,7 @@ impl Running {
         if let Some(stroke) = self.live.as_ref() {
             ink.push(stroke);
         }
+        let tv_light = &self.tv_light;
         let map_layer = &mut self.map_layer;
         let grid_layer = &self.grid_layer;
         let ink_layer = &mut self.ink_layer;
@@ -527,6 +541,7 @@ impl Running {
             canvas,
             |pass| {
                 map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
+                tv_light.draw(pass);
             },
             |pass| {
                 // DESIGN.md 5.1: one grid covers the canvas and it lies over
@@ -539,6 +554,26 @@ impl Running {
                 }
             },
         )
+    }
+
+    /// Gets the light of one screen ready for its frame. Issues #19, #20.
+    fn prepare_light(&mut self, audience: Audience, camera: &Camera, viewport: (u32, u32)) {
+        let rules = self.settings.light;
+        let show = self.settings.light_show;
+        let mood = self.scene.light;
+        let input = lighting::input_for(&self.scene, audience, rules, show, camera, viewport);
+        let layer = match audience {
+            Audience::Dm => &mut self.dm_light,
+            Audience::Tv => &mut self.tv_light,
+        };
+        layer.prepare(
+            &self.gpu.device,
+            &self.gpu.queue,
+            input,
+            mood,
+            camera,
+            viewport,
+        );
     }
 
     /// Adds a map file at the middle of the DM view.
@@ -725,6 +760,8 @@ impl Running {
             self.request_images();
         }
         let viewport = (self.dm.config.width, self.dm.config.height);
+        let camera = self.camera;
+        self.prepare_light(Audience::Dm, &camera, viewport);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
         let gpu = &self.gpu;
         // DESIGN.md 5.6: a map the TV does not show draws faint here, so
@@ -748,6 +785,7 @@ impl Running {
         if let Some(live) = self.live.as_ref() {
             ink.push(live);
         }
+        let dm_light = &self.dm_light;
         let (map_layer, camera) = (&mut self.map_layer, &self.camera);
         let grid_layer = &self.grid_layer;
         let ink_layer = &mut self.ink_layer;
@@ -764,6 +802,7 @@ impl Running {
             canvas,
             |pass| {
                 map_layer.draw(device, queue, pass, &shown, camera, viewport);
+                dm_light.draw(pass);
             },
             |pass| {
                 grid_layer.draw(gpu, pass, &beneath, camera, viewport, cells, line);
@@ -931,6 +970,8 @@ impl Running {
         config.keys.clone_from(&self.settings.keys);
         config.paper_dark.clone_from(&self.settings.paper_dark);
         config.foundry_data.clone_from(&self.settings.foundry_data);
+        config.light = self.settings.light;
+        config.light_show = self.settings.light_show;
         config.tool = self.ui.tool();
         config.settings_tab = self.ui.settings_tab();
         config.camera = Some(self.camera);

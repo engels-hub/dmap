@@ -55,16 +55,27 @@ pub(super) fn mark_sight(
     let view = View::new(ui, *frame.camera, viewport);
     let painter = ui.painter_at(canvas);
     let mut shapes = Vec::new();
-    for node in crate::scene::sight_order(frame.scene) {
+    for node in crate::scene::sight_order(frame.scene, crate::scene::Audience::Dm) {
         match node {
             Node::Walls(walls) => wall_shapes(&mut shapes, walls, &view, tokens),
             Node::Light(light) => light_shapes(&mut shapes, light, &view, tokens),
+            Node::Darkness(area) => {
+                // A dashed outline in `ink` on a rim of `surface`, so it
+                // reads over a dark map and a pale one. Issue #20.
+                let mut ring: Vec<egui::Pos2> =
+                    area.corners.iter().map(|&at| view.to_screen(at)).collect();
+                ring.push(ring[0]);
+                let rim = egui::Stroke::new(WALL_RIM, tokens.surface);
+                let line = egui::Stroke::new(1.0, tokens.ink);
+                shapes.push(egui::Shape::line(ring.clone(), rim));
+                shapes.extend(egui::Shape::dashed_line(&ring, line, DASH, DASH));
+            }
             _ => {}
         }
     }
     painter.set(slot, egui::Shape::Vec(shapes));
     // A glyph paints on its own, over the rings.
-    for node in crate::scene::sight_order(frame.scene) {
+    for node in crate::scene::sight_order(frame.scene, crate::scene::Audience::Dm) {
         if let Node::Light(light) = node {
             let at = view.to_screen(light.center);
             if canvas.contains(at) {

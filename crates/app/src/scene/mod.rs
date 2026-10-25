@@ -28,7 +28,7 @@ pub use tree::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::sight::{Light, Walls};
+use crate::sight::{Darkness, Light, Walls};
 use crate::stroke::Stroke;
 use crate::tvbox::TvBox;
 
@@ -90,6 +90,8 @@ pub enum Node {
     Walls(Walls),
     /// One light. See [`crate::sight`].
     Light(Light),
+    /// An area darker than the scene. See [`crate::sight`].
+    Darkness(Darkness),
 }
 
 impl Node {
@@ -101,6 +103,7 @@ impl Node {
             Self::Stroke(stroke) => stroke.id,
             Self::Walls(walls) => walls.id,
             Self::Light(light) => light.id,
+            Self::Darkness(area) => area.id,
         }
     }
 
@@ -114,6 +117,7 @@ impl Node {
             Self::Stroke(stroke) => stroke.shown.says(audience),
             Self::Walls(walls) => walls.shown.says(audience),
             Self::Light(light) => light.shown.says(audience),
+            Self::Darkness(area) => area.shown.says(audience),
         }
     }
 
@@ -210,6 +214,8 @@ pub struct Scene {
     pub root: Group,
     /// The part of the canvas the TV shows.
     pub tv_box: TvBox,
+    /// How dark the scene is where no light reaches. Issue #20.
+    pub light: crate::lighting::Mood,
 }
 
 /// The name of the root group. The DM cannot change it.
@@ -223,6 +229,7 @@ impl Default for Scene {
         Self {
             root: Group::new(ROOT_ID, ROOT_NAME.to_owned()),
             tv_box: TvBox::default(),
+            light: crate::lighting::Mood::default(),
         }
     }
 }
@@ -237,6 +244,7 @@ struct SceneFile {
     root: Option<Group>,
     tv_box: TvBox,
     maps: Vec<Asset>,
+    light: crate::lighting::Mood,
 }
 
 impl<'de> Deserialize<'de> for Scene {
@@ -247,6 +255,7 @@ impl<'de> Deserialize<'de> for Scene {
                 .root
                 .unwrap_or_else(|| Group::new(ROOT_ID, ROOT_NAME.to_owned())),
             tv_box: file.tv_box,
+            light: file.light,
         };
         // A scene from before the tree kept its maps in a flat list. They
         // join the root, in the order they had.
@@ -297,6 +306,7 @@ fn rename_nodes(
             Node::Stroke(stroke) => &mut stroke.id,
             Node::Walls(walls) => &mut walls.id,
             Node::Light(light) => &mut light.id,
+            Node::Darkness(area) => &mut area.id,
         };
         if *id == ROOT_ID || !taken.insert(*id) {
             while !taken.insert(*next) {
