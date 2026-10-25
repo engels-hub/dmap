@@ -357,7 +357,7 @@ impl Running {
             loader.request(scene_dir.join(&asset.path));
         }
         let history = load_history(&scene_dir);
-        Ok(Self {
+        let mut running = Self {
             gpu,
             dm,
             tv,
@@ -368,6 +368,8 @@ impl Running {
                 tv_display,
                 swap_windows: config.swap_windows,
                 snap_percent: clamp_snap_percent(config.snap_percent),
+                tv_size: config.tv_size,
+                tv_check: config.tv_check,
                 theme: config.theme,
                 language: config.language.clone(),
                 ink_color: config.ink_color,
@@ -402,7 +404,27 @@ impl Running {
             live: None,
             loader,
             camera: config.camera.map_or(DM_CAMERA, Camera::usable),
-        })
+        };
+        running.fit_old_box();
+        Ok(running)
+    }
+
+    /// Puts a box from before the TV had a size at the true size it had.
+    ///
+    /// A scene saved before the DM gave the size of the TV stood at true
+    /// size with a box [`tvbox::TV_WIDTH_INCHES`] wide. It opens at true
+    /// size on the TV the DM has now. Issue #6.
+    fn fit_old_box(&mut self) {
+        if self.settings.tv_size.is_none() {
+            return;
+        }
+        let screen = ui::tv_screen(
+            &self.displays,
+            self.settings.tv_display,
+            (self.tv.config.width, self.tv.config.height),
+        );
+        let width = tvbox::tv_width(self.settings.tv_size, screen, screen);
+        self.scene.tv_box = self.scene.tv_box.resized_tv(tvbox::TV_WIDTH_INCHES, width);
     }
 
     /// Handles a window event. Returns what the program must do next.
@@ -514,6 +536,10 @@ impl Running {
         let line = paper.line(mode, pane.window.scale_factor() as f32);
         let cells = self.settings.cells();
         let canvas = paper.canvas(mode);
+        let check = self.settings.tv_check.then(|| {
+            let screen = ui::tv_screen(&self.displays, self.settings.tv_display, viewport);
+            tvbox::tv_pixels_per_inch(self.settings.tv_size, screen, viewport)
+        });
         // A clone of the handle, because the pane goes into the call that
         // draws it.
         let beneath = pane.beneath.view().clone();
@@ -525,6 +551,7 @@ impl Running {
             cells,
             mode,
             canvas,
+            check,
             |pass| {
                 map_layer.draw(device, queue, pass, &shown, &tv_camera, viewport);
             },
@@ -878,6 +905,7 @@ impl Running {
         self.camera = DM_CAMERA;
         self.scene = scene.clone();
         self.scene.tv_box = scene.tv_box.clamped();
+        self.fit_old_box();
         // Every scene brings the changes of its own folder.
         self.history = history;
         self.map_layer.clear();
@@ -917,6 +945,8 @@ impl Running {
         config.tv_display = placement_for(self.settings.tv_display, &display_names(&self.displays));
         config.swap_windows = self.settings.swap_windows;
         config.snap_percent = self.settings.snap_percent;
+        config.tv_size = self.settings.tv_size;
+        config.tv_check = self.settings.tv_check;
         config.theme = self.settings.theme;
         config.language.clone_from(&self.settings.language);
         config.ink_color = self.settings.ink_color;

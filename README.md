@@ -38,8 +38,6 @@ dmap runs on Linux and on Windows. The code is Rust with wgpu, winit and egui.
 
 These features are not in yet. Each one has an issue on the [Issues](https://github.com/engels-hub/dmap/issues) page.
 
-- The resolution and the diagonal of your TV (#6)
-- A 1 inch grid and a 6 inch ruler on the TV, to check the size (#7)
 - Video maps (#23)
 - Light and shadows that the GPU calculates from the walls and the lights (#18, #19, #20, #21)
 - Fog of war (#22)
@@ -308,7 +306,9 @@ Caution: a change you make to `scene.json` by hand does not change `history.json
 **Settings** in the toolbar opens a dialog with tabs. The **Table** tab holds the settings of this table and of the window:
 
 - **Display** picks the display the TV window fills.
+- **Size** holds the size of your TV. Give one of three numbers: the diagonal in inches, the pixels per inch, or the width in inches. The line below gives the resolution, the pixels per inch and the size of the table. At 100 %, one cell on the TV is then one real inch. Until you give a size, the program takes a TV 48 in wide.
 - **Sticks to 100 %** sets how close to true size the TV box must come before it snaps.
+- **Check** shows a 1 inch grid and a 6 inch ruler on the TV, and not on the DM screen. Put a real ruler on the TV. If the lengths differ, correct the size.
 - **Windows (wayland compat)** sets how the TV window gets to that display. It starts on, and the two windows swap roles, because a Wayland compositor does not let a program place its own window. Turn it off, and the program moves the DM window off the TV display. X11 and Windows allow this.
 - **Theme** picks the light theme, the default, or the dark one.
 - **Language** holds every language the program carries. The window changes at once, with no restart. A first run takes the language of your system when a file matches it, and English when no file does.

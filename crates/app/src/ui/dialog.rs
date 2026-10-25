@@ -5,7 +5,7 @@
 
 // Rust guideline compliant 2026-02-21
 
-use crate::command::Note;
+use crate::command::{Note, SetTvBox};
 use crate::config::{MAX_GRID_WIDTH, MIN_GRID_WIDTH};
 use crate::grid::{Kind, MAX_CELL, MIN_CELL};
 use crate::icon;
@@ -13,7 +13,7 @@ use crate::icons::Icon;
 use crate::text;
 use crate::theme::{self, Tokens};
 use crate::tv::display_label;
-use crate::tvbox::MAX_SNAP_PERCENT;
+use crate::tvbox::{MAX_SNAP_PERCENT, SizeBy, TvSize, tv_pixels_per_inch};
 use crate::widget::{self, Height};
 
 use super::{
@@ -68,6 +68,9 @@ pub(super) struct Dialog {
     license: License,
     /// The control of the Shortcuts tab that waits for a key. Issue #36.
     shortcuts: Shortcuts,
+    /// The TV box before the DM started to change the size of the TV, so
+    /// the box that follows it takes one undo step. Issue #6.
+    pub(super) opened_box: Option<crate::tvbox::TvBox>,
 }
 
 impl Dialog {
@@ -212,7 +215,13 @@ pub(super) fn settings_dialog(
                 body_ui.spacing_mut().item_spacing.y = ROW_GAP;
                 match dialog.tab {
                     Tab::Table => {
-                        edited = table_tab(body_ui, frame, &mut dialog.scale_drag, tokens);
+                        edited = table_tab(
+                            body_ui,
+                            frame,
+                            &mut dialog.scale_drag,
+                            &mut dialog.opened_box,
+                            tokens,
+                        );
                     }
                     Tab::Grid => {
                         edited = grid_tab(body_ui, frame.settings);
@@ -333,13 +342,9 @@ fn dialog_row(ui: &mut egui::Ui, label: &str, controls: impl FnOnce(&mut egui::U
     });
 }
 
-/// The Table tab of DESIGN.md 9.1. Returns `true` when a value changed.
-fn table_tab(
-    ui: &mut egui::Ui,
-    frame: &mut Frame<'_>,
-    scale_drag: &mut Option<f64>,
-    tokens: Tokens,
-) -> bool {
+/// The Display row: where the TV window opens. Returns `true` when the DM
+/// picked another place.
+fn display_field(ui: &mut egui::Ui, frame: &mut Frame<'_>) -> bool {
     let mut edited = false;
     let displays = frame.displays;
     let label = |i: usize| {
@@ -347,34 +352,112 @@ fn table_tab(
         let size = display.size();
         display_label(display.name().as_deref(), size.width, size.height)
     };
-    dialog_row(ui, text::dialog_settings_display(), |ui| {
-        let shown = frame
-            .settings
-            .tv_display
-            .map_or_else(|| text::dialog_settings_display_window().to_owned(), &label);
-        let field = widget::select_field(ui, &shown, widget::SELECT_WIDTH);
-        let popup = egui::Popup::menu(&field)
-            .gap(-1.0)
-            .width(widget::SELECT_WIDTH);
-        popup.show(|ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            let picked = frame.settings.tv_display;
-            if widget::select_row(ui, text::dialog_settings_display_window(), picked.is_none())
-                .clicked()
-            {
-                frame.settings.tv_display = None;
+    let shown = frame
+        .settings
+        .tv_display
+        .map_or_else(|| text::dialog_settings_display_window().to_owned(), &label);
+    let field = widget::select_field(ui, &shown, widget::SELECT_WIDTH);
+    let popup = egui::Popup::menu(&field)
+        .gap(-1.0)
+        .width(widget::SELECT_WIDTH);
+    popup.show(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let picked = frame.settings.tv_display;
+        if widget::select_row(ui, text::dialog_settings_display_window(), picked.is_none())
+            .clicked()
+        {
+            frame.settings.tv_display = None;
+            edited = true;
+        }
+        for i in 0..displays.len() {
+            if widget::select_row(ui, &label(i), picked == Some(i)).clicked() {
+                frame.settings.tv_display = Some(i);
                 edited = true;
             }
-            for i in 0..displays.len() {
-                if widget::select_row(ui, &label(i), picked == Some(i)).clicked() {
-                    frame.settings.tv_display = Some(i);
-                    edited = true;
-                }
-            }
+        }
+    });
+    edited
+}
+
+/// The size of the real TV: one of three numbers, and what they give.
+/// Issue #6. Returns `true` when the DM changed the size.
+///
+/// A TV box at true size follows the new size. `opened_box` keeps the box
+/// from before the change, for its undo step.
+fn size_field(
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+    opened_box: &mut Option<crate::tvbox::TvBox>,
+) -> bool {
+    let screen = frame.tv_screen();
+    let ppi = tv_pixels_per_inch(frame.settings.tv_size, screen, frame.tv_viewport);
+    let shown = frame
+        .settings
+        .tv_size
+        .unwrap_or_else(|| TvSize::of(SizeBy::Diagonal, ppi, screen));
+    let mut edited = None;
+    let mut by = shown.by;
+    let choices = [
+        (SizeBy::Diagonal, text::dialog_settings_size_diagonal()),
+        (SizeBy::PixelsPerInch, text::dialog_settings_size_ppi()),
+        (SizeBy::Width, text::dialog_settings_size_width()),
+    ];
+    // Another kind of number says the same TV, so nothing on it moves.
+    if widget::segmented(ui, &mut by, &choices) {
+        edited = Some(TvSize::of(by, ppi, screen));
+    }
+    let mut value = shown.value;
+    let unit = match shown.by {
+        SizeBy::PixelsPerInch => text::unit_ppi(),
+        SizeBy::Diagonal | SizeBy::Width => text::unit_inches(),
+    };
+    if widget::input(ui, &mut value, unit, 90.0, 1.0..=2000.0, 0.1).changed() {
+        edited = Some(TvSize {
+            by: shown.by,
+            value,
         });
+    }
+    if let Some(size) = edited {
+        let before = frame.tv_width();
+        frame.settings.tv_size = Some(size);
+        let after = frame.scene.tv_box.resized_tv(before, frame.tv_width());
+        if after != frame.scene.tv_box {
+            let before = *opened_box.get_or_insert(frame.scene.tv_box);
+            frame.history.hold(frame.scene, SetTvBox { before, after });
+        }
+    }
+    let ppi = tv_pixels_per_inch(frame.settings.tv_size, screen, frame.tv_viewport);
+    if frame.settings.tv_size.is_none() {
+        widget::helper(ui, text::dialog_settings_size_unset());
+    }
+    let inches = text::unit_inches();
+    let table = format!(
+        "{:.1} × {:.1} {inches}",
+        f64::from(screen.0) / ppi,
+        f64::from(screen.1) / ppi
+    );
+    let pixels = format!("{} × {} {}", screen.0, screen.1, text::unit_px());
+    widget::helper(
+        ui,
+        &text::dialog_settings_size_result(pixels, format!("{ppi:.1}"), table),
+    );
+    edited.is_some()
+}
+
+/// The Table tab of DESIGN.md 9.1. Returns `true` when a value changed.
+fn table_tab(
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+    scale_drag: &mut Option<f64>,
+    opened_box: &mut Option<crate::tvbox::TvBox>,
+    tokens: Tokens,
+) -> bool {
+    let mut edited = false;
+    dialog_row(ui, text::dialog_settings_display(), |ui| {
+        edited |= display_field(ui, frame);
     });
     dialog_row(ui, text::dialog_settings_size(), |ui| {
-        widget::helper(ui, text::dialog_settings_size_helper());
+        edited |= size_field(ui, frame, opened_box);
     });
     dialog_row(ui, text::dialog_settings_snap(), |ui| {
         let mut percent = frame.settings.snap_percent;
@@ -399,6 +482,15 @@ fn table_tab(
             frame.settings.swap_windows = swap;
             edited = true;
         }
+    });
+    dialog_row(ui, text::dialog_settings_check(), |ui| {
+        edited |= widget::checkbox(
+            ui,
+            &mut frame.settings.tv_check,
+            text::dialog_settings_check_box(),
+        )
+        .clicked();
+        widget::helper(ui, text::dialog_settings_check_helper());
     });
     dialog_row(ui, text::dialog_settings_theme(), |ui| {
         // DESIGN.md 2 gives two themes and no place to pick one, so the

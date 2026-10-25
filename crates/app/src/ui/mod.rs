@@ -393,6 +393,10 @@ pub struct Settings {
     /// How close to true size the TV box must come before it snaps, in
     /// percent.
     pub snap_percent: f64,
+    /// The size of the real TV, once the DM entered it. Issue #6.
+    pub tv_size: Option<crate::tvbox::TvSize>,
+    /// Whether the TV shows the 1 inch grid and the 6 inch ruler. Issue #7.
+    pub tv_check: bool,
     /// The theme the window draws. DESIGN.md 2.
     pub theme: theme::Mode,
     /// The language the window speaks, by the name of its file.
@@ -488,6 +492,32 @@ pub struct Frame<'a> {
     /// The canvas draws the TV box dashed while it stands, so the DM reads
     /// the freeze off the box as well as off the toolbar.
     pub frozen: bool,
+}
+
+impl Frame<'_> {
+    /// The resolution of the TV. Issue #6.
+    pub fn tv_screen(&self) -> (u32, u32) {
+        tv_screen(self.displays, self.settings.tv_display, self.tv_viewport)
+    }
+
+    /// The width of the TV window in inches: the width of a box at true
+    /// size. Issue #6.
+    pub fn tv_width(&self) -> f64 {
+        crate::tvbox::tv_width(self.settings.tv_size, self.tv_screen(), self.tv_viewport)
+    }
+}
+
+/// The resolution of the TV: the display the TV window fills, or the
+/// window itself when it is a normal window.
+pub fn tv_screen(
+    displays: &[MonitorHandle],
+    tv_display: Option<usize>,
+    viewport: (u32, u32),
+) -> (u32, u32) {
+    tv_display
+        .and_then(|i| displays.get(i))
+        .map(MonitorHandle::size)
+        .map_or(viewport, |size| (size.width, size.height))
 }
 
 impl std::fmt::Debug for Frame<'_> {
@@ -946,6 +976,7 @@ impl DmUi {
         self.select.opened_ink = None;
         self.select.opened_sight = None;
         self.table.opened = None;
+        self.dialog.opened_box = None;
     }
 
     /// The tool the rail marks, so a new run opens on it.
@@ -1233,6 +1264,8 @@ mod tests {
             tv_display: Some(1),
             swap_windows: false,
             snap_percent: 8.0,
+            tv_size: None,
+            tv_check: false,
             paper_light: Paper::default(),
             paper_dark: Paper::default(),
             grid_kind: crate::grid::Kind::default(),
