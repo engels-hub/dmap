@@ -12,7 +12,7 @@ use crate::command::{
 };
 use crate::keys::{Action, Keys};
 use crate::scene::{Asset, Node, NodeId, Placed, Scene};
-use crate::sight::Darkness;
+use crate::sight::{Darkness, Light};
 use crate::stroke::Stroke;
 use crate::text;
 use crate::theme::{self, Tokens};
@@ -740,6 +740,38 @@ pub(super) fn add_darkness(select: &mut Select, frame: &mut Frame<'_>) -> bool {
     let name = crate::text::sight_darkness().to_owned();
     let Some(change) = reshape(frame.scene, Deed::AddDarkness, name, |scene| {
         crate::scene::push_into(scene, into, Node::Darkness(area));
+    }) else {
+        return false;
+    };
+    frame.history.kept(change);
+    select.chosen = vec![id];
+    select.popup = false;
+    true
+}
+
+/// How far the bright light of a new light reaches, in cells. A torch
+/// gives 20 feet of bright light and 20 feet of dim light past it.
+const NEW_BRIGHT: f64 = 4.0;
+
+/// How far the dim light of a new light reaches, in cells.
+const NEW_DIM: f64 = 8.0;
+
+/// Puts a white light the size of a torch in the middle of the DM view.
+/// Returns `true` when it did. Issue #65.
+///
+/// The light joins the group `into`, the one the Objects list marks, and
+/// the DM holds it next, so a drag moves it to its place.
+pub(super) fn add_light(select: &mut Select, frame: &mut Frame<'_>, into: NodeId) -> bool {
+    let into = if matches!(crate::scene::find(frame.scene, into), Some(Node::Group(_))) {
+        into
+    } else {
+        crate::scene::ROOT_ID
+    };
+    let id = frame.scene.next_id();
+    let light = Light::new(id, frame.camera.center, NEW_BRIGHT, NEW_DIM);
+    let name = crate::text::sight_light().to_owned();
+    let Some(change) = reshape(frame.scene, Deed::AddLight, name, |scene| {
+        crate::scene::push_into(scene, into, Node::Light(light));
     }) else {
         return false;
     };
@@ -1483,7 +1515,7 @@ fn hold_drag(
 fn held_names(scene: &Scene, starts: &[Placed], ink: &[Stroke]) -> String {
     match (starts, ink) {
         ([one], []) => crate::scene::name_of(scene, one.id),
-        ([], [one]) => one.ink.name().to_owned(),
+        ([], [one]) => one.name().to_owned(),
         (maps, ink) => text::history_maps_many(maps.len() + ink.len()),
     }
 }

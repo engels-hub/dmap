@@ -465,7 +465,7 @@ pub fn name_of_node(node: &Node) -> String {
             || asset.path.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
         ),
-        Node::Stroke(stroke) => stroke.ink.name().to_owned(),
+        Node::Stroke(stroke) => stroke.name().to_owned(),
         Node::Walls(_) => crate::text::sight_walls().to_owned(),
         Node::Light(_) => crate::text::sight_light().to_owned(),
         Node::Darkness(_) => crate::text::sight_darkness().to_owned(),

@@ -168,12 +168,18 @@ pub struct Config {
     /// How thick a stroke draws, in inches.
     #[serde(default = "default_ink_width")]
     pub ink_width: f64,
+    /// How wide a stroke that reveals draws, in inches. Issue #65.
+    #[serde(default = "default_reveal_width")]
+    pub reveal_width: f64,
     /// Which of the six squares of the Draw panel the DM last used.
     #[serde(default)]
     pub ink_nib: crate::ui::Nib,
     /// How a ruler counts its length. Issue #12.
     #[serde(default)]
     pub ink_rule: crate::stroke::Rule,
+    /// How the next stroke mixes with the canvas. Issue #65.
+    #[serde(default)]
+    pub ink_mix: crate::stroke::Mix,
     /// Whether a shape starts on a crossing of the grid.
     ///
     /// A spell lands on a cell, so this starts on. `Shift` holds it off
@@ -234,6 +240,9 @@ pub struct Config {
     /// Which screens draw the light. DESIGN.md 9.3.
     #[serde(default)]
     pub light_show: crate::lighting::Show,
+    /// How much of the darkness the DM screen lets the DM see through,
+    /// from 0 to 1. The TV keeps all of it. Issue #65.
+    pub light_see: f64,
 }
 
 /// Where a window stands, in the pixels of the display.
@@ -266,8 +275,10 @@ impl Default for Config {
             ui_scale: crate::theme::DEFAULT_SCALE,
             ink_color: default_ink_color(),
             ink_width: default_ink_width(),
+            reveal_width: default_reveal_width(),
             ink_nib: crate::ui::Nib::default(),
             ink_rule: crate::stroke::Rule::default(),
+            ink_mix: crate::stroke::Mix::default(),
             ink_snap: yes(),
             paper_light: Paper::default(),
             paper_dark: Paper::default(),
@@ -281,6 +292,7 @@ impl Default for Config {
             foundry_data: None,
             light: crate::lighting::Rules::default(),
             light_show: crate::lighting::Show::Both,
+            light_see: crate::lighting::DM_SEE_THROUGH,
         }
     }
 }
@@ -301,6 +313,12 @@ fn default_ink_color() -> [u8; 4] {
 /// reads across the table without covering the map under it.
 fn default_ink_width() -> f64 {
     0.1
+}
+
+/// How wide a stroke that reveals draws on a first run, in inches: two
+/// cells, the width of a corridor.
+fn default_reveal_width() -> f64 {
+    2.0
 }
 
 /// The language a first run takes: the system's, or English.
@@ -539,8 +557,10 @@ mod tests {
             ui_scale: 1.25,
             ink_color: [1, 2, 3, 255],
             ink_width: 0.25,
+            reveal_width: 3.0,
             ink_nib: crate::ui::Nib::Ellipse,
             ink_rule: crate::stroke::Rule::Fifth,
+            ink_mix: crate::stroke::Mix::Reveal,
             ink_snap: false,
             paper_light: Paper::default(),
             grid_kind: crate::grid::Kind::default(),
@@ -578,6 +598,7 @@ mod tests {
                 open_doors_pass: false,
             },
             light_show: crate::lighting::Show::Tv,
+            light_see: 0.25,
         };
         assert_eq!(Config::from_json(&config.to_json()).unwrap(), config);
     }

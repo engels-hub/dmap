@@ -78,6 +78,11 @@ impl Ink {
         matches!(self, Self::Burst | Self::Cone | Self::Beam)
     }
 
+    /// Whether the line of this ink closes around an inside.
+    pub fn closes(self) -> bool {
+        self.filled() || matches!(self, Self::Rect | Self::Ellipse)
+    }
+
     /// How far an effect reaches, in cells, or `None` for other ink.
     ///
     /// A burst gives its radius, and a cone and a beam their length. The
@@ -254,6 +259,37 @@ pub struct Stroke {
     /// shows stays the number the DM read when they made it.
     #[serde(default)]
     pub rule: Rule,
+    /// Whether the stroke paints the map or reveals it from the dark. A
+    /// file from before the choice reads as paint. Issue #65.
+    #[serde(default)]
+    pub mix: Mix,
+}
+
+/// How a stroke mixes with the canvas under it. Issue #65.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mix {
+    /// Paint: the color covers the map by its alpha.
+    ///
+    /// A test build once wrote `add` for a stroke that added its light.
+    /// That mode is gone, so such a file reads as paint.
+    #[default]
+    #[serde(alias = "add")]
+    Blend,
+    /// A hole in the darkness: the map under the stroke shows as if a lamp
+    /// lit it. The TV shows no ink of its own, and the DM sees a thin
+    /// outline. A shape that closes reveals its inside too.
+    Reveal,
+}
+
+impl Mix {
+    /// The name the panels give the choice.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Blend => crate::text::mix_blend(),
+            Self::Reveal => crate::text::mix_reveal(),
+        }
+    }
 }
 
 /// The smallest a growth may leave a stroke, as a share of its size.
@@ -263,6 +299,17 @@ pub struct Stroke {
 const MIN_FACTOR: f64 = 0.01;
 
 impl Stroke {
+    /// What the objects list, the panel and the history call this stroke.
+    ///
+    /// A stroke that reveals is a reveal whatever shape it has, so the DM
+    /// tells it from ink at a glance. Its glyph still shows the shape.
+    pub fn name(&self) -> &'static str {
+        match self.mix {
+            Mix::Blend => self.ink.name(),
+            Mix::Reveal => crate::text::stroke_reveal(),
+        }
+    }
+
     /// The line this stroke draws, point by point, in inches.
     ///
     /// A pen gives back what it holds. A shape is built here, so the
@@ -628,7 +675,7 @@ fn crossings(from: (f64, f64), to: (f64, f64), at: (f64, f64), radius: f64) -> O
 
 #[cfg(test)]
 mod tests {
-    use super::{Ink, Rule, Stroke, cut};
+    use super::{Ink, Mix, Rule, Stroke, cut};
     use crate::grid::{Cells, Kind};
     use crate::scene::Shown;
 
@@ -643,7 +690,33 @@ mod tests {
             span: 0.0,
             angle: 0.0,
             rule: Rule::default(),
+            mix: Mix::default(),
         }
+    }
+
+    #[test]
+    fn a_stroke_that_reveals_goes_by_reveal_whatever_its_shape() {
+        let mut mark = Stroke {
+            id: 1,
+            shown: Shown::default(),
+            ink: Ink::Rect,
+            points: vec![(0.0, 0.0), (1.0, 1.0)],
+            color: [0, 0, 0, 255],
+            width: 0.1,
+            span: 0.0,
+            angle: 0.0,
+            rule: Rule::default(),
+            mix: Mix::Blend,
+        };
+        assert_eq!(mark.name(), Ink::Rect.name());
+        mark.mix = Mix::Reveal;
+        assert_eq!(mark.name(), crate::text::stroke_reveal());
+    }
+
+    #[test]
+    fn a_mix_from_the_old_test_build_reads_as_paint() {
+        let mix: Mix = serde_json::from_str("\"add\"").unwrap();
+        assert_eq!(mix, Mix::Blend);
     }
 
     #[test]

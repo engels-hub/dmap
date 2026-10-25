@@ -732,6 +732,15 @@ fn light_tab(
         ];
         edited |= widget::segmented(ui, &mut settings.light_show, &choices);
     });
+    dialog_row(ui, text::dialog_settings_light_see(), |ui| {
+        let mut see = settings.light_see;
+        let shown = text::dialog_settings_opacity_value((see * 100.0).round());
+        if widget::slider(ui, &mut see, 0.0..=1.0, 180.0, &shown).changed() {
+            settings.light_see = (see * 100.0).round() / 100.0;
+            edited = true;
+        }
+        widget::helper(ui, text::dialog_settings_light_see_helper());
+    });
     edited
 }
 

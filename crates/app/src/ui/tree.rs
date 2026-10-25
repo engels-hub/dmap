@@ -362,7 +362,7 @@ fn leaf_of(node: &Node) -> Option<Leaf<'static>> {
         Node::Stroke(stroke) => Leaf {
             id: stroke.id,
             glyph: stroke.ink.glyph(),
-            name: stroke.ink.name(),
+            name: stroke.name(),
             shown: stroke.shown,
         },
         Node::Walls(walls) => Leaf {

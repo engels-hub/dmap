@@ -152,12 +152,13 @@ pub(super) fn draw_tool(
                 at
             }],
             color: frame.settings.ink_color,
-            width: frame.settings.ink_width,
+            width: frame.settings.width_of(frame.settings.ink_mix),
             span: 0.0,
             // A new shape stands square with the grid. The turn handle
             // gives it an angle later. Issue #69.
             angle: 0.0,
             rule: frame.settings.ink_rule,
+            mix: frame.settings.ink_mix,
         });
     }
     if let (true, Some(at), Some(live)) = (pointer.down(), at, draw.live.as_mut()) {
@@ -212,7 +213,7 @@ fn keep(live: Option<Stroke>, frame: &mut Frame<'_>) -> bool {
 /// stroke back. The stroke takes its name here as well, so a map added
 /// while the DM drew cannot have taken the same one. Issue #12.
 fn join_scene(scene: &mut Scene, live: Stroke) -> Option<Restructure> {
-    let name = live.ink.name().to_owned();
+    let name = live.name().to_owned();
     reshape(scene, Deed::Draw, name, |scene| {
         let into = crate::scene::ink_group(scene, text::panel_objects_drawings().to_owned());
         let mut live = live;
@@ -549,6 +550,7 @@ mod tests {
             span: 0.0,
             angle: 0.0,
             rule: Rule::default(),
+            mix: crate::stroke::Mix::default(),
         }
     }
 

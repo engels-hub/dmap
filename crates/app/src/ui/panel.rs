@@ -12,7 +12,7 @@ use crate::icon;
 use crate::icons::Icon;
 use crate::scene::{Asset, Node, NodeId, ROOT_ID, Scene};
 use crate::sight::Fill;
-use crate::stroke::{Ink, Rule, Stroke};
+use crate::stroke::{Ink, Mix, Rule, Stroke};
 use crate::text;
 use crate::theme::{self, Tokens};
 use crate::transform::{MAX_GRID_PX, MIN_GRID_PX};
@@ -22,10 +22,10 @@ use crate::widget::{self, Height};
 use super::draw::measure_overlay;
 use super::tree::{Asked, Tree, act_on, row_name, scoped_rows};
 use super::{
-    Frame, MARGIN, MAX_INK_WIDTH, MAX_PERCENT, MAX_REACH, MAX_ZOOM_PERCENT, MIN_INK_WIDTH,
-    MIN_PERCENT, MIN_REACH, MIN_ZOOM_PERCENT, Measure, NIB_SQUARE, Nib, PANEL_HEADER, PANEL_MAX,
-    PANEL_PAD, PANEL_SLIDER, PANEL_WIDTH, PATH_GLYPH, PATH_HEIGHT, PATH_PARTS, ROW_HEIGHT, Select,
-    Settings, TOOL_HEIGHT, Table, Tool, painter_dashes,
+    Frame, MARGIN, MAX_PERCENT, MAX_REACH, MAX_ZOOM_PERCENT, MIN_PERCENT, MIN_REACH,
+    MIN_ZOOM_PERCENT, Measure, NIB_SQUARE, Nib, PANEL_HEADER, PANEL_MAX, PANEL_PAD, PANEL_SLIDER,
+    PANEL_WIDTH, PATH_GLYPH, PATH_HEIGHT, PATH_PARTS, ROW_HEIGHT, Select, Settings, TOOL_HEIGHT,
+    Table, Tool, painter_dashes, width_range,
 };
 
 /// Where a floating panel stands, and how big it is. DESIGN.md 7.1.
@@ -447,9 +447,7 @@ pub(super) fn properties_panel(
             }
             // A stroke opens a panel of its own, so the DM changes what
             // they drew after they drew it. Issue #12.
-            Some((id, Some(Node::Stroke(stroke)))) => {
-                Held::Stroke(id, stroke.ink.name().to_owned())
-            }
+            Some((id, Some(Node::Stroke(stroke)))) => Held::Stroke(id, stroke.name().to_owned()),
             // A light opens a panel for its reach, its color and its
             // cone. Issue #16.
             Some((id, Some(Node::Light(_)))) => Held::Light(id, text::sight_light().to_owned()),
@@ -672,6 +670,7 @@ fn draw_properties(ui: &mut egui::Ui, settings: &mut Settings, tokens: Tokens) {
     );
     widget::row_label(ui, text::panel_draw_color());
     widget::color_swatch(ui, &mut settings.ink_color);
+    mix_row(ui, &mut settings.ink_mix);
     if settings.ink_nib == Nib::Ruler {
         widget::row_label(ui, text::ruler_rule());
         let cells = settings.cells();
@@ -693,20 +692,30 @@ fn draw_properties(ui: &mut egui::Ui, settings: &mut Settings, tokens: Tokens) {
     if widget::checkbox(ui, &mut snap, text::panel_draw_snap()).clicked() {
         settings.ink_snap = snap;
     }
+    // The pen and the reveal brush each keep their own width, because a
+    // line and a corridor differ by a factor of twenty.
     widget::row_label(ui, text::panel_draw_width());
-    let mut width = settings.ink_width;
+    let mix = settings.ink_mix;
+    let mut width = settings.width_of(mix);
     let shown = text::panel_draw_width_value(format_args!("{width:.2}"));
-    if widget::slider(
-        ui,
-        &mut width,
-        MIN_INK_WIDTH..=MAX_INK_WIDTH,
-        PANEL_SLIDER,
-        &shown,
-    )
-    .is_pointer_button_down_on()
+    if widget::slider(ui, &mut width, width_range(mix), PANEL_SLIDER, &shown)
+        .is_pointer_button_down_on()
     {
-        settings.ink_width = width;
+        match mix {
+            Mix::Blend => settings.ink_width = width,
+            Mix::Reveal => settings.reveal_width = width,
+        }
     }
+}
+
+/// The Mix row: whether a stroke paints the map or reveals it from the dark.
+/// Returns `true` when the DM picked the other one. Issue #65.
+fn mix_row(ui: &mut egui::Ui, mix: &mut Mix) -> bool {
+    widget::row_label(ui, text::panel_draw_mix());
+    let choices = [Mix::Blend, Mix::Reveal].map(|one| (one, one.name()));
+    let changed = widget::segmented(ui, mix, &choices);
+    widget::helper(ui, text::panel_draw_mix_helper());
+    changed
 }
 
 /// The row of six squares that says what a drag draws. DESIGN.md 8.3.
@@ -792,17 +801,17 @@ fn stroke_properties(
     if widget::color_swatch(ui, &mut after.color) {
         changed = true;
     }
+    if mix_row(ui, &mut after.mix) {
+        // A pen line that turns into a reveal takes the width of the
+        // brush, and a reveal that turns into paint the width of the pen.
+        after.width = frame.settings.width_of(after.mix);
+        changed = true;
+    }
     widget::row_label(ui, text::panel_draw_width());
-    let mut width = mark.width;
+    let mut width = after.width;
     let shown = text::panel_draw_width_value(format_args!("{width:.2}"));
-    if widget::slider(
-        ui,
-        &mut width,
-        MIN_INK_WIDTH..=MAX_INK_WIDTH,
-        PANEL_SLIDER,
-        &shown,
-    )
-    .is_pointer_button_down_on()
+    if widget::slider(ui, &mut width, width_range(after.mix), PANEL_SLIDER, &shown)
+        .is_pointer_button_down_on()
     {
         after.width = width;
         changed = true;
@@ -1260,7 +1269,7 @@ pub(super) fn selection_popup(
                 let name = match crate::scene::find(frame.scene, *id) {
                     Some(Node::Group(group)) => group.name.clone(),
                     Some(Node::Asset(asset)) => asset.path.to_string_lossy().into_owned(),
-                    Some(Node::Stroke(stroke)) => stroke.ink.name().to_owned(),
+                    Some(Node::Stroke(stroke)) => stroke.name().to_owned(),
                     Some(Node::Walls(_)) => text::sight_walls().to_owned(),
                     Some(Node::Light(_)) => text::sight_light().to_owned(),
                     Some(Node::Darkness(_)) => text::sight_darkness().to_owned(),

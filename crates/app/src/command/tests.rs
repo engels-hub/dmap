@@ -376,6 +376,7 @@ fn stroke(id: u64, points: &[(f64, f64)]) -> crate::stroke::Stroke {
         span: 0.0,
         angle: 0.0,
         rule: Rule::default(),
+        mix: crate::stroke::Mix::default(),
     }
 }
 

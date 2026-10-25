@@ -193,6 +193,21 @@ const MAX_REACH: f64 = 200.0;
 const MIN_INK_WIDTH: f64 = 0.02;
 const MAX_INK_WIDTH: f64 = 0.5;
 
+/// The thinnest and the widest a stroke that reveals may be, in inches.
+///
+/// A reveal is a brush that opens a room or a corridor, so it runs from a
+/// quarter of a cell to a span of twelve cells. Issue #65.
+const MIN_REVEAL_WIDTH: f64 = 0.25;
+const MAX_REVEAL_WIDTH: f64 = 12.0;
+
+/// How wide a stroke that mixes by `mix` may be, in inches.
+fn width_range(mix: crate::stroke::Mix) -> std::ops::RangeInclusive<f64> {
+    match mix {
+        crate::stroke::Mix::Blend => MIN_INK_WIDTH..=MAX_INK_WIDTH,
+        crate::stroke::Mix::Reveal => MIN_REVEAL_WIDTH..=MAX_REVEAL_WIDTH,
+    }
+}
+
 /// How far the pointer moves before a pen keeps another point, in inches.
 ///
 /// A hundredth of an inch is under a pixel at the zoom a table works at,
@@ -409,6 +424,10 @@ pub struct Settings {
     pub ink_nib: Nib,
     /// How a ruler counts its length.
     pub ink_rule: Rule,
+    /// How the next stroke mixes with the canvas. Issue #65.
+    pub ink_mix: crate::stroke::Mix,
+    /// How wide the next stroke that reveals is, in inches. Issue #65.
+    pub reveal_width: f64,
     /// Whether a shape starts on a crossing of the grid.
     pub ink_snap: bool,
     /// What every size of DESIGN.md is multiplied by. DESIGN.md 3.1.
@@ -432,9 +451,20 @@ pub struct Settings {
     pub light: crate::lighting::Rules,
     /// Which screens draw the light. DESIGN.md 9.3.
     pub light_show: crate::lighting::Show,
+    /// How much of the darkness the DM sees through. Issue #65.
+    pub light_see: f64,
 }
 
 impl Settings {
+    /// How wide the next stroke draws, in inches: the pen width, or the
+    /// width of the reveal brush.
+    pub fn width_of(&self, mix: crate::stroke::Mix) -> f64 {
+        match mix {
+            crate::stroke::Mix::Blend => self.ink_width,
+            crate::stroke::Mix::Reveal => self.reveal_width,
+        }
+    }
+
     /// The colors of the theme the window draws.
     /// What shape the cells are, and how wide. Issue #15.
     pub fn cells(&self) -> crate::grid::Cells {
@@ -903,7 +933,14 @@ impl DmUi {
             }
             edited |= history_dialog(ui, history_open, &mut frame, tokens);
             if let Some(press) = toolbar(ui, *tool, *frozen, tokens) {
-                add_map |= take_press(press, tool, scenes, dialog, frozen);
+                if press == Press::AddLight {
+                    // The DM picks the new light at once, so the Select
+                    // view comes up to move it.
+                    *tool = Tool::Select;
+                    edited |= canvas::add_light(views.select, &mut frame, tree.active);
+                } else {
+                    add_map |= take_press(press, tool, scenes, dialog, frozen);
+                }
             }
             every_view_keys(ui, &frame.settings.keys, over, frozen, dialog);
             // A dialog over the canvas takes the keyboard too. egui holds
@@ -1196,6 +1233,7 @@ fn take_press(
         Press::Settings => dialog.open = !dialog.open,
         Press::Freeze => *frozen = !*frozen,
         Press::AddMap => return true,
+        Press::AddLight => {}
     }
     false
 }
@@ -1278,12 +1316,15 @@ mod tests {
             foundry_data: None,
             light: crate::lighting::Rules::default(),
             light_show: crate::lighting::Show::Both,
+            light_see: crate::lighting::DM_SEE_THROUGH,
             theme: theme::Mode::default(),
             language: crate::text::DEFAULT.to_owned(),
             ink_color: [0, 0, 0, 255],
             ink_width: 0.1,
             ink_nib: super::Nib::default(),
             ink_rule: crate::stroke::Rule::default(),
+            ink_mix: crate::stroke::Mix::default(),
+            reveal_width: 2.0,
             ink_snap: true,
             ui_scale: theme::DEFAULT_SCALE,
             tv_display: Some(1),
