@@ -15,7 +15,7 @@ use crate::stroke::{Ink, Rule, Stroke};
 use crate::text;
 use crate::theme::{self, Tokens};
 use crate::transform::{MAX_GRID_PX, MIN_GRID_PX};
-use crate::tvbox::{TV_WIDTH_INCHES, TvBox, clamp_width};
+use crate::tvbox::{TvBox, clamp_width};
 use crate::widget::{self, Height};
 
 use super::draw::measure_overlay;
@@ -477,7 +477,8 @@ pub(super) fn properties_panel(
                 // Another tool does not run the measure, so the panel must
                 // not leave a measure armed behind it.
                 select.measure = None;
-                box_asked = box_properties(ui, frame.scene.tv_box, frame_box, tokens);
+                let tv_width = frame.tv_width();
+                box_asked = box_properties(ui, frame.scene.tv_box, tv_width, frame_box, tokens);
             }
             Held::Draw => draw_properties(ui, frame.settings, tokens),
             Held::Map(id, _) => edited = map_properties(ui, *id, select, frame, tokens),
@@ -536,15 +537,17 @@ impl Held {
 /// The DM drags a corner handle to reach a zoom by eye. This field reaches
 /// an exact one, such as 50 percent for a map twice the size of the table.
 ///
-/// `frame_box` comes back `true` when the DM asked to see the whole box.
+/// `tv_width` is the width of the TV in inches. `frame_box` comes back
+/// `true` when the DM asked to see the whole box.
 fn box_properties(
     ui: &mut egui::Ui,
     tv_box: TvBox,
+    tv_width: f64,
     frame_box: &mut bool,
     tokens: Tokens,
 ) -> Option<TvBox> {
     let _ = tokens;
-    let mut percent = tv_box.zoom(TV_WIDTH_INCHES) * 100.0;
+    let mut percent = tv_box.zoom(tv_width) * 100.0;
     let mut asked = None;
     widget::row_label(ui, text::panel_box_zoom());
     if widget::input(
@@ -558,7 +561,7 @@ fn box_properties(
     .changed()
     {
         let mut after = tv_box;
-        after.width = clamp_width(TV_WIDTH_INCHES / (percent / 100.0));
+        after.width = clamp_width(tv_width / (percent / 100.0));
         asked = Some(after);
     }
     widget::helper(ui, text::panel_box_zoom_helper());

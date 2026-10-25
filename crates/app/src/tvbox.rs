@@ -6,12 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::camera::Camera;
 
-/// The width of the TV screen in inches, until the DM can enter its size.
+/// The width of the TV screen in inches, until the DM enters its size.
 ///
 /// A 55 inch 16:9 TV is about 48 inches wide. A box this wide draws the
 /// world at true size, so this is also the width of a new box. Issue #6
-/// lets the DM enter the resolution and the diagonal of the real TV, and
-/// this constant then goes away.
+/// lets the DM enter the size of the real TV in its place.
 ///
 /// The pixels of the TV do not appear here on purpose. The TV spreads the
 /// box across every pixel it has, so a 1080p TV and a 4K TV of the same
@@ -30,6 +29,77 @@ pub const DEFAULT_SNAP_PERCENT: f64 = 8.0;
 /// The widest snap window a project may hold, in percent. Half of that
 /// already reaches from 50 to 150 percent.
 pub const MAX_SNAP_PERCENT: f64 = 50.0;
+
+/// Which number the DM gave for the size of the TV. Issue #6.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SizeBy {
+    /// The diagonal of the screen, in inches, as the box of the TV says.
+    #[default]
+    Diagonal,
+    /// How many pixels of the screen make one inch.
+    PixelsPerInch,
+    /// The width of the screen, in inches, as a tape measure says.
+    Width,
+}
+
+/// The size of the real TV, as the DM entered it. Issue #6.
+///
+/// The number stays as the DM gave it. A diagonal then still holds when
+/// the TV window moves to a screen of another resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TvSize {
+    /// Which number `value` is.
+    pub by: SizeBy,
+    /// The number, in inches or in pixels per inch.
+    pub value: f64,
+}
+
+impl TvSize {
+    /// How many pixels make one inch on a screen of `screen` pixels.
+    ///
+    /// Gives back `None` for a number the program cannot draw by, such as
+    /// a diagonal of zero.
+    pub fn pixels_per_inch(self, screen: (u32, u32)) -> Option<f64> {
+        let (width, height) = (f64::from(screen.0), f64::from(screen.1));
+        let ppi = match self.by {
+            SizeBy::Diagonal => width.hypot(height) / self.value,
+            SizeBy::PixelsPerInch => self.value,
+            SizeBy::Width => width / self.value,
+        };
+        (ppi.is_finite() && ppi > 0.0 && width > 0.0).then_some(ppi)
+    }
+
+    /// The size that gives `ppi` on a screen of `screen` pixels, said as
+    /// the number `by` names.
+    pub fn of(by: SizeBy, ppi: f64, screen: (u32, u32)) -> Self {
+        let (width, height) = (f64::from(screen.0), f64::from(screen.1));
+        let value = match by {
+            SizeBy::Diagonal => width.hypot(height) / ppi,
+            SizeBy::PixelsPerInch => ppi,
+            SizeBy::Width => width / ppi,
+        };
+        Self { by, value }
+    }
+}
+
+/// How many pixels make one inch on the TV.
+///
+/// `screen` is the resolution of the TV, and `viewport` the pixels of the
+/// TV window. With no size entered, the window is [`TV_WIDTH_INCHES`]
+/// wide.
+pub fn tv_pixels_per_inch(size: Option<TvSize>, screen: (u32, u32), viewport: (u32, u32)) -> f64 {
+    size.and_then(|size| size.pixels_per_inch(screen))
+        .unwrap_or_else(|| f64::from(viewport.0.max(1)) / TV_WIDTH_INCHES)
+}
+
+/// The width of the TV window in inches: the width of a box at true size.
+pub fn tv_width(size: Option<TvSize>, screen: (u32, u32), viewport: (u32, u32)) -> f64 {
+    if size.is_none() || viewport.0 == 0 {
+        return TV_WIDTH_INCHES;
+    }
+    clamp_width(f64::from(viewport.0) / tv_pixels_per_inch(size, screen, viewport))
+}
 
 /// The rectangle of the canvas that the TV shows.
 ///
@@ -77,6 +147,22 @@ impl TvBox {
         Self {
             width: clamp_width(self.width),
             ..self
+        }
+    }
+
+    /// The same box on a TV `after` inches wide, when it stood at true size
+    /// on a TV `before` inches wide. A box at another zoom stays as it is.
+    ///
+    /// A new size for the TV moves true size. A box at 100 % then stays at
+    /// 100 %, so one cell is still one inch on the glass. Issue #6.
+    pub fn resized_tv(self, before: f64, after: f64) -> Self {
+        if at_true_size(self.zoom(before)) {
+            Self {
+                width: clamp_width(after),
+                ..self
+            }
+        } else {
+            self
         }
     }
 
@@ -149,8 +235,8 @@ pub fn clamp_width(width: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_SNAP_PERCENT, MAX_SNAP_PERCENT, MAX_WIDTH, MIN_WIDTH, TV_WIDTH_INCHES, TvBox,
-        at_true_size, clamp_snap_percent, clamp_width, snap_to_true_size,
+        DEFAULT_SNAP_PERCENT, MAX_SNAP_PERCENT, MAX_WIDTH, MIN_WIDTH, SizeBy, TV_WIDTH_INCHES,
+        TvBox, TvSize, at_true_size, clamp_snap_percent, clamp_width, snap_to_true_size, tv_width,
     };
 
     fn close(a: f64, b: f64) -> bool {
@@ -299,5 +385,57 @@ mod tests {
         };
         let json = serde_json::to_string(&tv_box).unwrap();
         assert_eq!(serde_json::from_str::<TvBox>(&json).unwrap(), tv_box);
+    }
+
+    #[test]
+    fn a_box_at_true_size_follows_a_new_tv_size() {
+        let at_true = TvBox::default();
+        assert!(close(at_true.resized_tv(48.0, 56.0).width, 56.0));
+        let zoomed = TvBox {
+            center: (0.0, 0.0),
+            width: 30.0,
+        };
+        assert!(close(zoomed.resized_tv(48.0, 56.0).width, 30.0));
+    }
+
+    #[test]
+    fn a_65_inch_4k_tv_is_about_57_inches_wide() {
+        let size = TvSize {
+            by: SizeBy::Diagonal,
+            value: 65.0,
+        };
+        let ppi = size.pixels_per_inch(UHD).unwrap();
+        assert!((ppi - 67.78).abs() < 0.01);
+        assert!((tv_width(Some(size), UHD, UHD) - 56.65).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_three_numbers_give_the_same_tv() {
+        let ppi = 80.0;
+        for by in [SizeBy::Diagonal, SizeBy::PixelsPerInch, SizeBy::Width] {
+            let size = TvSize::of(by, ppi, UHD);
+            assert!(close(size.pixels_per_inch(UHD).unwrap(), ppi));
+        }
+        assert!(close(TvSize::of(SizeBy::Width, ppi, UHD).value, 48.0));
+    }
+
+    #[test]
+    fn a_window_smaller_than_the_tv_is_narrower_in_inches() {
+        let size = TvSize {
+            by: SizeBy::PixelsPerInch,
+            value: 80.0,
+        };
+        assert!(close(tv_width(Some(size), UHD, (1920, 1080)), 24.0));
+    }
+
+    #[test]
+    fn no_size_or_a_size_of_nothing_keeps_the_old_width() {
+        assert!(close(tv_width(None, UHD, UHD), TV_WIDTH_INCHES));
+        let nothing = TvSize {
+            by: SizeBy::Diagonal,
+            value: 0.0,
+        };
+        assert_eq!(nothing.pixels_per_inch(UHD), None);
+        assert!(close(tv_width(Some(nothing), UHD, UHD), TV_WIDTH_INCHES));
     }
 }

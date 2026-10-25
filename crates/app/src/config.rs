@@ -142,6 +142,13 @@ pub struct Config {
     pub swap_windows: bool,
     /// How close to true size the TV box must come before it snaps.
     pub snap_percent: f64,
+    /// The size of the real TV, once the DM entered it. Issue #6.
+    #[serde(default)]
+    pub tv_size: Option<crate::tvbox::TvSize>,
+    /// Whether the TV shows a 1 inch grid and a 6 inch ruler, to check the
+    /// size against a real ruler. Issue #7.
+    #[serde(default)]
+    pub tv_check: bool,
     /// The theme the DM window draws. DESIGN.md 2.
     pub theme: crate::theme::Mode,
     /// The language the window speaks, by the name of its file.
@@ -246,6 +253,8 @@ impl Default for Config {
             tv_display: TvPlacement::default(),
             swap_windows: true,
             snap_percent: DEFAULT_SNAP_PERCENT,
+            tv_size: None,
+            tv_check: false,
             theme: crate::theme::Mode::default(),
             language: first_language(),
             ui_scale: crate::theme::DEFAULT_SCALE,
@@ -512,6 +521,11 @@ mod tests {
             tv_display: TvPlacement::Display("HDMI-1".to_owned()),
             swap_windows: true,
             snap_percent: 12.0,
+            tv_size: Some(crate::tvbox::TvSize {
+                by: crate::tvbox::SizeBy::Diagonal,
+                value: 65.0,
+            }),
+            tv_check: true,
             theme: crate::theme::Mode::Dark,
             language: "ru".to_owned(),
             ui_scale: 1.25,

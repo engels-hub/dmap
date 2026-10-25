@@ -20,7 +20,7 @@ use crate::transform::{
     corner_offset, edge_midpoint, grid_px_from_measure, hit_test, pick_handle, rotation_from_drag,
     rotation_handle, scale_from_drag, snap_corner, step_scale,
 };
-use crate::tvbox::{TV_WIDTH_INCHES, TvBox, at_true_size, clamp_width, snap_to_true_size};
+use crate::tvbox::{TvBox, at_true_size, clamp_width, snap_to_true_size};
 
 use super::panel::selection_popup;
 use super::{
@@ -266,7 +266,7 @@ pub(super) fn table_tool(
                 // size.
                 let resized = (box_now.width - start_width).abs() > f64::EPSILON;
                 let snapped =
-                    snap_to_true_size(box_now.width, TV_WIDTH_INCHES, frame.settings.snap_percent);
+                    snap_to_true_size(box_now.width, frame.tv_width(), frame.settings.snap_percent);
                 if resized && (snapped - box_now.width).abs() > f64::EPSILON {
                     box_now.width = snapped;
                     edited = true;
@@ -289,8 +289,9 @@ pub(super) fn table_tool(
     // Figma has no gesture that resizes an object with the wheel, so Alt
     // marks this one as ours. The canvas already gave the gesture up.
     if let (Some(pinch), true) = (pointer.box_zoom, pointer.hovered) {
-        let zoom = box_now.zoom(TV_WIDTH_INCHES) * f64::from(pinch);
-        box_now.width = clamp_width(TV_WIDTH_INCHES / zoom);
+        let tv_width = frame.tv_width();
+        let zoom = box_now.zoom(tv_width) * f64::from(pinch);
+        box_now.width = clamp_width(tv_width / zoom);
         edited = true;
     }
     if box_now != frame.scene.tv_box {
@@ -308,7 +309,7 @@ pub(super) fn table_tool(
 
     let icon = table.drag.map(|_| egui::CursorIcon::ResizeNwSe);
     set_cursor(ui, table.drag.is_some(), icon, pointer, &handles);
-    let zoom = frame.scene.tv_box.zoom(TV_WIDTH_INCHES);
+    let zoom = frame.scene.tv_box.zoom(frame.tv_width());
     draw_tv_box(
         &ui.painter_at(rect),
         rect,
@@ -507,7 +508,7 @@ pub(super) fn outline_tv_box(
         .iter()
         .map(|&c| view.to_screen(c))
         .collect();
-    let zoom = frame.scene.tv_box.zoom(TV_WIDTH_INCHES);
+    let zoom = frame.scene.tv_box.zoom(frame.tv_width());
     let painter = ui.painter_at(canvas);
     let shapes = box_outline(&painter, canvas, &corners, zoom, frame.frozen, tokens);
     painter.set(slot, egui::Shape::Vec(shapes));
