@@ -74,7 +74,7 @@ Pick the TV display under **Settings > Table > Display**. Then add a map with **
 The toolbar at the bottom of the window comes in two boxes.
 
 - The left box holds the views: **Select**, **Draw** and **Table**. One of them is always on.
-- The right box holds **Scenes**, **Add map**, **Settings** and **Freeze**.
+- The right box holds **Scenes**, **Add map**, **Add light**, **Settings** and **Freeze**.
 
 **History** sits in the bottom right corner. The **Objects** panel on the left shows the scene. The panel on the right belongs to the view or to what you hold.
 
@@ -153,12 +153,13 @@ Delete takes what you hold out of the scene. `Ctrl+Z` brings it all back, each n
 | Give up the measure | `Escape` |
 | Choose how a diagonal counts | Measure, in the panel: Euclidean, D&D 5e, Pathfinder or Manhattan |
 | Start a shape off the grid | Hold `Shift`, or turn "Start on the grid" off in the panel |
-| Change a stroke you drew | Pick it in the Select view or in the Objects list. Its panel holds the color, the width and the size |
+| Reveal a part of the map in the dark | Mix, in the panel: Reveal. The players see the map under the stroke, and no ink. A rectangle, an ellipse or an effect reveals its inside. The reveal brush keeps its own width, from 0.25 in to 12 in. Walls that block sight stop a reveal, as they stop the eyes of the players |
+| Change a stroke you drew | Pick it in the Select view or in the Objects list. Its panel holds the color, the mix, the width and the size |
 | Lay a burst | Drag from its middle to its edge |
 | Lay a cone | Drag from its point out to where it ends. It ends as wide as it is long |
 | Lay a beam | Drag for the length and let go, then drag again for the width |
 
-A new stroke joins the Drawings group of the scene. The group goes when its last stroke goes, and the next stroke makes it again. The program keeps the color, the width, the last square you used and the way you count a diagonal. The next stroke takes them.
+A new stroke joins the Drawings group of the scene. The group goes when its last stroke goes, and the next stroke makes it again. The program keeps the color, the mix, the width, the last square you used and the way you count a diagonal. The next stroke takes them.
 
 ## Table
 
@@ -321,8 +322,11 @@ The **Light** tab holds the light of the lamps:
 - **Ambient color** sets the color of the light that the darkness leaves. The scene keeps this value too.
 - **Walls block the light** turns the shadows on and off. **An open door lets the light through** does the same for doors that stand open.
 - **Show on** picks the screens that show the light: both screens, the DM screen only, or the TV only.
+- **DM sees through** sets how much of the darkness the DM screen removes, so you see the map under it. The TV keeps all of the darkness. It starts at 70 %. A blue hatch marks all that the players cannot see.
 
-A scene with no light and no area of darkness shows its maps as they are. Thus a plain map never goes dark. The light falls on the maps only. The grid and the drawings stay visible over the dark.
+**Add light** in the toolbar puts a white light in the middle of the view. It gives 4 cells of bright light and 8 cells of dim light, as a torch does. The program picks the light, so a drag moves it to its place. Its panel sets the reach, the color and the cone. An undo takes the light back out.
+
+A scene with no light, no area of darkness and no revealed stroke shows its maps as they are. Thus a plain map never goes dark. The light falls on the maps only. The grid and the drawings stay visible over the dark.
 
 ### Areas of darkness
 

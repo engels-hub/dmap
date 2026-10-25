@@ -382,8 +382,10 @@ impl Running {
                 language: config.language.clone(),
                 ink_color: config.ink_color,
                 ink_width: config.ink_width,
+                reveal_width: config.reveal_width,
                 ink_nib: config.ink_nib,
                 ink_rule: config.ink_rule,
+                ink_mix: config.ink_mix,
                 ink_snap: config.ink_snap,
                 ui_scale: crate::theme::clamp_scale(config.ui_scale),
                 grid_kind: config.grid_kind,
@@ -394,6 +396,7 @@ impl Running {
                 foundry_data: config.foundry_data.clone(),
                 light: config.light,
                 light_show: config.light_show,
+                light_see: config.light_see,
             },
             placed: false,
             // The first frame owes the players the scene the DM opened.
@@ -535,11 +538,11 @@ impl Running {
             .map(|asset| (asset, maps::FULL_STRENGTH))
             .collect();
         // The strokes draw over every map and over the grid, and what the
-        // DM has under their hand draws with them.
+        // DM has under their hand draws with them. A stroke that reveals
+        // shows the players the map and no ink, and no label either.
         let mut ink = scene::ink_order(&self.scene, Audience::Tv);
-        if let Some(stroke) = self.live.as_ref() {
-            ink.push(stroke);
-        }
+        ink.extend(self.live.as_ref());
+        ink.retain(|stroke| stroke.mix == stroke::Mix::Blend);
         let tv_light = &self.tv_light;
         let map_layer = &mut self.map_layer;
         let grid_layer = &self.grid_layer;
@@ -588,16 +591,29 @@ impl Running {
         let rules = self.settings.light;
         let show = self.settings.light_show;
         let mood = self.scene.light;
-        let input = lighting::input_for(&self.scene, audience, rules, show, camera, viewport);
-        let layer = match audience {
-            Audience::Dm => &mut self.dm_light,
-            Audience::Tv => &mut self.tv_light,
+        // What the DM draws right now reveals at once, before it lands.
+        let mut strokes = scene::ink_order(&self.scene, audience);
+        strokes.extend(self.live.as_ref());
+        let reveal = ink::reveal_mesh(&strokes);
+        let input = lighting::input_for(
+            &self.scene,
+            audience,
+            rules,
+            show,
+            camera,
+            viewport,
+            &reveal,
+        );
+        let (layer, keep) = match audience {
+            Audience::Dm => (&mut self.dm_light, (1.0 - self.settings.light_see, true)),
+            Audience::Tv => (&mut self.tv_light, (1.0, false)),
         };
         layer.prepare(
             &self.gpu.device,
             &self.gpu.queue,
             input,
             mood,
+            keep,
             camera,
             viewport,
         );
@@ -788,6 +804,10 @@ impl Running {
         }
         let viewport = (self.dm.config.width, self.dm.config.height);
         let camera = self.camera;
+        // What the DM is drawing right now is in no scene, so it travels
+        // beside the scene until the hand lets go. The light reads it too.
+        let drawing = self.live != output.live;
+        self.live.clone_from(&output.live);
         self.prepare_light(Audience::Dm, &camera, viewport);
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
         let gpu = &self.gpu;
@@ -804,10 +824,6 @@ impl Running {
                 (asset, strength)
             })
             .collect();
-        // What the DM is drawing right now is in no scene, so it travels
-        // beside the scene until the hand lets go.
-        let drawing = self.live != output.live;
-        self.live.clone_from(&output.live);
         let mut ink = scene::ink_order(&self.scene, Audience::Dm);
         if let Some(live) = self.live.as_ref() {
             ink.push(live);
@@ -990,8 +1006,10 @@ impl Running {
         config.language.clone_from(&self.settings.language);
         config.ink_color = self.settings.ink_color;
         config.ink_width = self.settings.ink_width;
+        config.reveal_width = self.settings.reveal_width;
         config.ink_nib = self.settings.ink_nib;
         config.ink_rule = self.settings.ink_rule;
+        config.ink_mix = self.settings.ink_mix;
         config.ink_snap = self.settings.ink_snap;
         config.ui_scale = self.settings.ui_scale;
         config.grid_kind = self.settings.grid_kind;
@@ -1002,6 +1020,7 @@ impl Running {
         config.foundry_data.clone_from(&self.settings.foundry_data);
         config.light = self.settings.light;
         config.light_show = self.settings.light_show;
+        config.light_see = self.settings.light_see;
         config.tool = self.ui.tool();
         config.settings_tab = self.ui.settings_tab();
         config.camera = Some(self.camera);

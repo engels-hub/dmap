@@ -8,13 +8,17 @@
 //!
 //! The mesh is built for each frame it draws. A cache belongs here once a
 //! scene holds enough ink to feel it, and PLAN.md 5.3 keeps that note.
+//!
+//! A stroke that reveals draws no ink on the TV. The light pass cuts its
+//! triangles out of the darkness, and the DM screen shows a thin outline
+//! of a closed one. Issue #65.
 
 // Rust guideline compliant 2026-02-21
 
 use egui_wgpu::wgpu;
 
 use crate::camera::Camera;
-use crate::stroke::Stroke;
+use crate::stroke::{Mix, Stroke};
 
 /// Moves a vertex from world inches into the clip space of the surface.
 const SHADER: &str = "
@@ -75,6 +79,9 @@ const ROUND: usize = 8;
 
 /// One vertex: the world point in inches, then its color.
 type Vertex = [f32; 6];
+
+/// How wide the outline of a stroke that reveals draws, in screen pixels.
+const OUTLINE_PX: f64 = 1.5;
 
 /// The GPU side of the ink: one pipeline, one uniform, one mesh buffer.
 pub struct InkLayer {
@@ -178,7 +185,8 @@ impl InkLayer {
     /// Draws every stroke as `camera` sees it.
     ///
     /// `live` is what the DM is drawing right now, which is in no scene
-    /// yet, and it draws over the rest.
+    /// yet, and it draws over the rest. A closed shape that reveals draws
+    /// as a thin outline, so the TV leaves those strokes out.
     pub fn draw(
         &mut self,
         device: &wgpu::Device,
@@ -191,9 +199,21 @@ impl InkLayer {
         if camera.pixels_per_inch <= 0.0 || !camera.pixels_per_inch.is_finite() {
             return;
         }
+        let outline = (OUTLINE_PX / camera.pixels_per_inch / 2.0) as f32;
         let mut mesh: Vec<Vertex> = Vec::new();
         for stroke in strokes {
-            add_stroke(&mut mesh, stroke);
+            match stroke.mix {
+                Mix::Blend => add_stroke(&mut mesh, stroke),
+                // A closed shape shows its edge. An open stroke shows
+                // nothing: the hatch of the fog already rims what it opens.
+                Mix::Reveal if stroke.ink.closes() => add_line(
+                    &mut mesh,
+                    &stroke.polyline(),
+                    outline,
+                    color_of(stroke.color),
+                ),
+                Mix::Reveal => {}
+            }
         }
         if mesh.is_empty() {
             return;
@@ -217,8 +237,8 @@ impl InkLayer {
         ];
         let view: Vec<u8> = view.iter().flat_map(|value| value.to_ne_bytes()).collect();
         queue.write_buffer(&self.uniform, 0, &view);
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_pipeline(&self.pipeline);
         pass.set_vertex_buffer(0, self.mesh.slice(..));
         pass.draw(0..mesh.len() as u32, 0..1);
     }
@@ -241,6 +261,122 @@ impl InkLayer {
     }
 }
 
+/// How far apart the eyes of an open reveal stand, as a share of the
+/// radius of the brush. The edge of the band then dips by 3 % of the
+/// radius between two eyes.
+const EYE_STEP: f64 = 0.5;
+
+/// The most eyes one open stroke takes. A longer stroke spaces them out.
+const MOST_EYES: usize = 256;
+
+/// One eye of a reveal: the point it sees from, and how far it sees, in
+/// inches. The light pass treats it as a lamp the walls block.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Eye {
+    pub center: (f64, f64),
+    pub reach: f64,
+}
+
+/// What the strokes that reveal open, before the walls cut it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Reveal {
+    /// The eyes, each one a point the walls hide parts from.
+    pub eyes: Vec<Eye>,
+    /// The triangles, three points in a row, in world inches. Each point
+    /// names the eye that opens its triangle.
+    pub mesh: Vec<([f32; 2], u32)>,
+}
+
+/// What the strokes that reveal open. Issue #65.
+///
+/// An open stroke is a brush: a row of discs along its line, each one as
+/// wide as the stroke and each one its own eye, so the walls stop the
+/// brush as they stop sight. A shape that closes reveals its inside and
+/// sees from one point: the middle of a box or an ellipse, the middle of
+/// a burst, and the point a cone or a beam starts from.
+pub fn reveal_mesh(strokes: &[&Stroke]) -> Reveal {
+    let mut reveal = Reveal::default();
+    for stroke in strokes.iter().filter(|stroke| stroke.mix == Mix::Reveal) {
+        let line = stroke.polyline();
+        let half = (stroke.width / 2.0).max(0.0);
+        let mut mesh = Vec::new();
+        let mut eye = |center: (f64, f64), reach: f64, mesh: &mut Vec<Vertex>| {
+            let index = reveal.eyes.len() as u32;
+            reveal.eyes.push(Eye { center, reach });
+            reveal
+                .mesh
+                .extend(mesh.drain(..).map(|v| ([v[0], v[1]], index)));
+        };
+        if stroke.ink.closes() {
+            let (Some(first), Some(last)) = (stroke.points.first(), stroke.points.last()) else {
+                continue;
+            };
+            let center = if stroke.ink.filled() {
+                *first
+            } else {
+                (
+                    f64::midpoint(first.0, last.0),
+                    f64::midpoint(first.1, last.1),
+                )
+            };
+            let reach = line
+                .iter()
+                .map(|at| (at.0 - center.0).hypot(at.1 - center.1))
+                .fold(0.0, f64::max)
+                + half;
+            add_fill(&mut mesh, &line, [1.0; 4]);
+            add_line(&mut mesh, &line, half as f32, [1.0; 4]);
+            eye(center, reach, &mut mesh);
+            continue;
+        }
+        if half <= 0.0 {
+            continue;
+        }
+        for center in along(&line, half * EYE_STEP) {
+            add_disc(
+                &mut mesh,
+                [center.0 as f32, center.1 as f32],
+                half as f32,
+                [1.0; 4],
+            );
+            eye(center, half, &mut mesh);
+        }
+    }
+    reveal
+}
+
+/// Points along `line` no more than `step` apart, from its first point to
+/// its last, and no more than [`MOST_EYES`] of them.
+fn along(line: &[(f64, f64)], step: f64) -> Vec<(f64, f64)> {
+    let length: f64 = line
+        .windows(2)
+        .map(|pair| (pair[1].0 - pair[0].0).hypot(pair[1].1 - pair[0].1))
+        .sum();
+    let step = step.max(length / (MOST_EYES - 1) as f64);
+    let mut points: Vec<(f64, f64)> = line.first().copied().into_iter().collect();
+    // How far along the current length the next point stands.
+    let mut next = step;
+    for pair in line.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        let span = (to.0 - from.0).hypot(to.1 - from.1);
+        while next <= span && step > 0.0 {
+            let share = next / span;
+            points.push((
+                from.0 + (to.0 - from.0) * share,
+                from.1 + (to.1 - from.1) * share,
+            ));
+            next += step;
+        }
+        next -= span;
+    }
+    if let (Some(last), Some(end)) = (points.last(), line.last())
+        && last != end
+    {
+        points.push(*end);
+    }
+    points
+}
+
 /// Adds the triangles of one stroke to the mesh.
 fn add_stroke(mesh: &mut Vec<Vertex>, stroke: &Stroke) {
     let line = stroke.polyline();
@@ -251,7 +387,13 @@ fn add_stroke(mesh: &mut Vec<Vertex>, stroke: &Stroke) {
         add_fill(mesh, &line, fill);
     }
     let half = (stroke.width / 2.0).max(0.0) as f32;
-    if half <= 0.0 {
+    add_line(mesh, &line, half, color);
+}
+
+/// Adds a line `half` wide to each side through `line`, with round ends
+/// and round bends.
+fn add_line(mesh: &mut Vec<Vertex>, line: &[(f64, f64)], half: f32, color: [f32; 4]) {
+    if half <= 0.0 || line.is_empty() {
         return;
     }
     let points: Vec<[f32; 2]> = line.iter().map(|(x, y)| [*x as f32, *y as f32]).collect();
@@ -308,12 +450,17 @@ fn add_length(mesh: &mut Vec<Vertex>, from: [f32; 2], to: [f32; 2], half: f32, c
 }
 
 /// Adds the fan of triangles that fills a round end or a round bend.
+///
+/// A wide disc takes more sides than [`ROUND`], so the broad brush of a
+/// stroke that reveals stays round: one side for each sixteenth of an inch
+/// of radius.
 fn add_disc(mesh: &mut Vec<Vertex>, at: [f32; 2], radius: f32, color: [f32; 4]) {
+    let sides = ROUND.max((radius * 16.0).ceil() as usize);
     let round = |step: usize| {
-        let angle = std::f32::consts::TAU * step as f32 / ROUND as f32;
+        let angle = std::f32::consts::TAU * step as f32 / sides as f32;
         [at[0] + radius * angle.cos(), at[1] + radius * angle.sin()]
     };
-    for step in 0..ROUND {
+    for step in 0..sides {
         mesh.push(vertex(at, color));
         mesh.push(vertex(round(step), color));
         mesh.push(vertex(round(step + 1), color));
@@ -341,8 +488,9 @@ fn color_of(color: [u8; 4]) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::{ROUND, add_stroke};
+    use super::{ROUND, add_stroke, reveal_mesh};
     use crate::scene::Shown;
+    use crate::stroke::Mix;
     use crate::stroke::{Ink, Stroke};
 
     fn stroke(points: &[(f64, f64)], width: f64) -> Stroke {
@@ -356,6 +504,7 @@ mod tests {
             span: 0.0,
             angle: 0.0,
             rule: crate::stroke::Rule::default(),
+            mix: crate::stroke::Mix::default(),
         }
     }
 
@@ -417,5 +566,46 @@ mod tests {
         add_stroke(&mut mesh, &stroke(&[(1.0, 1.0), (1.0, 1.0)], 0.2));
         // Two discs and no quad between them.
         assert_eq!(mesh.len(), 2 * ROUND * 3);
+    }
+
+    #[test]
+    fn an_open_reveal_is_a_row_of_eyes_as_wide_as_the_stroke() {
+        let mut line = stroke(&[(0.0, 0.0), (4.0, 0.0)], 2.0);
+        line.mix = Mix::Reveal;
+        let reveal = reveal_mesh(&[&line]);
+        // A radius of 1 puts an eye every half inch: nine along 4 inches.
+        assert_eq!(reveal.eyes.len(), 9);
+        assert!(reveal.eyes.iter().all(|eye| (eye.reach - 1.0).abs() < 1e-9));
+        assert_eq!(reveal.eyes[8].center, (4.0, 0.0));
+        // Each eye opens its own disc and no other.
+        let eyes = reveal.eyes.len() as u32;
+        assert!(reveal.mesh.iter().all(|(_, eye)| *eye < eyes));
+        assert!(reveal.mesh.iter().all(|(at, eye)| {
+            let center = reveal.eyes[*eye as usize].center;
+            (f64::from(at[0]) - center.0).hypot(f64::from(at[1]) - center.1) <= 1.0 + 1e-5
+        }));
+    }
+
+    #[test]
+    fn a_closed_reveal_sees_from_its_middle_and_reaches_its_far_corner() {
+        let mut room = stroke(&[(0.0, 0.0), (4.0, 2.0)], 0.2);
+        room.mix = Mix::Reveal;
+        room.ink = Ink::Rect;
+        let reveal = reveal_mesh(&[&room]);
+        assert_eq!(reveal.eyes.len(), 1);
+        assert_eq!(reveal.eyes[0].center, (2.0, 1.0));
+        assert!((reveal.eyes[0].reach - (5.0_f64.sqrt() + 0.1)).abs() < 1e-9);
+        // A burst sees from its middle, the first point.
+        room.ink = Ink::Burst;
+        assert_eq!(reveal_mesh(&[&room]).eyes[0].center, (0.0, 0.0));
+    }
+
+    #[test]
+    fn a_long_reveal_keeps_to_the_most_eyes_and_a_painted_one_has_none() {
+        let mut line = stroke(&[(0.0, 0.0), (1000.0, 0.0)], 0.5);
+        line.mix = Mix::Reveal;
+        assert!(reveal_mesh(&[&line]).eyes.len() <= super::MOST_EYES + 1);
+        line.mix = Mix::Blend;
+        assert_eq!(reveal_mesh(&[&line]), super::Reveal::default());
     }
 }

@@ -74,7 +74,7 @@ Caution: a scale under 100 % takes a button under the 24 px floor of section 6. 
 - Set: Lucide (ISC license). Keep the license text in the repository.
 - Stroke 2 px on a 24 px grid. Round caps and joins. No fills. A star that is set is the one glyph with a fill.
 - Sizes: 18 px in the toolbar, in dialog navigation, in a close button and for the select chevron, 16 px in a panel, a menu and a list row, 14 px for a list twist and for the checkbox check, 13 px in a path line.
-- Glyphs in the toolbar: `mouse-pointer` (Select), `pencil` (Draw), `drafting-compass` (Edit), `monitor` (Table), `layers` (Scenes), `plus` (Add map), `sliders-horizontal` (Settings).
+- Glyphs in the toolbar: `mouse-pointer` (Select), `pencil` (Draw), `drafting-compass` (Edit), `monitor` (Table), `layers` (Scenes), `plus` (Add map), `sun` (Add light), `sliders-horizontal` (Settings).
 - Glyphs on the second bar of the Edit view: `brick-wall` (Walls), `door-open` (Doors), `sun` (Light), `cloud-fog` (Fog).
 - Glyphs in a dialog: `monitor` (Table tab), `grid-3x3` (Grid tab), `sun` (Light tab), `keyboard` (Shortcuts tab), `info` (About tab), `x` (close), `chevron-down` (select), `check` (checkbox), `import` (Import).
 - Glyphs in a key chip: `arrow-big-up` (Shift), `space`, `corner-down-left` (Enter), `delete` (Backspace), `arrow-left`, `arrow-right`, `arrow-up`, `arrow-down`, `mouse-left`, `mouse-right`, `mouse` (the wheel and the middle button).
@@ -109,7 +109,8 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - The first box holds the views: Select, Draw, Edit, Table. It is a segmented control, so one of them is always on.
 - A dashed 1 px line stands between each pair of views, dash and gap 3 px. It takes the `ink` of the box, not the `rule` of section 6: a lighter line beside an `ink` border reads as a seam, not as a join.
 - The dash is what tells the two boxes apart. A solid line would give the views the same divided look as the buttons beside them, and the eye would read one long control in two halves.
-- The second box holds Scenes, Add map, Settings and Freeze. No rule gathers them into one control. The first three open something at once.
+- The second box holds Scenes, Add map, Add light, Settings and Freeze. No rule gathers them into one control. The first four act at once.
+- Add light puts a white light in the middle of the DM view. It reaches 4 cells of bright light and 8 cells of dim light, as a torch does. The light joins the marked group, the Select view comes up, and the DM holds the light.
 - Freeze is the one entry of the box that stays on. It takes the `pause` glyph, and the `raised` background, the `accent` bar and the `accent` label of an active view while it stands. The TV holds the frame it had until the DM presses it again. Issue #76.
 - Two boxes say this louder than one rule between two groups. A DM reads the shape before the label.
 - The active entry has background `raised`, a 3 px `accent` bar on its top edge, and `accent` icon and label.
@@ -171,7 +172,7 @@ Two rules hold for every control:
 | Segmented control | Segments 28 px high, 10 px horizontal padding, 1 px `rule` border, borders overlap by 1 px. The selected segment has `raised` background, `accent` text and a 3 px `accent` bar on its bottom edge. |
 | Checkbox | 18 px square, 1 px border (`ink` when checked, `rule` when not), `field` background, `check` glyph 14 px in `accent`. Label 14 px to the right, gap 8 px. A label too long for its row wraps under itself. |
 | Slider | Track 2 px `rule`, filled part `ink`, knob 14 px square with 1 px `ink` border and `field` background. Value text in `mute` to the right. |
-| Color swatch | 28 px square, 1 px `rule` border, the hex value 14 px to the right. A click opens the color popover. The popover gives a hue, a shade and an alpha. It gives no additive mode, because the canvas blends on alpha only. The alpha stays above zero, so a stroke is always visible. |
+| Color swatch | 28 px square, 1 px `rule` border, the hex value 14 px to the right. A click opens the color popover. The popover gives a hue, a shade and an alpha. It gives no other mode. The Mix row of a stroke holds the choice between paint and reveal. The alpha stays above zero, so a stroke is always visible. |
 | Button | Height 28 px, 10 px horizontal padding, 1 px `ink` border, `field` background, 14 px text. A button in a panel is 26 px high. A button in a row is 24 px high. No button goes under 24 px. |
 | Key chip | Height 22 px, 8 px horizontal padding, 1 px `rule` border, `field` background, 14 px text. |
 | Search field | As text input, with a `search` glyph 16 px on the left and an 8 px gap. |
@@ -225,7 +226,13 @@ A row of six 28 px squares holds the pen, the line, the rectangle, the ellipse, 
 
 Under it stands the label Effects and a second row of three squares: the burst, the cone and the beam. They lie over the map instead of marking it, and a row of nine squares outgrows the panel.
 
-Rows below: Color as a swatch, the checkbox "Start on the grid", Width as a slider, and Measure as a select when the ruler is on. Every one of these is a choice the program keeps, so the next stroke draws as the last one did.
+Rows below: Color as a swatch, Mix as a segmented control (Paint, Reveal) with a helper line, the checkbox "Start on the grid", Width as a slider, and Measure as a select when the ruler is on. Every one of these is a choice the program keeps, so the next stroke draws as the last one did.
+
+A stroke on Reveal cuts its shape out of the darkness. The TV shows the map there and no ink. A rectangle, an ellipse and an effect reveal their inside too, and the DM screen shows their edge as a 1.5 px line in the color of the stroke. A pen line and a straight line show no ink on the DM screen. The edge of the fog hatch shows where they reach.
+
+Walls that block sight stop a reveal. A closed door stops it, and an open door does not. A pen line and a straight line see from each point along their middle, so the brush stops at a wall it does not cross. A rectangle and an ellipse see from their middle. A burst sees from its middle, and a cone and a beam from the point they start from. The rules of the light in Settings do not change this, because a reveal stands for what the players see.
+
+The Width row of a reveal runs from 0.25 in to 12 in and starts at 2 in. The pen keeps its own width from 0.02 in to 0.5 in. A stroke that changes its mix takes the width of the other kind.
 
 A shape starts on a crossing of the grid while that checkbox is on, because a spell lands on a cell. `Shift` holds the snap off for one drag. The ruler takes `Alt` for that instead, because `Shift` there keeps the measure. A free line from the pen never snaps: it follows the hand.
 
@@ -243,7 +250,7 @@ An area of effect and a kept measure come away whole. Each one stands for one th
 
 **The panel of a stroke, in the Select view**
 
-A stroke the DM picked opens a panel of its own, headed with what it is: Pen, Line, Rectangle, Ellipse, Ruler, Burst, Cone or Beam. Rows: Color as a swatch, Width as a slider, Reach in cells for an area of effect, Across in cells for a beam, and Measure as a select for a ruler. A new reach moves the far point along the line the shape already runs on, so the shape keeps its heading.
+A stroke the DM picked opens a panel of its own, headed with what it is: Pen, Line, Rectangle, Ellipse, Ruler, Burst, Cone or Beam. Rows: Color as a swatch, Mix as a segmented control (Paint, Reveal), Width as a slider, Reach in cells for an area of effect, Across in cells for a beam, and Measure as a select for a ruler. A new reach moves the far point along the line the shape already runs on, so the shape keeps its heading.
 
 The footer of the panel holds Delete, as the footer of a map does.
 
@@ -338,6 +345,11 @@ A Reset button is dead while the row already shows the token of the theme. A row
 3. Walls: checkbox "Walls block the light", checkbox "An open door lets the light through".
 4. Shadow edge: segmented control (Hard, Soft). Helper: "A soft edge costs more on the GPU".
 5. Show on: segmented control (Both screens, DM only, TV only).
+6. DM sees through: slider, 0 to 100 %, 70 % on a new install. Helper: "How much of the darkness the DM screen lets you see through. The TV keeps all of it."
+
+The DM screen lays a cold blue tint and a diagonal hatch over all that the players cannot see. The hatch lines are 12 px apart. Their strength follows the darkness, so a lit or revealed part shows clean. The TV shows neither.
+
+A shadow has a soft edge at least 0.25 in wide. The lamp light draws at a quarter of the screen size, and a hard edge there shows steps of 4 px.
 
 ### 9.4 Settings, Shortcuts tab
 

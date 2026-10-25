@@ -270,7 +270,7 @@ impl Command for SetStrokes {
     fn note(&self) -> Note {
         let subject = match self.after.as_slice() {
             [] => String::new(),
-            [one] => one.ink.name().to_owned(),
+            [one] => one.name().to_owned(),
             many => text::history_maps_many(many.len()),
         };
         // A drag writes the points, and the panel writes the fields. The
@@ -514,6 +514,8 @@ pub enum Deed {
     Import,
     /// An area of darkness joined the scene. Issue #20.
     AddDarkness,
+    /// A light joined the scene. Issue #65.
+    AddLight,
     /// A group joined the tree.
     NewGroup,
     /// A group went, and what it held stayed.
@@ -541,6 +543,7 @@ impl Deed {
             Self::AddMap => text::history_deed_add_map(),
             Self::Import => text::history_deed_import(),
             Self::AddDarkness => text::panel_darkness_add(),
+            Self::AddLight => text::tool_add_light(),
             Self::NewGroup => text::history_deed_new_group(),
             Self::Ungroup => text::history_deed_ungroup(),
             Self::MoveInList => text::history_deed_move_in_list(),

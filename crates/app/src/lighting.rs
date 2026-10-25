@@ -12,9 +12,16 @@
 //! Each pixel takes the ambient light and the lamp light near it. The sum
 //! multiplies the maps under it.
 //!
+//! A stroke that reveals draws onto a mask at the full screen size, so
+//! its edge stays as sharp as the ink. The map under the mask shows as if
+//! a lamp lit it. Each part of the stroke sees from an eye, and the eyes
+//! take rows of the shadow map as the lights do, so the walls that stop
+//! sight stop the reveal. Issue #65.
+//!
 //! The light draws over the maps and under the grid and the strokes, so a
 //! line the DM drew still reads in the dark. A scene that holds no light
-//! shows its maps as they are, so a plain map never goes dark.
+//! and no stroke that reveals shows its maps as they are, so a plain map
+//! never goes dark.
 
 // Rust guideline compliant 2026-02-21
 
@@ -22,6 +29,7 @@ use egui_wgpu::wgpu;
 use serde::{Deserialize, Serialize};
 
 use crate::camera::Camera;
+use crate::ink::Reveal;
 use crate::scene::{Audience, Node, Scene};
 use crate::sight::{Darkness, Fill, Light, Wall};
 
@@ -67,6 +75,13 @@ impl Show {
 /// so a plain map never goes dark. A Foundry or a Universal VTT import
 /// brings lights, and the DM then sees them at once.
 pub const DEFAULT_DARKNESS: f64 = 0.75;
+
+/// How much of the darkness the DM sees through on a new install.
+///
+/// The DM must see what lies under the fog. The blue hatch of the light
+/// shader tells it from what the players see, so most of the darkness
+/// can go. Issue #65.
+pub const DM_SEE_THROUGH: f64 = 0.7;
 
 /// How dark a scene is, and the color of the light its darkness leaves.
 ///
@@ -135,7 +150,17 @@ pub struct Input {
     /// Whether an area shows a fill other than black, so the fill pass
     /// has something to draw.
     fills: bool,
+    /// How many of `lights` are lamps. The eyes of the strokes that
+    /// reveal come after them.
+    lamps: usize,
+    /// The triangles the strokes that reveal cut out of the darkness: x,
+    /// y, and the row of the eye that opens them.
+    reveal: Vec<[f32; 4]>,
 }
+
+/// The most rows the shadow map holds, lamps and eyes together. A texture
+/// may be 8192 texels high on every GPU wgpu runs on.
+const MOST_ROWS: usize = 4096;
 
 /// The world rectangle a camera shows on a surface of `viewport` pixels.
 pub fn view_of(camera: &Camera, viewport: (u32, u32)) -> ((f64, f64), (f64, f64)) {
@@ -148,6 +173,10 @@ pub fn view_of(camera: &Camera, viewport: (u32, u32)) -> ((f64, f64), (f64, f64)
 }
 
 /// The light one screen draws this frame, or `None` for no light.
+///
+/// `reveal` holds what the strokes that reveal open, from
+/// [`crate::ink::reveal_mesh`]. A scene with no light still goes dark
+/// when it holds one of them, so the stroke has a darkness to cut.
 pub fn input_for(
     scene: &Scene,
     audience: Audience,
@@ -155,11 +184,12 @@ pub fn input_for(
     show: Show,
     camera: &Camera,
     viewport: (u32, u32),
+    reveal: &Reveal,
 ) -> Option<Input> {
     if !show.on(audience) {
         return None;
     }
-    gather(scene, audience, rules, view_of(camera, viewport))
+    gather(scene, audience, rules, view_of(camera, viewport), reveal)
 }
 
 /// The lights, the walls and the dark areas that reach a view, or `None`
@@ -168,11 +198,17 @@ pub fn input_for(
 /// A light counts when its dim reach touches the view. A wall counts when
 /// it touches the reach of a light that counts, so a wall off the screen
 /// still casts a shadow onto it. PLAN.md 8.1.
+///
+/// It also takes the eyes and the triangles of the strokes that reveal.
+/// An eye counts the walls that stop sight, whatever the rules of the
+/// light say, because it stands for what the players see. A closed door
+/// stops it and an open one does not.
 pub fn gather(
     scene: &Scene,
     audience: Audience,
     rules: Rules,
     view: ((f64, f64), (f64, f64)),
+    reveal: &Reveal,
 ) -> Option<Input> {
     let nodes = crate::scene::sight_order(scene, audience);
     let all: Vec<&Light> = nodes
@@ -189,7 +225,7 @@ pub fn gather(
             _ => None,
         })
         .collect();
-    if all.is_empty() && areas.is_empty() {
+    if all.is_empty() && areas.is_empty() && reveal.eyes.is_empty() {
         return None;
     }
     let lights: Vec<&Light> = all
@@ -199,33 +235,51 @@ pub fn gather(
     let blocks = |wall: &&Wall| {
         rules.walls_block && wall.blocks_light && !(rules.open_doors_pass && wall.is_open())
     };
-    let blocking: Vec<&Wall> = nodes
-        .iter()
-        .filter_map(|node| match node {
-            Node::Walls(walls) => Some(&walls.segments),
-            _ => None,
-        })
-        .flatten()
-        .filter(blocks)
-        .collect();
+    let segments = || {
+        nodes
+            .iter()
+            .filter_map(|node| match node {
+                Node::Walls(walls) => Some(&walls.segments),
+                _ => None,
+            })
+            .flatten()
+    };
+    let blocking: Vec<&Wall> = segments().filter(blocks).collect();
     // Each light gets its own run of the walls it reaches, so the shadow
     // pass tests a light against those walls only.
     let mut walls: Vec<GpuWall> = Vec::new();
-    let lights = lights
+    let mut run = |light: &Light, near: &dyn Fn(&Wall) -> bool, from: &[&Wall]| {
+        let first = walls.len();
+        walls.extend(
+            from.iter()
+                .filter(|wall| near(wall))
+                .map(|wall| [wall.a.0, wall.a.1, wall.b.0, wall.b.1].map(|v| v as f32)),
+        );
+        let mut packed = pack(light);
+        packed[10] = f32::from_bits(first as u32);
+        packed[11] = f32::from_bits((walls.len() - first) as u32);
+        packed
+    };
+    let mut lights: Vec<GpuLight> = lights
         .iter()
-        .map(|light| {
-            let first = walls.len();
-            walls.extend(
-                blocking
-                    .iter()
-                    .filter(|wall| near(wall, light))
-                    .map(|wall| [wall.a.0, wall.a.1, wall.b.0, wall.b.1].map(|v| v as f32)),
-            );
-            let mut packed = pack(light);
-            packed[10] = f32::from_bits(first as u32);
-            packed[11] = f32::from_bits((walls.len() - first) as u32);
-            packed
-        })
+        .map(|light| run(light, &|wall| near(wall, light), &blocking))
+        .collect();
+    let lamps = lights.len();
+    // The eyes come after the lamps. A scene with more of them than the
+    // shadow map has rows for drops the last ones, and what they open.
+    let sight: Vec<&Wall> = segments()
+        .filter(|wall| wall.blocks_sight && !wall.is_open())
+        .collect();
+    let eyes = reveal.eyes.len().min(MOST_ROWS.saturating_sub(lamps));
+    for eye in &reveal.eyes[..eyes] {
+        let light = Light::new(0, eye.center, eye.reach, eye.reach);
+        lights.push(run(&light, &|wall| near(wall, &light), &sight));
+    }
+    let reveal = reveal
+        .mesh
+        .iter()
+        .filter(|(_, eye)| (*eye as usize) < eyes)
+        .map(|(at, eye)| [at[0], at[1], f32::from_bits(lamps as u32 + eye), 0.0])
         .collect();
     // The areas keep the order of the tree, so the last one that holds a
     // point is the one on top there.
@@ -240,6 +294,8 @@ pub fn gather(
         walls,
         zones,
         fills,
+        lamps,
+        reveal,
     })
 }
 
@@ -399,6 +455,14 @@ struct View {
     zones: u32,
     /// The ambient color, and the darkness of the scene in the alpha.
     ambient: vec4<f32>,
+    /// How much of the darkness this screen keeps: all of it on the TV,
+    /// less on the DM screen, so the DM sees the map under it.
+    keep: f32,
+    /// 1 on the DM screen, which marks what the players cannot see, and 0
+    /// on the TV.
+    marks: f32,
+    pad_d: f32,
+    pad_e: f32,
 };
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -407,6 +471,15 @@ struct View {
 @group(0) @binding(3) var<storage, read> zones: array<Zone>;
 @group(0) @binding(4) var lamp_map: texture_2d<f32>;
 @group(0) @binding(5) var lamp_sampler: sampler;
+/// One point of a reveal triangle, and the row of the eye that opens it.
+struct Spot {
+    at: vec2<f32>,
+    eye: u32,
+    pad: u32,
+};
+
+@group(0) @binding(6) var<storage, read> reveal: array<Spot>;
+@group(0) @binding(7) var reveal_mask: texture_2d<f32>;
 
 /// How many screen pixels one texel of `lamp_map` covers, each way. The
 /// Rust `LAMP_SCALE` holds the same number.
@@ -422,6 +495,25 @@ const DIM: f32 = 0.5;
 /// How far past a wall a point still takes the light, in inches, so the
 /// face of the wall itself is lit.
 const BIAS: f32 = 0.02;
+
+/// How wide the soft edge of a shadow is, in inches, at the least.
+const SOFT: f32 = 0.25;
+
+/// How many lamp texels the soft edge of a shadow spans, at the least, so
+/// a zoom far out still shows no steps.
+const SOFT_TEXELS: f32 = 3.0;
+
+/// How many directions the soft shadow test reads.
+const TAPS: i32 = 5;
+
+/// The color the DM screen lays over what the players cannot see. It is
+/// a cold blue, so it never reads as the color of a map.
+const FOG_TINT: vec3<f32> = vec3<f32>(0.8, 0.87, 1.0);
+
+/// How dark the hatch lines over the fog are, and how many screen pixels
+/// lie between two of them.
+const HATCH: f32 = 0.7;
+const HATCH_PX: f32 = 12.0;
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -470,24 +562,51 @@ fn lamp(i: u32, world: vec2<f32>) -> vec3<f32> {
     if (distance > reach) {
         return vec3<f32>(0.0);
     }
-    if (light.angle < 6.28) {
-        // Zero points down the screen, and the turn runs clockwise.
+    var seen = sight(i, away, distance);
+    if (light.angle < 6.28 && distance > 0.0) {
+        // Zero points down the screen, and the turn runs clockwise. The
+        // side of the cone fades over the same soft band as a shadow.
         let facing = vec2<f32>(-sin(light.rotation), cos(light.rotation));
-        if (distance > 0.0 && dot(away / distance, facing) < cos(light.angle * 0.5)) {
-            return vec3<f32>(0.0);
-        }
+        let off = acos(clamp(dot(away / distance, facing), -1.0, 1.0));
+        let spread = soft_width() / max(distance, soft_width());
+        let half = light.angle * 0.5;
+        seen = seen * (1.0 - smoothstep(half - spread * 0.5, half + spread * 0.5, off));
     }
-    let turn = atan2(away.y, away.x);
-    let column = u32((turn + 3.14159265359) / 6.28318530718 * f32(view.samples)) % view.samples;
-    let wall = textureLoad(shadows, vec2<u32>(column, i), 0).r;
-    if (distance > wall + BIAS) {
+    if (seen <= 0.0) {
         return vec3<f32>(0.0);
     }
     var strength = DIM * (1.0 - smoothstep(mix(light.bright, reach, 0.7), reach, distance));
     if (distance <= light.bright) {
         strength = 1.0;
     }
-    return strength * mix(vec3<f32>(1.0), light.color.rgb, TINT);
+    return seen * strength * mix(vec3<f32>(1.0), light.color.rgb, TINT);
+}
+
+/// How wide the soft edge of a shadow is at this zoom, in inches.
+fn soft_width() -> f32 {
+    return max(SOFT, SOFT_TEXELS * SCALE / view.pixels_per_inch);
+}
+
+/// How much of lamp `i` reaches a point `away` from it, `distance` off,
+/// from 0 in the shadow of a wall to 1 in the open.
+///
+/// The test reads the shadow map in `TAPS` directions that span `soft`
+/// inches across, and each one fades out over half of `soft` past its
+/// wall. The edge of a shadow is then a soft band some texels wide, and
+/// the lamp texture, a quarter of the screen size, draws it with no steps.
+fn sight(i: u32, away: vec2<f32>, distance: f32) -> f32 {
+    let soft = soft_width();
+    let turn = atan2(away.y, away.x);
+    let spread = soft / max(distance, soft);
+    var seen = 0.0;
+    for (var k = 0; k < TAPS; k = k + 1) {
+        let offset = (f32(k) / f32(TAPS - 1) - 0.5) * spread;
+        let round = fract((turn + offset) / 6.28318530718 + 0.5);
+        let column = min(u32(round * f32(view.samples)), view.samples - 1u);
+        let wall = textureLoad(shadows, vec2<u32>(column, i), 0).r + BIAS;
+        seen = seen + 1.0 - smoothstep(wall, wall + soft * 0.5, distance);
+    }
+    return seen / f32(TAPS);
 }
 
 /// The darkness at `world`: the topmost area's, or the scene's.
@@ -536,6 +655,34 @@ fn fs_lamps(lamp_in: Lamp) -> @location(0) vec4<f32> {
     return vec4<f32>(lamp(lamp_in.index, world), 1.0);
 }
 
+struct Opening {
+    @builtin(position) at: vec4<f32>,
+    @location(0) @interpolate(flat) eye: u32,
+};
+
+/// The reveal pass draws the triangles of the strokes that reveal onto
+/// the mask, one texel for each pixel of the screen.
+@vertex
+fn vs_reveal(@builtin(vertex_index) v: u32) -> Opening {
+    let spot = reveal[v];
+    let pixel = (spot.at - view.center) * view.pixels_per_inch + view.viewport * 0.5;
+    let clip = pixel / view.viewport * 2.0 - 1.0;
+    return Opening(vec4<f32>(clip.x, -clip.y, 0.0, 1.0), spot.eye);
+}
+
+/// A triangle opens what its eye sees past the walls. Where triangles
+/// overlap, the mask keeps the most.
+@fragment
+fn fs_reveal(opening: Opening) -> @location(0) vec4<f32> {
+    let away = world_of(opening.at) - lights[opening.eye].center;
+    return vec4<f32>(sight(opening.eye, away, length(away)));
+}
+
+/// 1 where a stroke reveals the screen pixel `at`, else 0.
+fn revealed(at: vec4<f32>) -> f32 {
+    return textureLoad(reveal_mask, vec2<u32>(at.xy), 0).r;
+}
+
 /// The lamp light at the screen pixel `at`, from the lamp pass.
 fn lamps_near(at: vec4<f32>) -> vec3<f32> {
     let size = vec2<f32>(textureDimensions(lamp_map)) * SCALE;
@@ -547,8 +694,21 @@ fn lamps_near(at: vec4<f32>) -> vec3<f32> {
 fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let world = world_of(at);
     let darkness = darkness_at(world, zone_at(world));
-    let total = view.ambient.rgb * (1.0 - darkness) + lamps_near(at);
-    return vec4<f32>(linear(min(total, vec3<f32>(1.0))), 1.0);
+    // A stroke that reveals lights the map in full, as a bright lamp does.
+    let lit = lamps_near(at) + revealed(at);
+    let players = min(view.ambient.rgb * (1.0 - darkness) + lit, vec3<f32>(1.0));
+    if (view.marks < 0.5) {
+        return vec4<f32>(linear(players), 1.0);
+    }
+    // The DM sees through a part of the darkness, and a blue hatch marks
+    // all that the players miss, as strong as the dark is there.
+    let kept = darkness * view.keep;
+    let seen = min(view.ambient.rgb * (1.0 - kept) + lit, vec3<f32>(1.0));
+    let hidden = 1.0 - max(max(players.r, players.g), players.b);
+    let line = fract((at.x + at.y) / HATCH_PX) < 0.17;
+    let hatch = select(1.0, HATCH, line);
+    let mark = mix(vec3<f32>(1.0), FOG_TINT * hatch, hidden);
+    return vec4<f32>(linear(seen * mark), 1.0);
 }
 
 fn hash(p: vec2<f32>) -> f32 {
@@ -643,15 +803,16 @@ fn fs_fill(piece: Patch) -> @location(0) vec4<f32> {
         discard;
     }
     let lit = lamps_near(at);
-    let light = min(max(max(lit.r, lit.g), lit.b), 1.0);
-    let cover = zones[zone].darkness * (1.0 - light);
+    let light = min(max(max(max(lit.r, lit.g), lit.b), revealed(at)), 1.0);
+    let cover = zones[zone].darkness * view.keep * (1.0 - light);
     return vec4<f32>(linear(pattern(zones[zone].fill, world)), cover);
 }
 ";
 
 /// How many bytes the `View` block of the light shader holds: eight
-/// numbers of four bytes, then the ambient color and the darkness.
-const VIEW_BYTES: u64 = 48;
+/// numbers of four bytes, then the ambient color and the darkness, then
+/// what the screen keeps of the darkness and three pads.
+const VIEW_BYTES: u64 = 64;
 
 /// The GPU side of the light for one screen.
 ///
@@ -660,6 +821,7 @@ const VIEW_BYTES: u64 = 48;
 pub struct LightLayer {
     shadow_pipeline: wgpu::RenderPipeline,
     lamp_pipeline: wgpu::RenderPipeline,
+    reveal_pipeline: wgpu::RenderPipeline,
     light_pipeline: wgpu::RenderPipeline,
     fill_pipeline: wgpu::RenderPipeline,
     shadow_layout: wgpu::BindGroupLayout,
@@ -669,12 +831,18 @@ pub struct LightLayer {
     lights: wgpu::Buffer,
     walls: wgpu::Buffer,
     zones: wgpu::Buffer,
+    /// The triangles of the strokes that reveal.
+    reveal: wgpu::Buffer,
     shadows: wgpu::TextureView,
     /// The lamp light of this frame, and its size in texels.
     lamps: (wgpu::TextureView, (u32, u32)),
     /// What the lamp pass binds in the place of `lamps`. A pass may not
     /// read the texture it draws on.
     no_lamps: wgpu::TextureView,
+    /// Where the strokes that reveal lie, at the size of the screen.
+    mask: (wgpu::TextureView, (u32, u32)),
+    /// What the lamp and the reveal passes bind in the place of `mask`.
+    no_mask: wgpu::TextureView,
     sampler: wgpu::Sampler,
     shadow_group: wgpu::BindGroup,
     lamp_group: wgpu::BindGroup,
@@ -685,6 +853,8 @@ pub struct LightLayer {
     wall_room: usize,
     /// How many areas of darkness the buffer has room for.
     zone_room: usize,
+    /// How many points of the reveal triangles the buffer has room for.
+    reveal_room: usize,
     /// The lights and the walls the shadow map holds now, so an unchanged
     /// frame skips it.
     drawn: Option<(Vec<GpuLight>, Vec<GpuWall>)>,
@@ -700,12 +870,13 @@ impl std::fmt::Debug for LightLayer {
 }
 
 impl LightLayer {
-    /// Builds the four pipelines for surfaces of `format`.
+    /// Builds the five pipelines for surfaces of `format`.
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let (shadow_layout, light_layout) = layouts(device);
         let [
             shadow_pipeline,
             lamp_pipeline,
+            reveal_pipeline,
             light_pipeline,
             fill_pipeline,
         ] = pipelines(device, format, &shadow_layout, &light_layout);
@@ -719,9 +890,12 @@ impl LightLayer {
         let lights = storage_buffer::<GpuLight>(device, "lights", 1);
         let walls = storage_buffer::<GpuWall>(device, "walls", 1);
         let zones = storage_buffer::<GpuZone>(device, "zones", 1);
+        let reveal = storage_buffer::<[f32; 4]>(device, "reveal", 1);
         let shadows = shadow_texture(device, 1);
         let lamps = lamp_texture(device, (1, 1));
         let no_lamps = lamp_texture(device, (1, 1));
+        let mask = mask_texture(device, (1, 1));
+        let no_mask = mask_texture(device, (1, 1));
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("lamps"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -741,13 +915,14 @@ impl LightLayer {
         let light_group = bind_light(
             device,
             &light_layout,
-            [&view, &lights, &zones],
-            [&shadows, &no_lamps],
+            [&view, &lights, &zones, &reveal],
+            [&shadows, &no_lamps, &no_mask],
             &sampler,
         );
         let mut layer = Self {
             shadow_pipeline,
             lamp_pipeline,
+            reveal_pipeline,
             light_pipeline,
             fill_pipeline,
             shadow_layout,
@@ -757,9 +932,12 @@ impl LightLayer {
             lights,
             walls,
             zones,
+            reveal,
             shadows,
             lamps: (lamps, (1, 1)),
             no_lamps,
+            mask: (mask, (1, 1)),
+            no_mask,
             sampler,
             shadow_group,
             lamp_group: light_group.clone(),
@@ -767,6 +945,7 @@ impl LightLayer {
             light_room: 1,
             wall_room: 1,
             zone_room: 1,
+            reveal_room: 1,
             drawn: None,
             draws: None,
         };
@@ -776,16 +955,22 @@ impl LightLayer {
 
     /// Gets the light of one frame ready, before the frame draws.
     ///
-    /// `input` is what [`gather`] found, or `None` for a frame with no
-    /// light. The shadow map draws again only when the lights or the
-    /// walls changed, so a still scene costs a full-screen pass or two and
+    /// `input` is what [`input_for`] found, or `None` for a frame with no
+    /// light. `keep` is how much of the darkness this screen shows, from 0
+    /// to 1, and `marks` whether it marks what the players cannot see. The shadow map draws again only when the lights or the walls
+    /// changed, so a still scene costs a full-screen pass or two and
     /// nothing more.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one frame of light needs each of them"
+    )]
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         input: Option<Input>,
         mood: Mood,
+        (keep, marks): (f64, bool),
         camera: &Camera,
         viewport: (u32, u32),
     ) {
@@ -798,8 +983,10 @@ impl LightLayer {
             viewport.0.div_ceil(LAMP_SCALE).max(1),
             viewport.1.div_ceil(LAMP_SCALE).max(1),
         );
-        if size != self.lamps.1 {
+        let full = (viewport.0.max(1), viewport.1.max(1));
+        if size != self.lamps.1 || full != self.mask.1 {
             self.lamps = (lamp_texture(device, size), size);
+            self.mask = (mask_texture(device, full), full);
             self.regroup(device);
         }
         let [r, g, b] = mood.ambient.map(|c| f32::from(c) / 255.0);
@@ -815,8 +1002,11 @@ impl LightLayer {
             view.extend((count as u32).to_ne_bytes());
         }
         view.extend(bytes(&[r, g, b, mood.darkness.clamp(0.0, 1.0) as f32]));
+        let marks = if marks { 1.0 } else { 0.0 };
+        view.extend(bytes(&[keep.clamp(0.0, 1.0) as f32, marks, 0.0, 0.0]));
         queue.write_buffer(&self.view, 0, &view);
         queue.write_buffer(&self.zones, 0, &bytes(input.zones.as_flattened()));
+        queue.write_buffer(&self.reveal, 0, &bytes(input.reveal.as_flattened()));
         self.draws = Some(if input.fills {
             input.zones.len() as u32
         } else {
@@ -826,16 +1016,18 @@ impl LightLayer {
             .drawn
             .as_ref()
             .is_some_and(|(lights, walls)| *lights == input.lights && *walls == input.walls);
-        let count = input.lights.len() as u32;
-        if !same && count > 0 {
+        let rows = input.lights.len();
+        let (lamps, points) = (input.lamps as u32, input.reveal.len() as u32);
+        if !same && rows > 0 {
             self.draw_shadows(device, queue, &input);
             self.drawn = Some((input.lights, input.walls));
         }
-        self.draw_lamps(device, queue, count);
+        self.draw_lamps(device, queue, lamps, points);
     }
 
-    /// Draws the light of the `count` lamps of this frame onto `lamps`.
-    fn draw_lamps(&self, device: &wgpu::Device, queue: &wgpu::Queue, count: u32) {
+    /// Draws the light of the `count` lamps of this frame onto `lamps`,
+    /// and the `points` of the reveal triangles onto `mask`.
+    fn draw_lamps(&self, device: &wgpu::Device, queue: &wgpu::Queue, count: u32, points: u32) {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("lamps"),
         });
@@ -858,6 +1050,28 @@ impl LightLayer {
         pass.set_pipeline(&self.lamp_pipeline);
         pass.set_bind_group(0, &self.lamp_group, &[]);
         pass.draw(0..6, 0..count);
+        drop(pass);
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("reveal"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.mask.0,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        if points > 0 {
+            pass.set_pipeline(&self.reveal_pipeline);
+            pass.set_bind_group(0, &self.lamp_group, &[]);
+            pass.draw(0..points, 0..1);
+        }
         drop(pass);
         queue.submit([encoder.finish()]);
     }
@@ -922,7 +1136,12 @@ impl LightLayer {
     /// doublings.
     fn room(&mut self, device: &wgpu::Device, input: &Input) {
         let (lights, walls, zones) = (input.lights.len(), input.walls.len(), input.zones.len());
-        if lights <= self.light_room && walls <= self.wall_room && zones <= self.zone_room {
+        let points = input.reveal.len();
+        if lights <= self.light_room
+            && walls <= self.wall_room
+            && zones <= self.zone_room
+            && points <= self.reveal_room
+        {
             return;
         }
         if lights > self.light_room {
@@ -937,6 +1156,10 @@ impl LightLayer {
         if zones > self.zone_room {
             self.zone_room = zones.next_power_of_two();
             self.zones = storage_buffer::<GpuZone>(device, "zones", self.zone_room);
+        }
+        if points > self.reveal_room {
+            self.reveal_room = points.next_power_of_two();
+            self.reveal = storage_buffer::<[f32; 4]>(device, "reveal", self.reveal_room);
         }
         self.regroup(device);
         // The new buffers hold nothing yet, so the next frame draws the
@@ -955,19 +1178,19 @@ impl LightLayer {
                 self.walls.as_entire_binding(),
             ],
         );
-        let buffers = [&self.view, &self.lights, &self.zones];
+        let buffers = [&self.view, &self.lights, &self.zones, &self.reveal];
         self.lamp_group = bind_light(
             device,
             &self.light_layout,
             buffers,
-            [&self.shadows, &self.no_lamps],
+            [&self.shadows, &self.no_lamps, &self.no_mask],
             &self.sampler,
         );
         self.light_group = bind_light(
             device,
             &self.light_layout,
             buffers,
-            [&self.shadows, &self.lamps.0],
+            [&self.shadows, &self.lamps.0, &self.mask.0],
             &self.sampler,
         );
     }
@@ -1019,6 +1242,7 @@ fn layouts(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::BindGroupLayo
                 count: None,
             },
             storage(3),
+            storage(6),
             wgpu::BindGroupLayoutEntry {
                 binding: 4,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -1035,18 +1259,28 @@ fn layouts(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::BindGroupLayo
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 7,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
         ],
     });
     (shadow_layout, light_layout)
 }
 
-/// The shadow, lamp, light and fill pipelines, in that order.
+/// The shadow, lamp, reveal, light and fill pipelines, in that order.
 fn pipelines(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     shadow_layout: &wgpu::BindGroupLayout,
     light_layout: &wgpu::BindGroupLayout,
-) -> [wgpu::RenderPipeline; 4] {
+) -> [wgpu::RenderPipeline; 5] {
     let shadow_target = wgpu::ColorTargetState {
         format: wgpu::TextureFormat::R32Float,
         blend: None,
@@ -1064,6 +1298,11 @@ fn pipelines(
         dst_factor: wgpu::BlendFactor::One,
         operation: wgpu::BlendOperation::Add,
     };
+    let most = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Max,
+    };
     let lamp_target = wgpu::ColorTargetState {
         format: LAMP_FORMAT,
         blend: Some(wgpu::BlendState {
@@ -1078,6 +1317,20 @@ fn pipelines(
         ("vs_lamp", "fs_lamps"),
         light_layout,
         lamp_target,
+    );
+    let reveal_pipeline = pipeline(
+        device,
+        LIGHT_SHADER,
+        ("vs_reveal", "fs_reveal"),
+        light_layout,
+        wgpu::ColorTargetState {
+            format: MASK_FORMAT,
+            blend: Some(wgpu::BlendState {
+                color: most,
+                alpha: most,
+            }),
+            write_mask: wgpu::ColorWrites::ALL,
+        },
     );
     // The light multiplies what is under it: the result is the light
     // times the map, and the alpha of the map stays.
@@ -1115,6 +1368,7 @@ fn pipelines(
     [
         shadow_pipeline,
         lamp_pipeline,
+        reveal_pipeline,
         light_pipeline,
         fill_pipeline,
     ]
@@ -1210,10 +1464,27 @@ fn shadow_texture(device: &wgpu::Device, rows: u32) -> wgpu::TextureView {
 const LAMP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// The lamp light, `size` texels across and down.
-fn lamp_texture(device: &wgpu::Device, (width, height): (u32, u32)) -> wgpu::TextureView {
+fn lamp_texture(device: &wgpu::Device, size: (u32, u32)) -> wgpu::TextureView {
+    target_texture(device, "lamps", LAMP_FORMAT, size)
+}
+
+/// The format of the reveal mask: one channel, 0 or 1.
+const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+
+fn mask_texture(device: &wgpu::Device, size: (u32, u32)) -> wgpu::TextureView {
+    target_texture(device, "reveal mask", MASK_FORMAT, size)
+}
+
+/// A texture a pass draws on and a later pass reads.
+fn target_texture(
+    device: &wgpu::Device,
+    label: &str,
+    format: wgpu::TextureFormat,
+    (width, height): (u32, u32),
+) -> wgpu::TextureView {
     device
         .create_texture(&wgpu::TextureDescriptor {
-            label: Some("lamps"),
+            label: Some(label),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -1222,7 +1493,7 @@ fn lamp_texture(device: &wgpu::Device, (width, height): (u32, u32)) -> wgpu::Tex
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: LAMP_FORMAT,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })
@@ -1251,12 +1522,13 @@ fn bind(
 }
 
 /// The bind group of the light passes: the view, the lights, the shadow
-/// map, the dark areas and the lamp light.
+/// map, the dark areas, the lamp light, the reveal triangles and their
+/// mask.
 fn bind_light(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    [view, lights, zones]: [&wgpu::Buffer; 3],
-    [shadows, lamps]: [&wgpu::TextureView; 2],
+    [view, lights, zones, reveal]: [&wgpu::Buffer; 4],
+    [shadows, lamps, mask]: [&wgpu::TextureView; 3],
     sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
     bind(
@@ -1269,6 +1541,8 @@ fn bind_light(
             zones.as_entire_binding(),
             wgpu::BindingResource::TextureView(lamps),
             wgpu::BindingResource::Sampler(sampler),
+            reveal.as_entire_binding(),
+            wgpu::BindingResource::TextureView(mask),
         ],
     )
 }
@@ -1282,7 +1556,7 @@ fn bytes(values: &[f32]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Rules, gather};
+    use super::{Reveal, Rules, gather};
     use crate::scene::{Audience, Node, Scene, Shown};
     use crate::sight::{Kind, Light, Wall, Walls};
 
@@ -1311,24 +1585,31 @@ mod tests {
     fn a_dark_area_alone_still_draws_and_says_when_it_has_a_fill() {
         let mut area = crate::sight::Darkness::covering(3, ((-1.0, -1.0), (1.0, 1.0)), 1.0);
         let black = scene(vec![Node::Darkness(area.clone())]);
-        let input = gather(&black, Audience::Tv, LOOK, VIEW).unwrap();
+        let input = gather(&black, Audience::Tv, LOOK, VIEW, &Reveal::default()).unwrap();
         assert_eq!(input.zones.len(), 1);
         assert!(!input.fills);
         area.fill = crate::sight::Fill::Clouds;
         let clouds = scene(vec![Node::Darkness(area)]);
-        assert!(gather(&clouds, Audience::Tv, LOOK, VIEW).unwrap().fills);
+        assert!(
+            gather(&clouds, Audience::Tv, LOOK, VIEW, &Reveal::default())
+                .unwrap()
+                .fills
+        );
     }
 
     #[test]
     fn a_scene_with_no_light_draws_no_light() {
         let plain = scene(vec![walls(vec![Wall::new((0.0, 0.0), (1.0, 0.0))])]);
-        assert_eq!(gather(&plain, Audience::Tv, LOOK, VIEW), None);
+        assert_eq!(
+            gather(&plain, Audience::Tv, LOOK, VIEW, &Reveal::default()),
+            None
+        );
     }
 
     #[test]
     fn a_light_far_off_the_view_counts_for_nothing_but_keeps_the_dark() {
         let far = scene(vec![Node::Light(Light::new(2, (100.0, 0.0), 1.0, 2.0))]);
-        let input = gather(&far, Audience::Tv, LOOK, VIEW).unwrap();
+        let input = gather(&far, Audience::Tv, LOOK, VIEW, &Reveal::default()).unwrap();
         assert_eq!(input.lights.len(), 0);
     }
 
@@ -1338,13 +1619,16 @@ mod tests {
         light.shown.tv = false;
         let only_dm = scene(vec![Node::Light(light)]);
         assert_eq!(
-            gather(&only_dm, Audience::Dm, LOOK, VIEW)
+            gather(&only_dm, Audience::Dm, LOOK, VIEW, &Reveal::default())
                 .unwrap()
                 .lights
                 .len(),
             1
         );
-        assert_eq!(gather(&only_dm, Audience::Tv, LOOK, VIEW), None);
+        assert_eq!(
+            gather(&only_dm, Audience::Tv, LOOK, VIEW, &Reveal::default()),
+            None
+        );
     }
 
     #[test]
@@ -1357,14 +1641,14 @@ mod tests {
             walls(vec![door, near, far]),
             Node::Light(Light::new(2, (0.0, 0.0), 1.0, 3.0)),
         ]);
-        let input = gather(&room, Audience::Tv, LOOK, VIEW).unwrap();
+        let input = gather(&room, Audience::Tv, LOOK, VIEW, &Reveal::default()).unwrap();
         assert_eq!(input.walls, vec![[0.0, -1.0, 1.0, -1.0]]);
         let closed = Rules {
             open_doors_pass: false,
             ..LOOK
         };
         assert_eq!(
-            gather(&room, Audience::Tv, closed, VIEW)
+            gather(&room, Audience::Tv, closed, VIEW, &Reveal::default())
                 .unwrap()
                 .walls
                 .len(),
@@ -1374,7 +1658,7 @@ mod tests {
             walls_block: false,
             ..LOOK
         };
-        let input = gather(&room, Audience::Tv, no_walls, VIEW).unwrap();
+        let input = gather(&room, Audience::Tv, no_walls, VIEW, &Reveal::default()).unwrap();
         assert_eq!(input.walls.len(), 0);
     }
 
@@ -1387,7 +1671,7 @@ mod tests {
             Node::Light(Light::new(2, (-5.0, 0.0), 1.0, 2.0)),
             Node::Light(Light::new(3, (5.0, 0.0), 1.0, 2.0)),
         ]);
-        let input = gather(&room, Audience::Tv, LOOK, VIEW).unwrap();
+        let input = gather(&room, Audience::Tv, LOOK, VIEW, &Reveal::default()).unwrap();
         assert_eq!(
             input.walls,
             vec![[-6.0, -1.0, -6.0, 1.0], [6.0, -1.0, 6.0, 1.0]]
@@ -1395,5 +1679,47 @@ mod tests {
         let run = |light: &[f32; 12]| (light[10].to_bits(), light[11].to_bits());
         assert_eq!(run(&input.lights[0]), (0, 1));
         assert_eq!(run(&input.lights[1]), (1, 1));
+    }
+
+    #[test]
+    fn an_eye_of_a_reveal_comes_after_the_lamps_and_meets_the_walls_of_sight() {
+        let mut window = Wall::new((1.0, -1.0), (1.0, 1.0));
+        window.blocks_sight = false;
+        let mut door = Wall::new((-1.0, -1.0), (-1.0, 1.0));
+        door.kind = Kind::Door { open: true };
+        let room = scene(vec![
+            Node::Light(Light::new(2, (0.0, 5.0), 1.0, 2.0)),
+            walls(vec![Wall::new((0.0, -1.0), (0.0, 1.0)), window, door]),
+        ]);
+        let reveal = Reveal {
+            eyes: vec![crate::ink::Eye {
+                center: (0.0, 0.0),
+                reach: 2.0,
+            }],
+            mesh: vec![([0.0, 0.0], 0); 3],
+        };
+        let input = gather(&room, Audience::Tv, LOOK, VIEW, &reveal).unwrap();
+        assert_eq!((input.lamps, input.lights.len()), (1, 2));
+        // The triangles name the row after the one lamp.
+        assert!(input.reveal.iter().all(|spot| spot[2].to_bits() == 1));
+        // The eye meets the plain wall, and not the window or the open door.
+        let eye = input.lights[1];
+        let (first, count) = (eye[10].to_bits() as usize, eye[11].to_bits() as usize);
+        assert_eq!(count, 1);
+        assert_eq!(input.walls[first], [0.0, -1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn a_reveal_alone_still_darkens_a_scene_with_no_light() {
+        let reveal = Reveal {
+            eyes: vec![crate::ink::Eye {
+                center: (0.0, 0.0),
+                reach: 1.0,
+            }],
+            mesh: Vec::new(),
+        };
+        let plain = scene(Vec::new());
+        let input = gather(&plain, Audience::Tv, LOOK, VIEW, &reveal).unwrap();
+        assert_eq!((input.lamps, input.lights.len()), (0, 1));
     }
 }
