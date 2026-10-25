@@ -123,10 +123,32 @@ fn reader(file: &Path) -> Result<ImageReader<BufReader<File>>, String> {
 /// Returns a message that names the file when it cannot be opened, or when
 /// its format is not one of [`EXTENSIONS`].
 pub fn check(file: &Path) -> Result<(), String> {
+    size(file).map(drop)
+}
+
+/// The width and the height of an image file, from its header alone.
+///
+/// # Errors
+///
+/// The same as [`check`].
+pub fn size(file: &Path) -> Result<(u32, u32), String> {
     reader(file)?
         .into_dimensions()
-        .map(drop)
         .map_err(|error| format!("{}: {error}", file.display()))
+}
+
+/// The file extension that fits image bytes, from their first bytes.
+///
+/// Gives back `None` for bytes that are not one of [`EXTENSIONS`]. A
+/// Universal VTT file carries its map as bytes with no name, and the
+/// copy in the scene folder needs one.
+pub fn extension_of(bytes: &[u8]) -> Option<&'static str> {
+    match image::guess_format(bytes).ok()? {
+        image::ImageFormat::Png => Some("png"),
+        image::ImageFormat::Jpeg => Some("jpg"),
+        image::ImageFormat::WebP => Some("webp"),
+        _ => None,
+    }
 }
 
 /// Decodes a whole image file at its full size.
@@ -145,7 +167,7 @@ pub fn open(file: &Path) -> Result<DynamicImage, String> {
 mod tests {
     use std::io::Cursor;
 
-    use super::{check, decode, open, shrink_to_fit};
+    use super::{check, decode, extension_of, open, shrink_to_fit};
 
     fn encode(width: u32, height: u32, format: image::ImageFormat) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -199,6 +221,16 @@ mod tests {
             assert_eq!((image.width(), image.height()), (4, 2));
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn names_the_format_of_image_bytes() {
+        assert_eq!(extension_of(&png(1, 1)), Some("png"));
+        assert_eq!(
+            extension_of(&encode(1, 1, image::ImageFormat::WebP)),
+            Some("webp")
+        );
+        assert_eq!(extension_of(b"not an image"), None);
     }
 
     #[test]

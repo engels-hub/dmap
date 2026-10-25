@@ -75,12 +75,26 @@ pub fn copy_into_scene(scene_dir: &Path, file: &Path) -> Result<PathBuf> {
         return Ok(PathBuf::from(name));
     }
     let bytes = std::fs::read(file).with_context(|| format!("{}: cannot read", file.display()))?;
-    let name = free_name(file, |candidate| {
+    store_in_scene(scene_dir, file, &bytes)
+}
+
+/// Writes image bytes into a scene folder and gives back their name there.
+///
+/// `source` gives the name the bytes would like. A file of that name with
+/// other bytes in it pushes them to a name with a number, and a file with
+/// the same bytes is the same map, so it keeps one copy. A Universal VTT
+/// file carries its map inside, and this gives the map a file of its own.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be written.
+pub fn store_in_scene(scene_dir: &Path, source: &Path, bytes: &[u8]) -> Result<PathBuf> {
+    let name = free_name(source, |candidate| {
         std::fs::read(scene_dir.join(candidate)).is_ok_and(|there| there != bytes)
     });
     let target = scene_dir.join(&name);
     if !target.exists() {
-        std::fs::write(&target, &bytes)
+        std::fs::write(&target, bytes)
             .with_context(|| format!("{}: cannot copy the map", target.display()))?;
     }
     Ok(PathBuf::from(name))

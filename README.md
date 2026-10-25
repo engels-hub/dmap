@@ -22,6 +22,7 @@ The game master works in one window. A second window shows the players' view on 
 Version 0.2.0 has these features:
 
 - One canvas with no limits holds many maps. Drop a PNG, a JPEG or a WebP on the window to add one.
+- A Foundry VTT scene or a Universal VTT file adds its map with its walls, doors and lights.
 - A box on the canvas decides what the TV shows. The box snaps to true size.
 - Square grids and hex grids, with a tool that finds the grid on a map.
 - Pens, shapes, a ruler and areas of effect for spells.
@@ -40,8 +41,7 @@ These features are not in yet. Each one has an issue on the [Issues](https://git
 - The resolution and the diagonal of your TV (#6)
 - A 1 inch grid and a 6 inch ruler on the TV, to check the size (#7)
 - Video maps (#23)
-- Foundry VTT scenes and Universal VTT files (#16, #17)
-- Walls, doors and light that the GPU calculates (#18, #19, #20, #21)
+- Light and shadows that the GPU calculates from the walls and the lights (#18, #19, #20, #21)
 - Fog of war (#22)
 
 ## Install
@@ -256,6 +256,22 @@ Start the program with no argument to open the last scene. Give it a scene folde
 ```bash
 cargo run --release -- ~/dmap/scenes/The Crypt
 ```
+
+### Maps from Foundry VTT and Dungeondraft
+
+**Add map** reads a map image, a Foundry VTT scene or a Universal VTT file. You can also drop the file on the window. A Universal VTT file has the extension `.dd2vtt`, `.df2vtt` or `.uvtt`. A Foundry VTT scene is the `.json` file that "Export Data" on a scene writes.
+
+The program puts the map, its walls and its lights in one group. The grid size of the file sets the size of the map, so one cell is one inch. The DM window shows the walls as lines and the lights as rings. The TV does not show them.
+
+| Action | Control |
+|---|---|
+| Move the map with its walls and lights | Drag the map or a wall |
+| Move only the map | Pick the map in the Objects list, then drag it |
+| Move one light | Drag the sun glyph of the light |
+| Make a light reach farther | Pick the light, then drag a corner handle, or type the reach in its panel |
+| Open or close a door | Double-click the door |
+
+A Foundry scene names its map relative to the Foundry `Data` folder. The program looks for the map next to the scene file first. If the map is not there, the program asks for the `Data` folder one time and keeps the answer. To change the folder, go to Settings, the Table tab.
 
 ### A scene folder
 

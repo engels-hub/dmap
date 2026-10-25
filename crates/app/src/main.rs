@@ -22,6 +22,7 @@ mod hold;
 mod icon;
 mod icons;
 mod images;
+mod import;
 mod ink;
 mod keys;
 mod lines;
@@ -29,6 +30,7 @@ mod maps;
 mod overlay;
 mod pointer;
 mod scene;
+mod sight;
 mod stroke;
 mod text;
 mod theme;
@@ -379,6 +381,7 @@ impl Running {
                 paper_light: config.paper_light.clone(),
                 paper_dark: config.paper_dark.clone(),
                 keys: config.keys.clone(),
+                foundry_data: config.foundry_data.clone(),
             },
             placed: false,
             // The first frame owes the players the scene the DM opened.
@@ -542,6 +545,15 @@ impl Running {
     ///
     /// Returns `true` when the scene changed.
     fn add_map(&mut self, file: &Path) -> bool {
+        if import::reads(file) {
+            return match self.add_import(file) {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("{error:#}");
+                    false
+                }
+            };
+        }
         // A dropped file skips the filter of the file picker. A file the
         // decoder refuses would stay in the scene as a map that never shows.
         if let Err(error) = images::check(file) {
@@ -574,10 +586,83 @@ impl Running {
         true
     }
 
+    /// Adds a Foundry VTT scene or a Universal VTT file at the middle of
+    /// the DM view. Issues #16 and #17.
+    ///
+    /// The map, its walls and its lights go into one group, so a drag of
+    /// the group carries all of them. The group is one step of the
+    /// history, and one undo takes the whole import back.
+    fn add_import(&mut self, file: &Path) -> Result<()> {
+        let imported = import::read(file)?;
+        let (stored, size) = match &imported.image {
+            import::Image::Inside(bytes) => {
+                let end = images::extension_of(bytes)
+                    .with_context(|| format!("{}: the map is not an image", file.display()))?;
+                let name = file.with_extension(end);
+                let stored = scene::store_in_scene(&self.scene_dir, &name, bytes)?;
+                let size =
+                    images::size(&self.scene_dir.join(&stored)).map_err(anyhow::Error::msg)?;
+                (stored, size)
+            }
+            import::Image::Named(background) => {
+                let source = self.find_background(background, file)?;
+                let size = images::size(&source).map_err(anyhow::Error::msg)?;
+                (copy_into_scene(&self.scene_dir, &source)?, size)
+            }
+        };
+        if !scene::has_group(&self.scene, self.active_group) {
+            self.active_group = scene::ROOT_ID;
+        }
+        let name = file.file_stem().map_or_else(
+            || stored.display().to_string(),
+            |stem| stem.to_string_lossy().into_owned(),
+        );
+        let group = import::group(
+            imported,
+            name.clone(),
+            stored,
+            size.0,
+            self.scene.next_id(),
+            self.camera.center,
+        );
+        let into = self.active_group;
+        let change = reshape(&mut self.scene, Deed::Import, name, |scene| {
+            push_into(scene, into, Node::Group(group));
+        })
+        .context("the import changed nothing")?;
+        self.history.kept(change);
+        self.request_images();
+        Ok(())
+    }
+
+    /// Where the map of a Foundry scene lies, asking for the Data folder
+    /// when no place the program knows holds it. Issue #16.
+    ///
+    /// The DM picks the folder once. The settings keep it, so a later
+    /// import finds its map with no question.
+    fn find_background(&mut self, background: &import::Background, file: &Path) -> Result<PathBuf> {
+        let data = self.settings.foundry_data.as_deref();
+        if let Some(found) = import::find_background(background, file, data) {
+            return Ok(found);
+        }
+        let mut dialog = rfd::FileDialog::new().set_title(text::dialog_file_foundry_data());
+        if let Some(data) = data.or_else(|| file.parent()) {
+            dialog = dialog.set_directory(data);
+        }
+        let picked = dialog
+            .pick_folder()
+            .with_context(|| format!("{}: no Foundry Data folder", background.path))?;
+        let found = import::find_background(background, file, Some(&picked))
+            .with_context(|| format!("{}: not in {}", background.path, picked.display()))?;
+        self.settings.foundry_data = Some(picked);
+        Ok(found)
+    }
+
     /// Asks for an image file and adds it. Returns `true` when a file was added.
     fn pick_map_file(&mut self) -> bool {
         let picked = rfd::FileDialog::new()
             .add_filter(text::dialog_file_images(), images::EXTENSIONS)
+            .add_filter(text::dialog_file_vtt(), &import::extensions())
             .set_directory(&self.scene_dir)
             .pick_file();
         picked.is_some_and(|file| self.add_map(&file))
@@ -845,6 +930,7 @@ impl Running {
         config.paper_light.clone_from(&self.settings.paper_light);
         config.keys.clone_from(&self.settings.keys);
         config.paper_dark.clone_from(&self.settings.paper_dark);
+        config.foundry_data.clone_from(&self.settings.foundry_data);
         config.tool = self.ui.tool();
         config.settings_tab = self.ui.settings_tab();
         config.camera = Some(self.camera);

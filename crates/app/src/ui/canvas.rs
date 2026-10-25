@@ -7,9 +7,12 @@
 // Rust guideline compliant 2026-02-21
 
 use crate::camera::{Area, Camera, DEFAULT_PIXELS_PER_INCH, fit};
-use crate::command::{Both, Change, Deed, Grow, SetAssets, SetStrokes, SetTvBox, Turn, reshape};
+use crate::command::{
+    Both, Change, Deed, Grow, SetAssets, SetSight, SetStrokes, SetTvBox, Turn, reshape,
+};
 use crate::keys::{Action, Keys};
 use crate::scene::{Asset, Node, NodeId, Placed, Scene};
+use crate::sight::{Light, Walls};
 use crate::stroke::Stroke;
 use crate::text;
 use crate::theme::{self, Tokens};
@@ -22,8 +25,8 @@ use crate::tvbox::{TV_WIDTH_INCHES, TvBox, at_true_size, clamp_width, snap_to_tr
 use super::panel::selection_popup;
 use super::{
     BoxDrag, Button, DASH, Drag, FRAME_MARGIN, Frame, GROUP_MARGIN, GROUP_REACH, HANDLE_REACH,
-    HANDLE_SIZE, HANDLE_STANDOFF, KEY_ZOOM_STEP, Measure, PICK_REACH, Pointer,
-    ROTATION_HANDLE_OFFSET, Select, Table, View, ZOOM_LABEL_GAP, ZOOM_LABEL_SIZE,
+    HANDLE_SIZE, HANDLE_STANDOFF, KEY_ZOOM_STEP, LIGHT_REACH, Measure, PICK_REACH, Pointer,
+    ROTATION_HANDLE_OFFSET, Select, Table, View, WALL_REACH, ZOOM_LABEL_GAP, ZOOM_LABEL_SIZE,
 };
 
 /// The Select tool on the canvas: pick, move, scale, turn and flip maps.
@@ -97,6 +100,13 @@ pub(super) fn select_tool(
             }
             select.popup = !select.chosen.is_empty();
         }
+    }
+    let double = ui.input(|i| {
+        i.pointer
+            .button_double_clicked(egui::PointerButton::Primary)
+    });
+    if let (true, true, Some(pos)) = (double, pointer.hovered, pointer.pos) {
+        edited |= toggle_door(frame, &view, view.to_world(pos));
     }
     let icon = select.drag.as_ref().and_then(|drag| match drag {
         Drag::Scale { .. } => Some(egui::CursorIcon::ResizeNwSe),
@@ -524,6 +534,14 @@ fn held_corners(select: &Select, frame: &Frame<'_>) -> Option<[(f64, f64); 4]> {
             let (min, max) = stroke.bounds()?;
             Some([min, (max.0, min.1), max, (min.0, max.1)])
         }
+        Node::Walls(walls) => {
+            let (min, max) = walls.bounds()?;
+            Some([min, (max.0, min.1), max, (min.0, max.1)])
+        }
+        Node::Light(light) => {
+            let (min, max) = light.bounds();
+            Some([min, (max.0, min.1), max, (min.0, max.1)])
+        }
     }
 }
 
@@ -561,11 +579,13 @@ fn press(
     if let (Some(handle), Some(corners)) = (hit_handle, held_corners(select, frame)) {
         let starts = crate::scene::placed(frame.scene, &select.chosen);
         let ink = held_ink(frame.scene, &select.chosen);
+        let sight = held_sight(frame.scene, &select.chosen);
         let pivot = pivot_of(&corners);
         select.drag = Some(if handle == 4 {
             Drag::Rotate {
                 starts,
                 ink,
+                sight,
                 pivot,
                 start_cursor: cursor,
             }
@@ -573,6 +593,7 @@ fn press(
             Drag::Scale {
                 starts,
                 ink,
+                sight,
                 pivot,
                 start_cursor: cursor,
             }
@@ -584,6 +605,8 @@ fn press(
     // the asset under the pointer.
     let aimed = group_at(frame, view, pos)
         .or_else(|| ink_at(frame, cursor))
+        .or_else(|| light_at(frame, view, cursor))
+        .or_else(|| walls_at(frame, view, cursor, false).map(|(id, _)| id))
         .or_else(|| {
             // The topmost asset under the pointer takes the press. The tree
             // draws the bottom one first, so the search runs the other way.
@@ -596,6 +619,7 @@ fn press(
                 })
                 .map(|asset| asset.id)
         });
+    let aimed = aimed.map(|id| whole_import(frame.scene, select, id));
     let Some(id) = aimed else {
         // A press on bare canvas starts a band that picks what it covers.
         if !add {
@@ -613,6 +637,7 @@ fn press(
     select.drag = Some(Drag::Move {
         was: standing(frame.scene, &select.chosen),
         ink: held_ink(frame.scene, &select.chosen),
+        sight: held_sight(frame.scene, &select.chosen),
         start_cursor: cursor,
     });
 }
@@ -627,6 +652,100 @@ fn ink_at(frame: &Frame<'_>, cursor: (f64, f64)) -> Option<NodeId> {
         .rev()
         .find(|stroke| stroke.touches(cursor, PICK_REACH))
         .map(|stroke| stroke.id)
+}
+
+/// The light whose glyph is under the pointer, if any. Issue #16.
+///
+/// A light is small and draws over the map, so it takes a press on its
+/// glyph before the map under it does.
+fn light_at(frame: &Frame<'_>, view: &View, cursor: (f64, f64)) -> Option<NodeId> {
+    let reach = points_in_inches(view, LIGHT_REACH);
+    crate::scene::sight_order(frame.scene)
+        .into_iter()
+        .rev()
+        .find_map(|node| match node {
+            Node::Light(light)
+                if (light.center.0 - cursor.0).hypot(light.center.1 - cursor.1) <= reach =>
+            {
+                Some(light.id)
+            }
+            _ => None,
+        })
+}
+
+/// The wall set with a segment under the pointer, and which segment.
+///
+/// `doors` keeps the search to doors. Issues #16 and #18.
+fn walls_at(
+    frame: &Frame<'_>,
+    view: &View,
+    cursor: (f64, f64),
+    doors: bool,
+) -> Option<(NodeId, usize)> {
+    let reach = points_in_inches(view, WALL_REACH);
+    crate::scene::sight_order(frame.scene)
+        .into_iter()
+        .rev()
+        .find_map(|node| match node {
+            Node::Walls(walls) => walls
+                .nearest(cursor, reach, doors)
+                .map(|place| (walls.id, place)),
+            _ => None,
+        })
+}
+
+/// How many inches `points` of the window cover at this zoom.
+fn points_in_inches(view: &View, points: f64) -> f64 {
+    points * view.ppp / view.camera.pixels_per_inch
+}
+
+/// What a press on `id` takes: the node itself, or the import it is in.
+///
+/// An import keeps its map and its walls in one group, and the DM moves
+/// them together, so a press on either takes the whole group. A light
+/// stays on its own, so the DM can move one light. A node the DM already
+/// holds stays held, so a map picked in the list still moves alone.
+/// Issue #16.
+fn whole_import(scene: &Scene, select: &Select, id: NodeId) -> NodeId {
+    if select.holds(id) {
+        return id;
+    }
+    let Some(Node::Asset(_) | Node::Walls(_)) = crate::scene::find(scene, id) else {
+        return id;
+    };
+    let Some((parent, _)) = crate::scene::parent_of(scene, id) else {
+        return id;
+    };
+    let is_import = crate::scene::find(scene, parent)
+        .and_then(Node::group)
+        .is_some_and(|group| {
+            group
+                .children
+                .iter()
+                .any(|node| matches!(node, Node::Walls(_) | Node::Light(_)))
+        });
+    if is_import && parent != crate::scene::ROOT_ID {
+        parent
+    } else {
+        id
+    }
+}
+
+/// Opens or closes the door under the pointer. Returns `true` when it
+/// did. A double click does this, because one click picks. Issue #18.
+fn toggle_door(frame: &mut Frame<'_>, view: &View, cursor: (f64, f64)) -> bool {
+    let Some((id, place)) = walls_at(frame, view, cursor, true) else {
+        return false;
+    };
+    let Some(Node::Walls(walls)) = crate::scene::find(frame.scene, id) else {
+        return false;
+    };
+    let change = SetSight {
+        before: vec![Node::Walls(walls.clone())],
+        after: vec![Node::Walls(walls.toggled(place))],
+    };
+    frame.history.run(frame.scene, change);
+    true
 }
 
 /// Every asset the DM holds, as it stands now.
@@ -673,6 +792,7 @@ pub fn delete_held(select: &mut Select, frame: &mut Frame<'_>) -> bool {
     select.chosen.clear();
     select.opened = None;
     select.opened_ink = None;
+    select.opened_sight = None;
     select.popup = false;
     true
 }
@@ -690,6 +810,18 @@ fn held_ink(scene: &Scene, chosen: &[NodeId]) -> Vec<Stroke> {
                 .and_then(Node::stroke)
                 .cloned()
         })
+        .collect()
+}
+
+/// Every wall set and light under a selection, as each one stands now.
+///
+/// An import puts them in one group with their map, so a drag of that
+/// group carries them along. Issue #16.
+fn held_sight(scene: &Scene, chosen: &[NodeId]) -> Vec<Node> {
+    crate::scene::normalize(scene, chosen)
+        .iter()
+        .flat_map(|id| crate::scene::sight_of(scene, *id))
+        .filter_map(|id| crate::scene::find(scene, id).cloned())
         .collect()
 }
 
@@ -1092,11 +1224,12 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
         Drag::Move {
             was,
             ink,
+            sight,
             start_cursor,
         } => {
             // A press without motion picks and nothing more: a snap would
             // shift a map that the DM placed off the grid.
-            if cursor == *start_cursor || (was.is_empty() && ink.is_empty()) {
+            if cursor == *start_cursor || (was.is_empty() && ink.is_empty() && sight.is_empty()) {
                 return false;
             }
             let step = (cursor.0 - start_cursor.0, cursor.1 - start_cursor.1);
@@ -1128,11 +1261,13 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
                 after,
             });
             let drawn = ink_change(ink, |stroke| stroke.moved(step));
-            hold_drag(frame, maps.map(Change::from), drawn)
+            let marks = sight_change(sight, |walls| walls.moved(step), |light| light.moved(step));
+            hold_drag(frame, maps.map(Change::from), drawn, marks)
         }
         Drag::Scale {
             starts,
             ink,
+            sight,
             pivot,
             start_cursor,
         } => {
@@ -1145,11 +1280,17 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             });
             let pivot = *pivot;
             let drawn = ink_change(ink, |stroke| stroke.scaled(pivot, factor));
-            hold_drag(frame, maps.map(Change::from), drawn)
+            let marks = sight_change(
+                sight,
+                |walls| walls.scaled(pivot, factor),
+                |light| light.scaled(pivot, factor),
+            );
+            hold_drag(frame, maps.map(Change::from), drawn, marks)
         }
         Drag::Rotate {
             starts,
             ink,
+            sight,
             pivot,
             start_cursor,
         } => {
@@ -1168,7 +1309,12 @@ fn apply_drag(select: &mut Select, frame: &mut Frame<'_>, cursor: (f64, f64), sn
             });
             let pivot = *pivot;
             let drawn = ink_change(ink, |stroke| stroke.turned(pivot, angle));
-            hold_drag(frame, maps.map(Change::from), drawn)
+            let marks = sight_change(
+                sight,
+                |walls| walls.turned(pivot, angle),
+                |light| light.turned(pivot, angle),
+            );
+            hold_drag(frame, maps.map(Change::from), drawn, marks)
         }
     }
 }
@@ -1187,15 +1333,48 @@ fn ink_change(ink: &[Stroke], place: impl Fn(&Stroke) -> Stroke) -> Option<Chang
     )
 }
 
+/// The change a drag makes to the wall sets and lights it holds, if any.
+fn sight_change(
+    sight: &[Node],
+    walls: impl Fn(&Walls) -> Walls,
+    light: impl Fn(&Light) -> Light,
+) -> Option<Change> {
+    if sight.is_empty() {
+        return None;
+    }
+    let after = sight
+        .iter()
+        .map(|node| match node {
+            Node::Walls(set) => Node::Walls(walls(set)),
+            Node::Light(one) => Node::Light(light(one)),
+            other => other.clone(),
+        })
+        .collect();
+    Some(
+        SetSight {
+            before: sight.to_vec(),
+            after,
+        }
+        .into(),
+    )
+}
+
 /// Holds the change of one frame of a drag. Returns `true` when it wrote.
 ///
-/// A drag that holds maps and drawings writes both, and the DM made one
-/// gesture, so the two go down as one step. Issue #69.
-fn hold_drag(frame: &mut Frame<'_>, maps: Option<Change>, ink: Option<Change>) -> bool {
-    let change = match (maps, ink) {
-        (Some(maps), Some(ink)) => Both::of(maps, ink).into(),
-        (Some(alone), None) | (None, Some(alone)) => alone,
-        (None, None) => return false,
+/// A drag that holds maps, drawings, walls and lights writes them all,
+/// and the DM made one gesture, so they go down as one step. Issue #69.
+fn hold_drag(
+    frame: &mut Frame<'_>,
+    maps: Option<Change>,
+    ink: Option<Change>,
+    sight: Option<Change>,
+) -> bool {
+    let Some(change) = [maps, ink, sight]
+        .into_iter()
+        .flatten()
+        .reduce(|first, then| Both::of(first, then).into())
+    else {
+        return false;
     };
     frame.history.hold(frame.scene, change);
     true

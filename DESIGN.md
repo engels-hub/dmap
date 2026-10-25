@@ -315,6 +315,7 @@ The `Delete` key takes every node the DM holds, from the list and from the canva
 6. Theme: segmented control (Light, Dark). See section 2.
 7. Language: select with the name of each language in its own words.
 8. Interface scale: slider with the percent to its right. Helper: "Changes size of the UI. Maps keep their size". See section 3.1.
+9. Foundry Data: the path in a field 360 px wide, then the Choose button with the `folder` glyph. The field reads "Not set" before the DM picks a folder. Helper: "A Foundry scene finds its map in this folder".
 
 ### 9.2 Settings, Grid tab
 

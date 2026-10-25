@@ -215,6 +215,12 @@ pub struct Config {
     /// about another.
     #[serde(default)]
     pub camera: Option<crate::camera::Camera>,
+    /// The Data folder of a Foundry VTT install. Issue #16.
+    ///
+    /// A Foundry scene names its map relative to this folder. The DM sets
+    /// it once, at the first import that needs it, or in Settings.
+    #[serde(default)]
+    pub foundry_data: Option<PathBuf>,
 }
 
 /// Where a window stands, in the pixels of the display.
@@ -257,6 +263,7 @@ impl Default for Config {
             tool: crate::ui::Tool::default(),
             settings_tab: crate::ui::Tab::default(),
             camera: None,
+            foundry_data: None,
         }
     }
 }
@@ -543,6 +550,7 @@ mod tests {
                 center: (3.5, -2.0),
                 pixels_per_inch: 40.0,
             }),
+            foundry_data: Some(PathBuf::from("/foundry/Data")),
         };
         assert_eq!(Config::from_json(&config.to_json()).unwrap(), config);
     }

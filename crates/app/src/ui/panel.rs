@@ -6,7 +6,7 @@
 
 // Rust guideline compliant 2026-02-21
 
-use crate::command::{Deed, SetAssets, SetStrokes, SetTvBox, reshape};
+use crate::command::{Deed, SetAssets, SetSight, SetStrokes, SetTvBox, reshape};
 use crate::grid::Cells;
 use crate::icon;
 use crate::icons::Icon;
@@ -449,6 +449,10 @@ pub(super) fn properties_panel(
             Some((id, Some(Node::Stroke(stroke)))) => {
                 Held::Stroke(id, stroke.ink.name().to_owned())
             }
+            // A light opens a panel for its reach, its color and its
+            // cone. Issue #16.
+            Some((id, Some(Node::Light(_)))) => Held::Light(id, text::sight_light().to_owned()),
+            Some((_, Some(Node::Walls(_)))) => Held::Walls(text::sight_walls().to_owned()),
             // A group has no panel. Its name and its two switches sit on
             // its row, and it carries no size and no turn of its own, so a
             // panel over it would hold nothing the list does not say.
@@ -478,6 +482,14 @@ pub(super) fn properties_panel(
             Held::Draw => draw_properties(ui, frame.settings, tokens),
             Held::Map(id, _) => edited = map_properties(ui, *id, select, frame, tokens),
             Held::Stroke(id, _) => edited = stroke_properties(ui, *id, select, frame),
+            Held::Light(id, _) => edited = light_properties(ui, *id, select, frame),
+            Held::Walls(_) => {
+                widget::helper(ui, text::panel_walls_helper());
+                let delete = text::panel_delete();
+                if widget::button(ui, delete, Some(Icon::Trash), Height::Row).clicked() {
+                    edited = super::canvas::delete_held(select, frame);
+                }
+            }
         },
     );
     if let Some(after) = box_asked {
@@ -499,6 +511,10 @@ enum Held {
     Stroke(NodeId, String),
     /// One map, by id, with the name of its file. DESIGN.md 8.1.
     Map(NodeId, String),
+    /// One light, by id, with what it is called. Issue #16.
+    Light(NodeId, String),
+    /// The walls of one map, with what they are called. Issue #18.
+    Walls(String),
 }
 
 impl Held {
@@ -507,7 +523,10 @@ impl Held {
         match self {
             Self::TvBox => text::panel_box_title(),
             Self::Draw => text::panel_draw_title(),
-            Self::Stroke(_, name) | Self::Map(_, name) => name,
+            Self::Stroke(_, name)
+            | Self::Map(_, name)
+            | Self::Light(_, name)
+            | Self::Walls(name) => name,
         }
     }
 }
@@ -819,6 +838,85 @@ fn stroke_properties(
     true
 }
 
+/// The panel of one light: how far it reaches, its color, its cone.
+///
+/// The reach reads in cells, as the reach of an area of effect does. A
+/// drag on a number is one step of the history. Issue #16.
+fn light_properties(
+    ui: &mut egui::Ui,
+    id: NodeId,
+    select: &mut Select,
+    frame: &mut Frame<'_>,
+) -> bool {
+    let Some(Node::Light(light)) = crate::scene::find(frame.scene, id).cloned() else {
+        return false;
+    };
+    let cells = frame.settings.cells();
+    let mut after = light.clone();
+    let mut changed = false;
+    let mut reach_row = |ui: &mut egui::Ui, label: &str, inches: &mut f64| {
+        widget::row_label(ui, label);
+        let mut value = cells.in_cells(*inches);
+        if widget::input(
+            ui,
+            &mut value,
+            text::unit_cells(),
+            100.0,
+            0.0..=MAX_LIGHT,
+            0.5,
+        )
+        .changed()
+        {
+            *inches = cells.in_inches(value);
+            changed = true;
+        }
+    };
+    reach_row(ui, text::panel_light_bright(), &mut after.bright);
+    reach_row(ui, text::panel_light_dim(), &mut after.dim);
+    widget::row_label(ui, text::panel_light_color());
+    changed |= widget::color_swatch_rgb(ui, &mut after.color);
+    widget::row_label(ui, text::panel_light_cone());
+    let mut degrees = after.angle.to_degrees();
+    if widget::input(
+        ui,
+        &mut degrees,
+        text::unit_degrees(),
+        100.0,
+        1.0..=360.0,
+        1.0,
+    )
+    .changed()
+    {
+        after.angle = degrees.to_radians();
+        changed = true;
+    }
+    widget::helper(ui, text::panel_light_helper());
+    if widget::button(ui, text::panel_delete(), Some(Icon::Trash), Height::Row).clicked() {
+        return super::canvas::delete_held(select, frame);
+    }
+    if !changed {
+        return false;
+    }
+    let before = select
+        .opened_sight
+        .clone()
+        .filter(|held| held.id() == id)
+        .unwrap_or(Node::Light(light));
+    select.opened_sight = Some(before.clone());
+    frame.history.hold(
+        frame.scene,
+        SetSight {
+            before: vec![before],
+            after: vec![Node::Light(after)],
+        },
+    );
+    true
+}
+
+/// The farthest a light may reach, in cells. A light past a hundred cells
+/// lights a whole map, and a larger number is a typing mistake.
+const MAX_LIGHT: f64 = 100.0;
+
 /// The rows that say how far an area of effect reaches. DESIGN.md 8.3.
 ///
 /// A reach moves the far point along the line the shape already runs on,
@@ -1086,6 +1184,8 @@ pub(super) fn selection_popup(
                     Some(Node::Group(group)) => group.name.clone(),
                     Some(Node::Asset(asset)) => asset.path.to_string_lossy().into_owned(),
                     Some(Node::Stroke(stroke)) => stroke.ink.name().to_owned(),
+                    Some(Node::Walls(_)) => text::sight_walls().to_owned(),
+                    Some(Node::Light(_)) => text::sight_light().to_owned(),
                     None => continue,
                 };
                 let (rect, _) = ui.allocate_exact_size(

@@ -441,7 +441,50 @@ fn table_tab(
         }
         widget::helper(ui, text::dialog_settings_scale_helper());
     });
+    dialog_row(ui, text::dialog_settings_foundry(), |ui| {
+        edited |= foundry_field(ui, &mut frame.settings.foundry_data, tokens);
+        widget::helper(ui, text::dialog_settings_foundry_helper());
+    });
     edited
+}
+
+/// The Foundry Data folder, and a button to pick another. Issue #16.
+///
+/// An import asks for the folder at the first scene that needs it. This
+/// row shows the answer, and lets the DM set it before or change it after.
+/// Returns `true` when the DM picked a folder.
+fn foundry_field(ui: &mut egui::Ui, data: &mut Option<std::path::PathBuf>, tokens: Tokens) -> bool {
+    let mut picked = false;
+    ui.horizontal(|ui| {
+        let path = data.as_ref().map_or_else(
+            || text::dialog_settings_foundry_unset().to_owned(),
+            |path| path.display().to_string(),
+        );
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(PATH_WIDTH, widget::CONTROL),
+            egui::Sense::hover(),
+        );
+        ui.painter().rect(
+            rect,
+            0,
+            tokens.field,
+            tokens.hairline(),
+            egui::StrokeKind::Inside,
+        );
+        row_name(ui, rect.shrink2(egui::vec2(8.0, 0.0)), &path, false, tokens);
+        let choose = text::dialog_settings_foundry_choose();
+        if widget::button(ui, choose, Some(Icon::Folder), Height::Full).clicked() {
+            let mut dialog = rfd::FileDialog::new().set_title(text::dialog_file_foundry_data());
+            if let Some(folder) = data.as_deref() {
+                dialog = dialog.set_directory(folder);
+            }
+            if let Some(folder) = dialog.pick_folder() {
+                *data = Some(folder);
+                picked = true;
+            }
+        }
+    });
+    picked
 }
 
 /// The Grid tab of Settings: the colors of the canvas and the grid.

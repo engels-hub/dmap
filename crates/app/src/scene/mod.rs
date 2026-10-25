@@ -14,16 +14,21 @@ mod files;
 mod tree;
 
 pub use asset::{Asset, Placed, bounds, placed, rotate_about, scale_about};
-pub use draw::{assets, dm_draw_order, draw_order, groups, ink_order, ink_under, under};
-pub use files::copy_into_scene;
+pub use draw::{
+    assets, dm_draw_order, draw_order, groups, ink_order, ink_under, sight_order, sight_under,
+    under,
+};
+pub use files::{copy_into_scene, store_in_scene};
 pub use tree::{
     ancestors, asset_mut, assets_of, find, group_mut, group_names, group_selection, has_group,
-    ink_group, move_above, move_into, name_of, normalize, parent_of, path_to, prune, push_into,
-    reorder_all, share_parent, shown_mut, stroke_mut, strokes_of, take_node, ungroup,
+    ink_group, move_above, move_into, name_of, name_of_node, normalize, parent_of, path_to, prune,
+    push_into, reorder_all, share_parent, shown_mut, sight_mut, sight_of, stroke_mut, strokes_of,
+    take_node, ungroup,
 };
 
 use serde::{Deserialize, Serialize};
 
+use crate::sight::{Light, Walls};
 use crate::stroke::Stroke;
 use crate::tvbox::TvBox;
 
@@ -81,6 +86,10 @@ pub enum Node {
     Asset(Asset),
     /// One thing the DM drew, over the images. See [`crate::stroke`].
     Stroke(Stroke),
+    /// The walls and doors of one map. See [`crate::sight`].
+    Walls(Walls),
+    /// One light. See [`crate::sight`].
+    Light(Light),
 }
 
 impl Node {
@@ -90,6 +99,8 @@ impl Node {
             Self::Group(group) => group.id,
             Self::Asset(asset) => asset.id,
             Self::Stroke(stroke) => stroke.id,
+            Self::Walls(walls) => walls.id,
+            Self::Light(light) => light.id,
         }
     }
 
@@ -101,6 +112,8 @@ impl Node {
             Self::Group(group) => group.shows(audience),
             Self::Asset(asset) => asset.shows(audience),
             Self::Stroke(stroke) => stroke.shown.says(audience),
+            Self::Walls(walls) => walls.shown.says(audience),
+            Self::Light(light) => light.shown.says(audience),
         }
     }
 
@@ -282,6 +295,8 @@ fn rename_nodes(
             Node::Group(group) => &mut group.id,
             Node::Asset(asset) => &mut asset.id,
             Node::Stroke(stroke) => &mut stroke.id,
+            Node::Walls(walls) => &mut walls.id,
+            Node::Light(light) => &mut light.id,
         };
         if *id == ROOT_ID || !taken.insert(*id) {
             while !taken.insert(*next) {

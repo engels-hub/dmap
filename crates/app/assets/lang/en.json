@@ -237,5 +237,22 @@
   "history.detail.tree": "{lists} in the tree",
   "unit.px": "px",
   "unit.percent": "%",
-  "unit.degrees": "°"
+  "unit.degrees": "°",
+  "dialog.file.vtt": "Foundry VTT and Universal VTT",
+  "dialog.file.foundry_data": "The Foundry Data folder",
+  "dialog.settings.foundry": "Foundry Data",
+  "dialog.settings.foundry_unset": "Not set",
+  "dialog.settings.foundry_choose": "Choose",
+  "dialog.settings.foundry_helper": "A Foundry scene finds its map in this folder",
+  "sight.walls": "Walls",
+  "sight.light": "Light",
+  "history.deed.import": "Import",
+  "history.deed.open_door": "Open a door",
+  "history.deed.close_door": "Close a door",
+  "panel.light.bright": "Bright light",
+  "panel.light.dim": "Dim light",
+  "panel.light.color": "Color",
+  "panel.light.cone": "Cone",
+  "panel.light.helper": "360° shines all around.",
+  "panel.walls.helper": "A double click on a door opens or closes it."
 }

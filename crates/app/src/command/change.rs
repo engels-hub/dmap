@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::scene::{Asset, Group, Node, NodeId, Placed, Scene, Shown};
+use crate::sight::Walls;
 use crate::stroke::Stroke;
 use crate::text;
 use crate::tvbox::TvBox;
@@ -294,6 +295,69 @@ fn write_strokes(scene: &mut Scene, strokes: &[Stroke]) {
     }
 }
 
+/// Whole wall sets and lights, written back by id.
+///
+/// A drag of the group an import made carries its walls and lights with
+/// its map, and this change holds them as they stood and as they stand.
+/// Issue #16.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SetSight {
+    /// The nodes as they stood, one for each node in `after`.
+    pub before: Vec<Node>,
+    /// The nodes as the DM wants them.
+    pub after: Vec<Node>,
+}
+
+impl Command for SetSight {
+    fn apply(&self, scene: &mut Scene) {
+        write_sight(scene, &self.after);
+    }
+
+    fn revert(&self, scene: &mut Scene) {
+        write_sight(scene, &self.before);
+    }
+
+    fn note(&self) -> Note {
+        let subject = match self.after.as_slice() {
+            [one] => crate::scene::name_of_node(one),
+            many => text::history_maps_many(many.len()),
+        };
+        let what = match (self.before.as_slice(), self.after.as_slice()) {
+            ([Node::Walls(was)], [Node::Walls(now)]) if same_ends(was, now) => {
+                let opened = |walls: &Walls| walls.segments.iter().filter(|w| w.is_open()).count();
+                if opened(now) > opened(was) {
+                    text::history_deed_open_door()
+                } else {
+                    text::history_deed_close_door()
+                }
+            }
+            ([Node::Light(was)], [Node::Light(now)]) if was.center == now.center => {
+                text::history_deed_change()
+            }
+            _ => text::history_deed_move(),
+        };
+        Note::new(what, subject, String::new())
+    }
+}
+
+/// Whether two wall sets stand in the same place, so only a door changed.
+fn same_ends(was: &Walls, now: &Walls) -> bool {
+    was.segments.len() == now.segments.len()
+        && was
+            .segments
+            .iter()
+            .zip(&now.segments)
+            .all(|(old, new)| old.a == new.a && old.b == new.b)
+}
+
+fn write_sight(scene: &mut Scene, nodes: &[Node]) {
+    for node in nodes {
+        if let Some(place) = crate::scene::sight_mut(scene, node.id()) {
+            place.clone_from(node);
+        }
+    }
+}
+
 /// Two changes one gesture made, kept as one step.
 ///
 /// A drag of a selection that holds a map and a drawing writes both, and
@@ -414,6 +478,8 @@ impl Command for SetShown {
 pub enum Deed {
     /// A map joined the scene.
     AddMap,
+    /// A map joined the scene with its walls and lights. Issue #16.
+    Import,
     /// A group joined the tree.
     NewGroup,
     /// A group went, and what it held stayed.
@@ -439,6 +505,7 @@ impl Deed {
     fn word(self) -> &'static str {
         match self {
             Self::AddMap => text::history_deed_add_map(),
+            Self::Import => text::history_deed_import(),
             Self::NewGroup => text::history_deed_new_group(),
             Self::Ungroup => text::history_deed_ungroup(),
             Self::MoveInList => text::history_deed_move_in_list(),
@@ -580,6 +647,8 @@ pub enum Change {
     Assets(SetAssets),
     /// See [`SetStrokes`].
     Strokes(SetStrokes),
+    /// See [`SetSight`].
+    Sight(SetSight),
     /// See [`Grow`].
     Grow(Grow),
     /// See [`Turn`].
@@ -600,6 +669,7 @@ impl Command for Change {
             Self::TvBox(change) => change.apply(scene),
             Self::Assets(change) => change.apply(scene),
             Self::Strokes(change) => change.apply(scene),
+            Self::Sight(change) => change.apply(scene),
             Self::Grow(change) => change.apply(scene),
             Self::Turn(change) => change.apply(scene),
             Self::Name(change) => change.apply(scene),
@@ -614,6 +684,7 @@ impl Command for Change {
             Self::TvBox(change) => change.revert(scene),
             Self::Assets(change) => change.revert(scene),
             Self::Strokes(change) => change.revert(scene),
+            Self::Sight(change) => change.revert(scene),
             Self::Grow(change) => change.revert(scene),
             Self::Turn(change) => change.revert(scene),
             Self::Name(change) => change.revert(scene),
@@ -628,6 +699,7 @@ impl Command for Change {
             Self::TvBox(change) => change.note(),
             Self::Assets(change) => change.note(),
             Self::Strokes(change) => change.note(),
+            Self::Sight(change) => change.note(),
             Self::Grow(change) => change.note(),
             Self::Turn(change) => change.note(),
             Self::Name(change) => change.note(),
@@ -653,6 +725,12 @@ impl From<SetAssets> for Change {
 impl From<SetStrokes> for Change {
     fn from(change: SetStrokes) -> Self {
         Self::Strokes(change)
+    }
+}
+
+impl From<SetSight> for Change {
+    fn from(change: SetSight) -> Self {
+        Self::Sight(change)
     }
 }
 

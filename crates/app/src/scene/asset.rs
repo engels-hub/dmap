@@ -76,8 +76,8 @@ pub fn rotate_about(scene: &mut Scene, starts: &[Placed], pivot: (f64, f64), ang
 
 /// The world rectangle a group covers, as `(min, max)` in inches.
 ///
-/// The box holds every asset and every drawing under the group, however
-/// deep. A group with nothing in it yet, or one whose images have not
+/// The box holds every asset, drawing, wall and light under the group,
+/// however deep. A group with nothing in it yet, or one whose images have not
 /// loaded, covers nothing. Issue #69.
 pub fn bounds(
     group: &Group,
@@ -86,6 +86,7 @@ pub fn bounds(
     let mut reach: Option<((f64, f64), (f64, f64))> = None;
     let maps = under(group);
     let ink = super::ink_under(group);
+    let sight = super::sight_under(group);
     let corners = maps
         .iter()
         .filter_map(|asset| size_of(&asset.path).map(|size| asset.corners(size)))
@@ -93,6 +94,16 @@ pub fn bounds(
         .chain(
             ink.iter()
                 .filter_map(|stroke| stroke.bounds())
+                .flat_map(|(min, max)| [min, max]),
+        )
+        .chain(
+            sight
+                .iter()
+                .filter_map(|node| match node {
+                    super::Node::Walls(walls) => walls.bounds(),
+                    super::Node::Light(light) => Some(light.bounds()),
+                    _ => None,
+                })
                 .flat_map(|(min, max)| [min, max]),
         );
     for corner in corners {
