@@ -176,6 +176,130 @@ impl Walls {
     }
 }
 
+/// An area darker than the rest of the scene, which the lights reveal.
+///
+/// The scene holds one darkness for all of its canvas. This holds another
+/// one for the maps it lies over, such as a cellar under a sunlit yard. A
+/// darkness higher in the tree wins where two of them overlap.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Darkness {
+    /// The name of this area in the tree.
+    #[serde(default)]
+    pub id: NodeId,
+    /// Which screens this area darkens.
+    #[serde(default)]
+    pub shown: Shown,
+    /// The four corners, in inches, in order around the area.
+    pub corners: [(f64, f64); 4],
+    /// How dark the area is where no light reaches: 0 is the map as it
+    /// is, 1 shows the fill alone.
+    pub strength: f64,
+    /// What the area shows where no light reaches.
+    #[serde(default)]
+    pub fill: Fill,
+}
+
+/// What an area of darkness shows where no light reaches.
+///
+/// The GPU makes each pattern from noise, so the program carries no image
+/// for them. A pattern holds to the canvas and moves with the camera, so
+/// a cloud stays over the same part of the map.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fill {
+    /// Black, or the color the scene's ambient light leaves.
+    #[default]
+    Black,
+    /// Pale clouds, for a map seen from above.
+    Clouds,
+    /// Dark smoke.
+    Smoke,
+    /// Blue-grey mist.
+    Mist,
+    /// A night sky with stars.
+    Stars,
+}
+
+impl Fill {
+    /// Every fill, in the order the panel lists them.
+    pub const ALL: [Self; 5] = [
+        Self::Black,
+        Self::Clouds,
+        Self::Smoke,
+        Self::Mist,
+        Self::Stars,
+    ];
+
+    /// The number the shader knows this fill by.
+    pub fn code(self) -> u32 {
+        match self {
+            Self::Black => 0,
+            Self::Clouds => 1,
+            Self::Smoke => 2,
+            Self::Mist => 3,
+            Self::Stars => 4,
+        }
+    }
+
+    /// What the panel calls this fill.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Black => crate::text::fill_black(),
+            Self::Clouds => crate::text::fill_clouds(),
+            Self::Smoke => crate::text::fill_smoke(),
+            Self::Mist => crate::text::fill_mist(),
+            Self::Stars => crate::text::fill_stars(),
+        }
+    }
+}
+
+impl Darkness {
+    /// An area that covers the box from `min` to `max`.
+    pub fn covering(id: NodeId, (min, max): ((f64, f64), (f64, f64)), strength: f64) -> Self {
+        Self {
+            id,
+            shown: Shown::default(),
+            corners: [min, (max.0, min.1), max, (min.0, max.1)],
+            strength,
+            fill: Fill::Black,
+        }
+    }
+
+    /// The box around the area, as `(min, max)` in inches.
+    pub fn bounds(&self) -> ((f64, f64), (f64, f64)) {
+        reach(self.corners.into_iter()).unwrap_or(((0.0, 0.0), (0.0, 0.0)))
+    }
+
+    /// How far `at` lies from the outline of the area, in inches.
+    pub fn edge_distance(&self, at: (f64, f64)) -> f64 {
+        (0..4)
+            .map(|i| Wall::new(self.corners[i], self.corners[(i + 1) % 4]).distance(at))
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    fn mapped(&self, f: impl Fn((f64, f64)) -> (f64, f64)) -> Self {
+        Self {
+            corners: self.corners.map(f),
+            ..self.clone()
+        }
+    }
+
+    /// The same area, moved by `step` inches.
+    pub fn moved(&self, step: (f64, f64)) -> Self {
+        self.mapped(|at| shift(at, step))
+    }
+
+    /// The same area, grown by `factor` around `pivot`.
+    pub fn scaled(&self, pivot: (f64, f64), factor: f64) -> Self {
+        self.mapped(|at| grow(at, pivot, factor))
+    }
+
+    /// The same area, turned by `angle` radians around `pivot`.
+    pub fn turned(&self, pivot: (f64, f64), angle: f64) -> Self {
+        self.mapped(|at| turn(at, pivot, angle))
+    }
+}
+
 /// One light on the map.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Light {
@@ -342,6 +466,16 @@ mod tests {
         assert!(opened.segments[1].is_open());
         assert!(!opened.toggled(1).segments[1].is_open());
         assert_eq!(walls.toggled(0), walls);
+    }
+
+    #[test]
+    fn a_darkness_covers_its_box_and_moves_as_one_piece() {
+        let area = super::Darkness::covering(1, ((0.0, 0.0), (4.0, 2.0)), 0.5);
+        assert_eq!(area.bounds(), ((0.0, 0.0), (4.0, 2.0)));
+        assert!((area.edge_distance((2.0, 0.5)) - 0.5).abs() < 1e-9);
+        assert_eq!(area.moved((1.0, 1.0)).bounds(), ((1.0, 1.0), (5.0, 3.0)));
+        let turned = area.turned((0.0, 0.0), std::f64::consts::FRAC_PI_2);
+        assert!(close(turned.corners[1], (0.0, 4.0)));
     }
 
     #[test]
