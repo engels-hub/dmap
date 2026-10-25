@@ -102,6 +102,7 @@ pub fn bounds(
                 .filter_map(|node| match node {
                     super::Node::Walls(walls) => walls.bounds(),
                     super::Node::Light(light) => Some(light.bounds()),
+                    super::Node::Darkness(area) => Some(area.bounds()),
                     _ => None,
                 })
                 .flat_map(|(min, max)| [min, max]),

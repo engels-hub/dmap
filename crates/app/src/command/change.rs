@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::lighting::Mood;
 use crate::scene::{Asset, Group, Node, NodeId, Placed, Scene, Shown};
 use crate::sight::Walls;
 use crate::stroke::Stroke;
@@ -15,6 +16,37 @@ use crate::text;
 use crate::tvbox::TvBox;
 
 use super::{Command, Note, differs, lists, maps, screens, spot};
+
+/// How dark the scene is, and the color its darkness leaves. Issue #20.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SetMood {
+    /// The darkness as it stood.
+    pub before: Mood,
+    /// The darkness as the DM wants it.
+    pub after: Mood,
+}
+
+impl Command for SetMood {
+    fn apply(&self, scene: &mut Scene) {
+        scene.light = self.after;
+    }
+
+    fn revert(&self, scene: &mut Scene) {
+        scene.light = self.before;
+    }
+
+    fn note(&self) -> Note {
+        let percent = |mood: Mood| (mood.darkness * 100.0).round();
+        Note::new(
+            text::history_deed_darkness(),
+            String::new(),
+            text::history_detail_size(
+                format_args!("{:.0}", percent(self.before)),
+                format_args!("{:.0}", percent(self.after)),
+            ),
+        )
+    }
+}
 
 /// Where the TV box stands, and how wide it is.
 #[derive(Debug, Serialize, Deserialize)]
@@ -480,6 +512,8 @@ pub enum Deed {
     AddMap,
     /// A map joined the scene with its walls and lights. Issue #16.
     Import,
+    /// An area of darkness joined the scene. Issue #20.
+    AddDarkness,
     /// A group joined the tree.
     NewGroup,
     /// A group went, and what it held stayed.
@@ -506,6 +540,7 @@ impl Deed {
         match self {
             Self::AddMap => text::history_deed_add_map(),
             Self::Import => text::history_deed_import(),
+            Self::AddDarkness => text::panel_darkness_add(),
             Self::NewGroup => text::history_deed_new_group(),
             Self::Ungroup => text::history_deed_ungroup(),
             Self::MoveInList => text::history_deed_move_in_list(),
@@ -649,6 +684,8 @@ pub enum Change {
     Strokes(SetStrokes),
     /// See [`SetSight`].
     Sight(SetSight),
+    /// See [`SetMood`].
+    Mood(SetMood),
     /// See [`Grow`].
     Grow(Grow),
     /// See [`Turn`].
@@ -670,6 +707,7 @@ impl Command for Change {
             Self::Assets(change) => change.apply(scene),
             Self::Strokes(change) => change.apply(scene),
             Self::Sight(change) => change.apply(scene),
+            Self::Mood(change) => change.apply(scene),
             Self::Grow(change) => change.apply(scene),
             Self::Turn(change) => change.apply(scene),
             Self::Name(change) => change.apply(scene),
@@ -685,6 +723,7 @@ impl Command for Change {
             Self::Assets(change) => change.revert(scene),
             Self::Strokes(change) => change.revert(scene),
             Self::Sight(change) => change.revert(scene),
+            Self::Mood(change) => change.revert(scene),
             Self::Grow(change) => change.revert(scene),
             Self::Turn(change) => change.revert(scene),
             Self::Name(change) => change.revert(scene),
@@ -700,6 +739,7 @@ impl Command for Change {
             Self::Assets(change) => change.note(),
             Self::Strokes(change) => change.note(),
             Self::Sight(change) => change.note(),
+            Self::Mood(change) => change.note(),
             Self::Grow(change) => change.note(),
             Self::Turn(change) => change.note(),
             Self::Name(change) => change.note(),
@@ -725,6 +765,12 @@ impl From<SetAssets> for Change {
 impl From<SetStrokes> for Change {
     fn from(change: SetStrokes) -> Self {
         Self::Strokes(change)
+    }
+}
+
+impl From<SetMood> for Change {
+    fn from(change: SetMood) -> Self {
+        Self::Mood(change)
     }
 }
 

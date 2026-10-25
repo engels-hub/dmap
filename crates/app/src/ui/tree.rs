@@ -307,7 +307,7 @@ pub(super) fn tree_rows(
                     );
                 }
             }
-            Node::Stroke(_) | Node::Walls(_) | Node::Light(_) => {
+            Node::Stroke(_) | Node::Walls(_) | Node::Light(_) | Node::Darkness(_) => {
                 if let Some(leaf) = leaf_of(node) {
                     leaf_row(ui, leaf, select, depth, asked, tokens);
                 }
@@ -356,7 +356,7 @@ struct Leaf<'a> {
     shown: Shown,
 }
 
-/// What the row of a stroke, a wall set or a light shows.
+/// What the row of a stroke, a wall set, a light or a darkness shows.
 fn leaf_of(node: &Node) -> Option<Leaf<'static>> {
     Some(match node {
         Node::Stroke(stroke) => Leaf {
@@ -376,6 +376,12 @@ fn leaf_of(node: &Node) -> Option<Leaf<'static>> {
             glyph: Icon::Sun,
             name: text::sight_light(),
             shown: light.shown,
+        },
+        Node::Darkness(area) => Leaf {
+            id: area.id,
+            glyph: Icon::Moon,
+            name: text::sight_darkness(),
+            shown: area.shown,
         },
         Node::Group(_) | Node::Asset(_) => return None,
     })
