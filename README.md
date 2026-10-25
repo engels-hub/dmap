@@ -23,6 +23,7 @@ Version 0.2.0 has these features:
 
 - One canvas with no limits holds many maps. Drop a PNG, a JPEG or a WebP on the window to add one.
 - A Foundry VTT scene or a Universal VTT file adds its map with its walls, doors and lights.
+- Darkness, and lights whose light the walls stop. The GPU calculates the shadows.
 - A box on the canvas decides what the TV shows. The box snaps to true size.
 - Square grids and hex grids, with a tool that finds the grid on a map.
 - Pens, shapes, a ruler and areas of effect for spells.
@@ -39,7 +40,7 @@ dmap runs on Linux and on Windows. The code is Rust with wgpu, winit and egui.
 These features are not in yet. Each one has an issue on the [Issues](https://github.com/engels-hub/dmap/issues) page.
 
 - Video maps (#23)
-- Light and shadows that the GPU calculates from the walls and the lights (#18, #19, #20, #21)
+- Soft shadows (#21)
 - Fog of war (#22)
 
 ## Install
@@ -313,6 +314,21 @@ Caution: a change you make to `scene.json` by hand does not change `history.json
 - **Theme** picks the light theme, the default, or the dark one.
 - **Language** holds every language the program carries. The window changes at once, with no restart. A first run takes the language of your system when a file matches it, and English when no file does.
 - **Interface scale** sets the size of the toolbar, the panels and the dialogs, from 75 % to 175 % in steps of 5 %. The maps keep their size, so a change here never moves what the players see.
+
+The **Light** tab holds the light of the lamps:
+
+- **Darkness** sets how dark the scene is where no light reaches. 0 shows the map as it is. 100 % shows the lit areas only. The scene keeps this value, and an undo takes a change back.
+- **Ambient color** sets the color of the light that the darkness leaves. The scene keeps this value too.
+- **Walls block the light** turns the shadows on and off. **An open door lets the light through** does the same for doors that stand open.
+- **Show on** picks the screens that show the light: both screens, the DM screen only, or the TV only.
+
+A scene with no light and no area of darkness shows its maps as they are. Thus a plain map never goes dark. The light falls on the maps only. The grid and the drawings stay visible over the dark.
+
+### Areas of darkness
+
+An area of darkness makes some maps darker than the rest of the scene, such as a cellar under a sunlit yard. Pick a map, or pick some objects, and press **Add darkness**. The area covers what you picked and joins its group. A light reveals the map under the area.
+
+The panel of an area sets its **Darkness** and its **Fill**. The fill is what the area shows where no light reaches: black, clouds, smoke, mist or stars. The program makes each fill on the GPU, so the fills need no image files. The DM window shows the outline of each area as a dashed line. Press the outline to pick the area.
 
 The **Grid** tab holds the rows in [The grid](#the-grid). The **Shortcuts** tab holds [your own keys](#your-own-keys). The **About** tab says what dmap carries and under what terms.
 

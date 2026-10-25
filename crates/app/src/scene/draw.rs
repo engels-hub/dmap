@@ -30,7 +30,7 @@ fn collect_drawn<'a>(nodes: &'a [Node], audience: Audience, drawn: &mut Vec<&'a 
         match node {
             Node::Asset(asset) => drawn.push(asset),
             Node::Group(group) => collect_drawn(&group.children, audience, drawn),
-            Node::Stroke(_) | Node::Walls(_) | Node::Light(_) => {}
+            Node::Stroke(_) | Node::Walls(_) | Node::Light(_) | Node::Darkness(_) => {}
         }
     }
 }
@@ -64,7 +64,7 @@ fn collect_for_dm<'a>(nodes: &'a [Node], on_tv: bool, drawn: &mut Vec<(&'a Asset
         match node {
             Node::Asset(asset) => drawn.push((asset, reaches_tv)),
             Node::Group(group) => collect_for_dm(&group.children, reaches_tv, drawn),
-            Node::Stroke(_) | Node::Walls(_) | Node::Light(_) => {}
+            Node::Stroke(_) | Node::Walls(_) | Node::Light(_) | Node::Darkness(_) => {}
         }
     }
 }
@@ -81,7 +81,7 @@ fn collect_assets<'a>(nodes: &'a [Node], found: &mut Vec<&'a Asset>) {
         match node {
             Node::Asset(asset) => found.push(asset),
             Node::Group(group) => collect_assets(&group.children, found),
-            Node::Stroke(_) | Node::Walls(_) | Node::Light(_) => {}
+            Node::Stroke(_) | Node::Walls(_) | Node::Light(_) | Node::Darkness(_) => {}
         }
     }
 }
@@ -98,7 +98,7 @@ fn collect_ink_under<'a>(nodes: &'a [Node], found: &mut Vec<&'a Stroke>) {
         match node {
             Node::Stroke(stroke) => found.push(stroke),
             Node::Group(group) => collect_ink_under(&group.children, found),
-            Node::Asset(_) | Node::Walls(_) | Node::Light(_) => {}
+            Node::Asset(_) | Node::Walls(_) | Node::Light(_) | Node::Darkness(_) => {}
         }
     }
 }
@@ -137,36 +137,37 @@ fn collect_ink<'a>(nodes: &'a [Node], audience: Audience, drawn: &mut Vec<&'a St
         match node {
             Node::Stroke(stroke) => drawn.push(stroke),
             Node::Group(group) => collect_ink(&group.children, audience, drawn),
-            Node::Asset(_) | Node::Walls(_) | Node::Light(_) => {}
+            Node::Asset(_) | Node::Walls(_) | Node::Light(_) | Node::Darkness(_) => {}
         }
     }
 }
 
-/// Every wall set and light the DM screen marks, in tree order.
+/// Every wall set and light that shows for `audience`, in tree order.
 ///
-/// The marks are for the DM alone, so the walk asks the DM side of each
-/// node and group. The TV never draws them. PLAN.md 5.3.
-pub fn sight_order(scene: &Scene) -> Vec<&Node> {
+/// A node counts only when it and every group above it show for that
+/// screen. The DM screen marks these, and the light pass of each screen
+/// reads its own. PLAN.md 5.3 and 6.
+pub fn sight_order(scene: &Scene, audience: Audience) -> Vec<&Node> {
     let mut drawn = Vec::new();
-    collect_sight(&scene.root.children, true, &mut drawn);
+    collect_sight(&scene.root.children, Some(audience), &mut drawn);
     drawn
 }
 
 /// Every wall set and light under a group, however deep.
 pub fn sight_under(group: &Group) -> Vec<&Node> {
     let mut found = Vec::new();
-    collect_sight(&group.children, false, &mut found);
+    collect_sight(&group.children, None, &mut found);
     found
 }
 
-fn collect_sight<'a>(nodes: &'a [Node], shown_only: bool, found: &mut Vec<&'a Node>) {
+fn collect_sight<'a>(nodes: &'a [Node], audience: Option<Audience>, found: &mut Vec<&'a Node>) {
     for node in nodes {
-        if shown_only && !node.shows(Audience::Dm) {
+        if audience.is_some_and(|audience| !node.shows(audience)) {
             continue;
         }
         match node {
-            Node::Walls(_) | Node::Light(_) => found.push(node),
-            Node::Group(group) => collect_sight(&group.children, shown_only, found),
+            Node::Walls(_) | Node::Light(_) | Node::Darkness(_) => found.push(node),
+            Node::Group(group) => collect_sight(&group.children, audience, found),
             Node::Asset(_) | Node::Stroke(_) => {}
         }
     }

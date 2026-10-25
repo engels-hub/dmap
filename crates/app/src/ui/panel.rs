@@ -11,6 +11,7 @@ use crate::grid::Cells;
 use crate::icon;
 use crate::icons::Icon;
 use crate::scene::{Asset, Node, NodeId, ROOT_ID, Scene};
+use crate::sight::Fill;
 use crate::stroke::{Ink, Rule, Stroke};
 use crate::text;
 use crate::theme::{self, Tokens};
@@ -453,6 +454,9 @@ pub(super) fn properties_panel(
             // cone. Issue #16.
             Some((id, Some(Node::Light(_)))) => Held::Light(id, text::sight_light().to_owned()),
             Some((_, Some(Node::Walls(_)))) => Held::Walls(text::sight_walls().to_owned()),
+            Some((id, Some(Node::Darkness(_)))) => {
+                Held::Darkness(id, text::sight_darkness().to_owned())
+            }
             // A group has no panel. Its name and its two switches sit on
             // its row, and it carries no size and no turn of its own, so a
             // panel over it would hold nothing the list does not say.
@@ -481,9 +485,10 @@ pub(super) fn properties_panel(
                 box_asked = box_properties(ui, frame.scene.tv_box, tv_width, frame_box, tokens);
             }
             Held::Draw => draw_properties(ui, frame.settings, tokens),
-            Held::Map(id, _) => edited = map_properties(ui, *id, select, frame, tokens),
+            Held::Map(id, _) => edited = map_properties(ui, *id, select, frame),
             Held::Stroke(id, _) => edited = stroke_properties(ui, *id, select, frame),
             Held::Light(id, _) => edited = light_properties(ui, *id, select, frame),
+            Held::Darkness(id, _) => edited = darkness_properties(ui, *id, select, frame),
             Held::Walls(_) => {
                 widget::helper(ui, text::panel_walls_helper());
                 let delete = text::panel_delete();
@@ -516,6 +521,8 @@ enum Held {
     Light(NodeId, String),
     /// The walls of one map, with what they are called. Issue #18.
     Walls(String),
+    /// One area of darkness, by id, with what it is called. Issue #20.
+    Darkness(NodeId, String),
 }
 
 impl Held {
@@ -527,6 +534,7 @@ impl Held {
             Self::Stroke(_, name)
             | Self::Map(_, name)
             | Self::Light(_, name)
+            | Self::Darkness(_, name)
             | Self::Walls(name) => name,
         }
     }
@@ -916,6 +924,70 @@ fn light_properties(
     true
 }
 
+/// The Add darkness button of a map panel. Gives back whether the scene
+/// changed, or `None` when the DM did not press it. Issue #20.
+fn darken_button(ui: &mut egui::Ui, select: &mut Select, frame: &mut Frame<'_>) -> Option<bool> {
+    let darken = text::panel_darkness_add();
+    widget::button(ui, darken, Some(Icon::Moon), Height::Row)
+        .clicked()
+        .then(|| super::canvas::add_darkness(select, frame))
+}
+
+/// The panel of one area of darkness: how dark it is, and its fill.
+///
+/// A drag of the slider is one step of the history. Issue #20.
+fn darkness_properties(
+    ui: &mut egui::Ui,
+    id: NodeId,
+    select: &mut Select,
+    frame: &mut Frame<'_>,
+) -> bool {
+    let Some(Node::Darkness(area)) = crate::scene::find(frame.scene, id).cloned() else {
+        return false;
+    };
+    let mut after = area.clone();
+    widget::row_label(ui, text::panel_darkness_amount());
+    let mut darkness = area.strength;
+    let shown = text::dialog_settings_opacity_value((darkness * 100.0).round());
+    if widget::slider(ui, &mut darkness, 0.0..=1.0, PANEL_SLIDER, &shown).changed() {
+        after.strength = (darkness * 100.0).round() / 100.0;
+    }
+    widget::row_label(ui, text::panel_darkness_fill());
+    let field = widget::select_field(ui, area.fill.name(), ui.available_width());
+    egui::Popup::menu(&field)
+        .gap(-1.0)
+        .width(ui.available_width())
+        .show(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for fill in Fill::ALL {
+                if widget::select_row(ui, fill.name(), fill == area.fill).clicked() {
+                    after.fill = fill;
+                }
+            }
+        });
+    widget::helper(ui, text::panel_darkness_helper());
+    if widget::button(ui, text::panel_delete(), Some(Icon::Trash), Height::Row).clicked() {
+        return super::canvas::delete_held(select, frame);
+    }
+    if after == area {
+        return false;
+    }
+    let before = select
+        .opened_sight
+        .clone()
+        .filter(|held| held.id() == id)
+        .unwrap_or(Node::Darkness(area));
+    select.opened_sight = Some(before.clone());
+    frame.history.hold(
+        frame.scene,
+        SetSight {
+            before: vec![before],
+            after: vec![Node::Darkness(after)],
+        },
+    );
+    true
+}
+
 /// The farthest a light may reach, in cells. A light past a hundred cells
 /// lights a whole map, and a larger number is a typing mistake.
 const MAX_LIGHT: f64 = 100.0;
@@ -981,7 +1053,6 @@ fn map_properties(
     id: NodeId,
     select: &mut Select,
     frame: &mut Frame<'_>,
-    tokens: Tokens,
 ) -> bool {
     let mut edited = false;
     // Whether the DM asked for the map to go. The delete runs after the
@@ -1070,7 +1141,9 @@ fn map_properties(
         }
     });
     widget::helper(ui, text::panel_map_flip_helper());
-    let _ = tokens;
+    if let Some(done) = darken_button(ui, select, frame) {
+        return done;
+    }
     if changed {
         // A drag of a number runs over many frames. Every one of them goes
         // back to the map as it stood when the drag began, so the whole
@@ -1168,6 +1241,7 @@ pub(super) fn selection_popup(
     }
     let held = crate::scene::normalize(frame.scene, &select.chosen);
     let mut edited = false;
+    let mut darken_them = false;
     let mut group_them = false;
     let screen = ctx.content_rect();
     let left_top = egui::pos2((screen.center().x - PANEL_WIDTH / 2.0).round(), MARGIN);
@@ -1189,6 +1263,7 @@ pub(super) fn selection_popup(
                     Some(Node::Stroke(stroke)) => stroke.ink.name().to_owned(),
                     Some(Node::Walls(_)) => text::sight_walls().to_owned(),
                     Some(Node::Light(_)) => text::sight_light().to_owned(),
+                    Some(Node::Darkness(_)) => text::sight_darkness().to_owned(),
                     None => continue,
                 };
                 let (rect, _) = ui.allocate_exact_size(
@@ -1208,12 +1283,20 @@ pub(super) fn selection_popup(
                 {
                     group_them = true;
                 }
+                let darken = text::panel_darkness_add();
+                if widget::button(ui, darken, Some(Icon::Moon), Height::Panel).clicked() {
+                    darken_them = true;
+                }
                 if widget::button(ui, text::panel_picked_close(), None, Height::Panel).clicked() {
                     select.popup = false;
                 }
             });
         },
     );
+    if darken_them {
+        select.popup = false;
+        return super::canvas::add_darkness(select, frame);
+    }
     if group_them {
         let name = text::panel_objects_group_name(frame.scene.next_id());
         let chosen = select.chosen.clone();
