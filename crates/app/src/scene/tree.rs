@@ -316,7 +316,7 @@ pub fn assets_of(scene: &Scene, id: NodeId) -> Vec<NodeId> {
     match find(scene, id) {
         Some(Node::Asset(asset)) => vec![asset.id],
         Some(Node::Group(group)) => under(group).iter().map(|asset| asset.id).collect(),
-        Some(Node::Stroke(_)) | None => Vec::new(),
+        Some(Node::Stroke(_) | Node::Walls(_) | Node::Light(_)) | None => Vec::new(),
     }
 }
 
@@ -331,7 +331,23 @@ pub fn strokes_of(scene: &Scene, id: NodeId) -> Vec<NodeId> {
             .iter()
             .map(|stroke| stroke.id)
             .collect(),
-        Some(Node::Asset(_)) | None => Vec::new(),
+        Some(Node::Asset(_) | Node::Walls(_) | Node::Light(_)) | None => Vec::new(),
+    }
+}
+
+/// Every wall set and light a node holds: the node itself, or all under a
+/// group.
+///
+/// An import puts the walls and lights in one group with their map, so a
+/// drag of that group carries them with the map. Issue #16.
+pub fn sight_of(scene: &Scene, id: NodeId) -> Vec<NodeId> {
+    match find(scene, id) {
+        Some(node @ (Node::Walls(_) | Node::Light(_))) => vec![node.id()],
+        Some(Node::Group(group)) => super::sight_under(group)
+            .iter()
+            .map(|node| node.id())
+            .collect(),
+        Some(Node::Asset(_) | Node::Stroke(_)) | None => Vec::new(),
     }
 }
 
@@ -434,14 +450,20 @@ fn find_in(nodes: &[Node], id: NodeId) -> Option<&Node> {
 /// The history list and the panels both name a node this way, so a step
 /// reads as the row the DM pressed.
 pub fn name_of(scene: &Scene, id: NodeId) -> String {
-    match find(scene, id) {
-        Some(Node::Group(group)) => group.name.clone(),
-        Some(Node::Asset(asset)) => asset.path.file_name().map_or_else(
+    find(scene, id).map_or_else(String::new, name_of_node)
+}
+
+/// What the DM sees one node called. See [`name_of`].
+pub fn name_of_node(node: &Node) -> String {
+    match node {
+        Node::Group(group) => group.name.clone(),
+        Node::Asset(asset) => asset.path.file_name().map_or_else(
             || asset.path.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
         ),
-        Some(Node::Stroke(stroke)) => stroke.ink.name().to_owned(),
-        None => String::new(),
+        Node::Stroke(stroke) => stroke.ink.name().to_owned(),
+        Node::Walls(_) => crate::text::sight_walls().to_owned(),
+        Node::Light(_) => crate::text::sight_light().to_owned(),
     }
 }
 
@@ -459,7 +481,7 @@ fn find_asset(nodes: &mut [Node], id: NodeId) -> Option<&mut Asset> {
                     return Some(found);
                 }
             }
-            Node::Asset(_) | Node::Stroke(_) => {}
+            Node::Asset(_) | Node::Stroke(_) | Node::Walls(_) | Node::Light(_) => {}
         }
     }
     None
@@ -467,14 +489,21 @@ fn find_asset(nodes: &mut [Node], id: NodeId) -> Option<&mut Asset> {
 
 /// The screens of this node, ready to change.
 ///
-/// A group and an asset both carry the pair, so a switch in the list
-/// reaches either one through this.
+/// Every kind of node carries the pair, so a switch in the list reaches
+/// any of them through this.
 pub fn shown_mut(scene: &mut Scene, id: NodeId) -> Option<&mut Shown> {
     if has_group(scene, id) {
         return group_mut(scene, id).map(|group| &mut group.shown);
     }
     if has_stroke(scene, id) {
         return stroke_mut(scene, id).map(|stroke| &mut stroke.shown);
+    }
+    if find(scene, id).is_some_and(|node| matches!(node, Node::Walls(_) | Node::Light(_))) {
+        return match sight_mut(scene, id)? {
+            Node::Walls(walls) => Some(&mut walls.shown),
+            Node::Light(light) => Some(&mut light.shown),
+            _ => None,
+        };
     }
     asset_mut(scene, id).map(|asset| &mut asset.shown)
 }
@@ -513,7 +542,30 @@ fn find_stroke(nodes: &mut [Node], id: NodeId) -> Option<&mut Stroke> {
                     return Some(found);
                 }
             }
-            Node::Stroke(_) | Node::Asset(_) => {}
+            Node::Stroke(_) | Node::Asset(_) | Node::Walls(_) | Node::Light(_) => {}
+        }
+    }
+    None
+}
+
+/// The wall set or light of this name, ready to change.
+///
+/// The node comes whole, so a change writes back the set or the light
+/// that stood there. Nothing else answers to this call.
+pub fn sight_mut(scene: &mut Scene, id: NodeId) -> Option<&mut Node> {
+    find_sight(&mut scene.root.children, id)
+}
+
+fn find_sight(nodes: &mut [Node], id: NodeId) -> Option<&mut Node> {
+    for node in nodes {
+        match node {
+            Node::Walls(_) | Node::Light(_) if node.id() == id => return Some(node),
+            Node::Group(group) => {
+                if let Some(found) = find_sight(&mut group.children, id) {
+                    return Some(found);
+                }
+            }
+            Node::Stroke(_) | Node::Asset(_) | Node::Walls(_) | Node::Light(_) => {}
         }
     }
     None

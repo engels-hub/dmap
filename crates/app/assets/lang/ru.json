@@ -237,5 +237,22 @@
   "history.detail.tree": "{lists} в дереве",
   "unit.px": "px",
   "unit.percent": "%",
-  "unit.degrees": "°"
+  "unit.degrees": "°",
+  "dialog.file.vtt": "Foundry VTT и Universal VTT",
+  "dialog.file.foundry_data": "Папка Data у Foundry",
+  "dialog.settings.foundry": "Foundry Data",
+  "dialog.settings.foundry_unset": "Не задана",
+  "dialog.settings.foundry_choose": "Выбрать",
+  "dialog.settings.foundry_helper": "Сцена Foundry ищет карту в этой папке",
+  "sight.walls": "Стены",
+  "sight.light": "Свет",
+  "history.deed.import": "Импорт",
+  "history.deed.open_door": "Открыть дверь",
+  "history.deed.close_door": "Закрыть дверь",
+  "panel.light.bright": "Яркий свет",
+  "panel.light.dim": "Тусклый свет",
+  "panel.light.color": "Цвет",
+  "panel.light.cone": "Конус",
+  "panel.light.helper": "360° светит во все стороны.",
+  "panel.walls.helper": "Двойной щелчок по двери открывает или закрывает её."
 }

@@ -10,7 +10,6 @@ use crate::command::{Deed, SetName, SetShown, reshape};
 use crate::icon;
 use crate::icons::Icon;
 use crate::scene::{Group, Node, NodeId, ROOT_ID, Scene, Shown};
-use crate::stroke::Stroke;
 use crate::text;
 use crate::theme::{self, Tokens};
 use crate::widget;
@@ -308,7 +307,11 @@ pub(super) fn tree_rows(
                     );
                 }
             }
-            Node::Stroke(stroke) => stroke_row(ui, stroke, select, depth, asked, tokens),
+            Node::Stroke(_) | Node::Walls(_) | Node::Light(_) => {
+                if let Some(leaf) = leaf_of(node) {
+                    leaf_row(ui, leaf, select, depth, asked, tokens);
+                }
+            }
             Node::Asset(asset) => {
                 let id = asset.id;
                 let picked = select.holds(id);
@@ -340,16 +343,60 @@ pub(super) fn tree_rows(
     }
 }
 
-/// One row of the objects list for a stroke. DESIGN.md 8.4.
-fn stroke_row(
+/// What a row of a node with no children shows, besides its place.
+#[derive(Debug, Clone, Copy)]
+struct Leaf<'a> {
+    /// The node the row stands for.
+    id: NodeId,
+    /// The glyph that says what the node is.
+    glyph: Icon,
+    /// What the row calls the node.
+    name: &'a str,
+    /// Which screens the node draws on.
+    shown: Shown,
+}
+
+/// What the row of a stroke, a wall set or a light shows.
+fn leaf_of(node: &Node) -> Option<Leaf<'static>> {
+    Some(match node {
+        Node::Stroke(stroke) => Leaf {
+            id: stroke.id,
+            glyph: stroke.ink.glyph(),
+            name: stroke.ink.name(),
+            shown: stroke.shown,
+        },
+        Node::Walls(walls) => Leaf {
+            id: walls.id,
+            glyph: Icon::BrickWall,
+            name: text::sight_walls(),
+            shown: walls.shown,
+        },
+        Node::Light(light) => Leaf {
+            id: light.id,
+            glyph: Icon::Sun,
+            name: text::sight_light(),
+            shown: light.shown,
+        },
+        Node::Group(_) | Node::Asset(_) => return None,
+    })
+}
+
+/// One row of the objects list for a stroke, a wall set or a light.
+/// DESIGN.md 8.4.
+fn leaf_row(
     ui: &mut egui::Ui,
-    stroke: &Stroke,
+    leaf: Leaf<'_>,
     select: &mut Select,
     depth: usize,
     asked: &mut Asked,
     tokens: Tokens,
 ) {
-    let id = stroke.id;
+    let Leaf {
+        id,
+        glyph,
+        name,
+        shown,
+    } = leaf;
     let picked = select.holds(id);
     let row = tree_row(
         ui,
@@ -357,7 +404,7 @@ fn stroke_row(
             depth,
             picked,
             twist: None,
-            glyph: stroke.ink.glyph(),
+            glyph,
             accent_glyph: false,
             tokens,
         },
@@ -368,9 +415,9 @@ fn stroke_row(
     if row.body.drag_started() {
         egui::DragAndDrop::set_payload(ui.ctx(), id);
     }
-    row_name(ui, row.name, stroke.ink.name(), picked, tokens);
-    if let Some(after) = switches(ui, row.switches, stroke.shown, tokens) {
-        asked.shown = Some((id, stroke.shown, after));
+    row_name(ui, row.name, name, picked, tokens);
+    if let Some(after) = switches(ui, row.switches, shown, tokens) {
+        asked.shown = Some((id, shown, after));
     }
     dropped_on(ui, &row.whole, id, false, &mut asked.moved, tokens);
 }

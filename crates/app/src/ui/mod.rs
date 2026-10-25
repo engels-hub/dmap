@@ -13,6 +13,7 @@ mod finder;
 mod marker;
 mod panel;
 mod shortcuts;
+mod sight;
 mod toolbar;
 mod tree;
 
@@ -29,7 +30,7 @@ use crate::config::Paper;
 use crate::gpu::{Gpu, Pane, begin_clear_pass};
 use crate::icons::Icon;
 use crate::keys::{Action, Keys};
-use crate::scene::{Asset, NodeId, Placed, Scene};
+use crate::scene::{Asset, Node, NodeId, Placed, Scene};
 use crate::stroke::{Ink, Rule, Stroke};
 use crate::text;
 use crate::theme;
@@ -44,6 +45,7 @@ use draw::{Draw, draw_tool};
 use finder::{Finder, find_the_grid};
 use marker::mark_tv_box;
 use panel::{Views, objects_panel, properties_panel, say_lengths};
+use sight::mark_sight;
 use toolbar::{Press, history_button, toolbar};
 use tree::Tree;
 
@@ -216,6 +218,15 @@ const GROUP_MARGIN: f32 = 6.0;
 
 /// How wide the edge of a group box is for a click, in points.
 const GROUP_REACH: f32 = 5.0;
+
+/// How far from the middle of a light a press still takes it, in points.
+/// The glyph of a light draws 16 points wide, so this covers it.
+const LIGHT_REACH: f64 = 12.0;
+
+/// How far from a wall a press still takes it, in points.
+///
+/// Points and not inches, so a wall stays as easy to hit at any zoom.
+const WALL_REACH: f64 = 6.0;
 
 /// The dash and the gap of a group box, in points.
 const DASH: f32 = 6.0;
@@ -411,6 +422,8 @@ pub struct Settings {
     pub grid_cell: Option<f32>,
     /// The key of every control. Issue #36.
     pub keys: crate::keys::Keys,
+    /// The Data folder of a Foundry VTT install. Issue #16.
+    pub foundry_data: Option<std::path::PathBuf>,
 }
 
 impl Settings {
@@ -502,6 +515,9 @@ struct Select {
     /// A drag of a number runs over many frames, and every one of them
     /// goes back to this one state, so the whole drag is one step.
     opened_ink: Option<Stroke>,
+    /// The light as it stood when the DM took hold of a field in its
+    /// panel, so a drag of a number is one step. Issue #16.
+    opened_sight: Option<Node>,
     /// The map as it stood when the DM took hold of a field in the panel.
     ///
     /// A drag of a number runs over many frames, and every one of them
@@ -671,10 +687,12 @@ enum BoxDrag {
 /// center of its own, so what it stood as is the whole stroke. Issue #69.
 #[derive(Debug, Clone)]
 enum Drag {
-    /// Every asset and drawing the DM holds, as each one stood.
+    /// Every asset, drawing, wall set and light the DM holds, as each
+    /// one stood.
     Move {
         was: Vec<Asset>,
         ink: Vec<Stroke>,
+        sight: Vec<Node>,
         start_cursor: (f64, f64),
     },
     /// A rectangle over the canvas that picks what it covers.
@@ -684,12 +702,14 @@ enum Drag {
     Scale {
         starts: Vec<Placed>,
         ink: Vec<Stroke>,
+        sight: Vec<Node>,
         pivot: (f64, f64),
         start_cursor: (f64, f64),
     },
     Rotate {
         starts: Vec<Placed>,
         ink: Vec<Stroke>,
+        sight: Vec<Node>,
         pivot: (f64, f64),
         start_cursor: (f64, f64),
     },
@@ -776,6 +796,10 @@ impl DmUi {
     }
 
     /// Runs one UI frame: the rail, the settings and the Select tool.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the order the DM window paints in reads best in one place"
+    )]
     pub fn run(&mut self, pane: &Pane, mut frame: Frame<'_>) -> UiOutput {
         let raw_input = self.state.take_egui_input(&pane.window);
         let ctx = self.state.egui_ctx().clone();
@@ -819,7 +843,7 @@ impl DmUi {
                 // tool never writes over what it put back this frame.
                 let dragging = select.drag.is_some() || table.drag.is_some() || draw.busy();
                 edited |= undo_keys(ui, &mut frame, dragging);
-                let outline = ui.painter().add(egui::Shape::Noop);
+                let [marks, outline] = [(); 2].map(|()| ui.painter().add(egui::Shape::Noop));
                 edited |= match *tool {
                     Tool::Select => {
                         select_tool(ui, select, &mut frame, viewport, zoom_goes_to, tokens)
@@ -829,6 +853,7 @@ impl DmUi {
                         table_tool(ui, table, &mut frame, viewport, zoom_goes_to, tokens)
                     }
                 };
+                mark_sight(ui, &frame, rect, viewport, marks, tokens);
                 // The marker goes over the dim wash of the Table view, so
                 // it paints after the tools. Issues #43 and #44.
                 mark_tv_box(ui, &frame, rect, viewport, (*tool, outline), tokens);
@@ -919,6 +944,7 @@ impl DmUi {
         history.settle();
         self.select.opened = None;
         self.select.opened_ink = None;
+        self.select.opened_sight = None;
         self.table.opened = None;
     }
 
@@ -1195,6 +1221,7 @@ mod tests {
     fn settings() -> Settings {
         Settings {
             keys: crate::keys::Keys::default(),
+            foundry_data: None,
             theme: theme::Mode::default(),
             language: crate::text::DEFAULT.to_owned(),
             ink_color: [0, 0, 0, 255],
