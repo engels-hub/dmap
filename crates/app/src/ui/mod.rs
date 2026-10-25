@@ -823,7 +823,7 @@ impl DmUi {
     /// Feeds a window event to egui. Returns `true` when egui consumed it.
     pub fn on_event(&mut self, pane: &Pane, event: &WindowEvent) -> bool {
         let response = self.state.on_window_event(&pane.window, event);
-        if response.repaint {
+        if response.repaint && asks_again(event) {
             pane.window.request_redraw();
         }
         response.consumed
@@ -1119,6 +1119,16 @@ pub fn render_pane(
     }
 }
 
+/// Whether egui's call for a repaint after `event` may ask for a redraw.
+///
+/// egui calls for a repaint after every redraw. The redraw that follows
+/// would then ask for the next one, and the window would draw with no
+/// end while the DM does nothing. The frame itself says, through its
+/// `repaint`, when egui needs another one. Issue #40.
+fn asks_again(event: &WindowEvent) -> bool {
+    !matches!(event, WindowEvent::RedrawRequested)
+}
+
 /// What one UI frame decided.
 #[derive(Debug)]
 #[expect(
@@ -1223,7 +1233,15 @@ fn painter_dashes(ui: &egui::Ui, line: &[egui::Pos2; 2], color: egui::Color32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Dialog, Paper, Press, Scenes, Settings, Tool, take_press, theme};
+    use super::{Dialog, Paper, Press, Scenes, Settings, Tool, asks_again, take_press, theme};
+    use egui_winit::winit::{dpi::PhysicalSize, event::WindowEvent};
+
+    #[test]
+    fn a_redraw_never_asks_for_the_next_one() {
+        assert!(!asks_again(&WindowEvent::RedrawRequested));
+        assert!(asks_again(&WindowEvent::Resized(PhysicalSize::new(10, 10))));
+        assert!(asks_again(&WindowEvent::Focused(true)));
+    }
 
     #[test]
     fn the_freeze_button_holds_the_tv_and_lets_it_go() {
