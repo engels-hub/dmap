@@ -20,10 +20,10 @@ pub use draw::{
 };
 pub use files::{copy_into_scene, store_in_scene};
 pub use tree::{
-    ancestors, asset_mut, assets_of, find, group_mut, group_names, group_selection, has_group,
-    ink_group, move_above, move_into, name_of, name_of_node, normalize, parent_of, path_to, prune,
-    push_into, reorder_all, share_parent, shown_mut, sight_mut, sight_of, stroke_mut, strokes_of,
-    take_node, ungroup,
+    ancestors, asset_mut, assets_of, children_of, find, group_mut, group_names, group_selection,
+    has_group, ink_group, move_above, move_into, name_of, name_of_node, normalize, parent_of,
+    path_to, prune, push_into, reorder_all, share_parent, shown_mut, sight_mut, sight_of,
+    stroke_mut, strokes_of, take_node, ungroup,
 };
 
 use serde::{Deserialize, Serialize};

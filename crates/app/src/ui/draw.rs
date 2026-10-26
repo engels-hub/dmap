@@ -10,13 +10,13 @@ use crate::camera::Camera;
 use crate::command::{Deed, Restructure, reshape};
 use crate::grid::Cells;
 use crate::scene::{Group, Node, NodeId, ROOT_ID, Scene};
-use crate::stroke::{Ink, Stroke};
+use crate::stroke::{Ink, Mix, Stroke};
 use crate::text;
 use crate::theme::{self, Tokens};
 
 use super::{
-    ERASER_REACH, FEET_PER_CELL, Frame, LABEL_GAP, LABEL_PAD, MIN_SHAPE, PEN_STEP, Pointer, View,
-    canvas_area,
+    ERASER_REACH, FEET_PER_CELL, Frame, LABEL_GAP, LABEL_PAD, MIN_SHAPE, Nib, PEN_STEP, Pointer,
+    View, canvas_area,
 };
 
 /// The Draw view's state between frames.
@@ -51,18 +51,20 @@ impl Draw {
 
 /// The Draw view on the canvas: the pen and the shapes. DESIGN.md 8.3.
 ///
-/// Returns `true` when the scene changed.
+/// `pen` says which square draws and how its strokes mix. The Light view
+/// runs this too, as its reveal brush. Returns `true` when the scene
+/// changed.
 pub(super) fn draw_tool(
     ui: &mut egui::Ui,
     draw: &mut Draw,
     frame: &mut Frame<'_>,
     viewport: (u32, u32),
     zoom_goes_to: &mut Option<bool>,
+    (nib, mix): (Nib, Mix),
 ) -> bool {
     let (_, view, pointer) = canvas_area(ui, frame, viewport, false, zoom_goes_to);
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     let at = pointer.pos.map(|pos| view.to_world(pos));
-    let nib = frame.settings.ink_nib;
     // A DM who picks another square in the middle of a gesture leaves the
     // last one behind. Without this the stroke stands under their hand for
     // ever: it draws on both screens, and the history waits on a hand that
@@ -152,13 +154,13 @@ pub(super) fn draw_tool(
                 at
             }],
             color: frame.settings.ink_color,
-            width: frame.settings.width_of(frame.settings.ink_mix),
+            width: frame.settings.width_of(mix),
             span: 0.0,
             // A new shape stands square with the grid. The turn handle
             // gives it an angle later. Issue #69.
             angle: 0.0,
             rule: frame.settings.ink_rule,
-            mix: frame.settings.ink_mix,
+            mix,
         });
     }
     if let (true, Some(at), Some(live)) = (pointer.down(), at, draw.live.as_mut()) {

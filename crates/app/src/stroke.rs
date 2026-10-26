@@ -280,6 +280,10 @@ pub enum Mix {
     /// lit it. The TV shows no ink of its own, and the DM sees a thin
     /// outline. A shape that closes reveals its inside too.
     Reveal,
+    /// Darkness the DM paints back: the map under the stroke goes dark
+    /// again, over the light of the lamps and over what an earlier
+    /// stroke revealed. A later reveal opens it once more.
+    Conceal,
 }
 
 impl Mix {
@@ -288,7 +292,13 @@ impl Mix {
         match self {
             Self::Blend => crate::text::mix_blend(),
             Self::Reveal => crate::text::mix_reveal(),
+            Self::Conceal => crate::text::mix_conceal(),
         }
+    }
+
+    /// Whether the stroke works on the darkness instead of the map.
+    pub fn fog(self) -> bool {
+        matches!(self, Self::Reveal | Self::Conceal)
     }
 }
 
@@ -307,6 +317,7 @@ impl Stroke {
         match self.mix {
             Mix::Blend => self.ink.name(),
             Mix::Reveal => crate::text::stroke_reveal(),
+            Mix::Conceal => crate::text::stroke_conceal(),
         }
     }
 

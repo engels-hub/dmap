@@ -271,7 +271,7 @@ pub(super) fn shortcuts_tab(
 ) {
     ui.spacing_mut().item_spacing.y = 0.0;
     let here = match tool {
-        Tool::Select => Group::Select,
+        Tool::Select | Tool::Light => Group::Select,
         Tool::Draw => Group::Draw,
         Tool::Table => Group::Table,
     };

@@ -73,8 +73,8 @@ Pick the TV display under **Settings > Table > Display**. Then add a map with **
 
 The toolbar at the bottom of the window comes in two boxes.
 
-- The left box holds the views: **Select**, **Draw** and **Table**. One of them is always on.
-- The right box holds **Scenes**, **Add map**, **Add light**, **Settings** and **Freeze**.
+- The left box holds the views: **Select**, **Draw**, **Light** and **Table**. One of them is always on.
+- The right box holds **Scenes**, **Add map**, **Settings** and **Freeze**.
 
 **History** sits in the bottom right corner. The **Objects** panel on the left shows the scene. The panel on the right belongs to the view or to what you hold.
 
@@ -153,13 +153,41 @@ Delete takes what you hold out of the scene. `Ctrl+Z` brings it all back, each n
 | Give up the measure | `Escape` |
 | Choose how a diagonal counts | Measure, in the panel: Euclidean, D&D 5e, Pathfinder or Manhattan |
 | Start a shape off the grid | Hold `Shift`, or turn "Start on the grid" off in the panel |
-| Reveal a part of the map in the dark | Mix, in the panel: Reveal. The players see the map under the stroke, and no ink. A rectangle, an ellipse or an effect reveals its inside. The reveal brush keeps its own width, from 0.25 in to 12 in. Walls that block sight stop a reveal, as they stop the eyes of the players |
 | Change a stroke you drew | Pick it in the Select view or in the Objects list. Its panel holds the color, the mix, the width and the size |
 | Lay a burst | Drag from its middle to its edge |
 | Lay a cone | Drag from its point out to where it ends. It ends as wide as it is long |
 | Lay a beam | Drag for the length and let go, then drag again for the width |
 
-A new stroke joins the Drawings group of the scene. The group goes when its last stroke goes, and the next stroke makes it again. The program keeps the color, the mix, the width, the last square you used and the way you count a diagonal. The next stroke takes them.
+A new stroke joins the Drawings group of the scene. The group goes when its last stroke goes, and the next stroke makes it again. The program keeps the color, the width, the last square you used and the way you count a diagonal. The next stroke takes them.
+
+## Light
+
+**Light** holds all that stops, gives or takes away light: walls, doors, lights, areas of darkness and the reveal brush. The row of tools at the top of its panel sets what a click on the canvas lays. The row takes the name of the tool that is on.
+
+| Action | Control |
+|---|---|
+| Lay a wall | Pick the Wall tool. Click where it starts. Each next click lays one more length from the last point |
+| End the wall | Double-click, right-click or press `Escape`. A click on the first point closes it |
+| Lay a door | Pick the Door tool, then lay it as a wall |
+| Lay off the grid | Hold `Shift`. A point snaps to the end of a wall, then to a crossing of the grid |
+| Move a corner | Drag the square at the end of a wall. Every wall that meets there moves with it |
+| Go on from a wall | Click the end of the wall, then click the next points |
+| Change a wall | Click it. The panel sets Wall, Door or Secret, Open, Stops light and Stops sight |
+| Delete a wall | Click it and press `Delete`, or press Delete in the panel |
+| Put a light | Pick the Light tool, then click where it goes. It gives 4 cells of bright light and 8 cells of dim light, as a torch does |
+| Lay an area of darkness | Pick the Darkness tool, then drag a box |
+| Move a light or an area | Drag the light, or drag the outline of the area |
+| Change a light or an area | Click it. The panel sets the reach, the color and the cone of a light, and the darkness and the fill of an area |
+| Delete a light or an area | Click it and press `Delete`, or press Delete in the panel |
+| Reveal a part of the map in the dark | Pick the Reveal or conceal tool, set Mix to Reveal, then draw. The players see the map under the stroke, and no ink. A rectangle, an ellipse or an effect reveals its inside, up to its outline |
+| Paint the darkness back | The same, with Mix on Conceal. The map under the stroke goes fully dark, over lamps and over earlier reveals |
+| Set how dark the scene is | Scene darkness, at the bottom of the panel |
+
+A new wall joins the wall set of the marked group. A group with no wall set gets one. A new light and a new area join the marked group too. Each length of wall, each move and each change is one step. `Ctrl+Z` takes back the last one.
+
+The brush keeps its own shape and its own width, from 0.25 in to 12 in. The width counts for the pen and the line only. Walls that block sight stop a reveal, as they stop the eyes of the players. Walls do not stop a conceal. The last stroke over a place decides it, so a reveal opens a concealed place again. Each stroke joins the Drawings group. Its panel in the Select view can change its mix.
+
+Only Wall and Door take hold of a wall. With another square, a press on a wall lays what that square lays.
 
 ## Table
 
@@ -324,13 +352,13 @@ The **Light** tab holds the light of the lamps:
 - **Show on** picks the screens that show the light: both screens, the DM screen only, or the TV only.
 - **DM sees through** sets how much of the darkness the DM screen removes, so you see the map under it. The TV keeps all of the darkness. It starts at 70 %. A blue hatch marks all that the players cannot see.
 
-**Add light** in the toolbar puts a white light in the middle of the view. It gives 4 cells of bright light and 8 cells of dim light, as a torch does. The program picks the light, so a drag moves it to its place. Its panel sets the reach, the color and the cone. An undo takes the light back out.
+The **Light** view puts lights down. See [Light](#light). The panel of a light sets the reach, the color and the cone. An undo takes the light back out.
 
-A scene with no light, no area of darkness and no revealed stroke shows its maps as they are. Thus a plain map never goes dark. The light falls on the maps only. The grid and the drawings stay visible over the dark.
+A scene with no light, no area of darkness and no revealed stroke shows its maps as they are. A concealed stroke stays dark there. Thus a plain map never goes dark. The light falls on the maps only. The grid and the drawings stay visible over the dark.
 
 ### Areas of darkness
 
-An area of darkness makes some maps darker than the rest of the scene, such as a cellar under a sunlit yard. Pick a map, or pick some objects, and press **Add darkness**. The area covers what you picked and joins its group. A light reveals the map under the area.
+An area of darkness makes some maps darker than the rest of the scene, such as a cellar under a sunlit yard. Pick a map, or pick some objects, and press **Add darkness**. The area covers what you picked and joins its group. The **Light** view lays an area as a box that you drag. A light reveals the map under the area.
 
 The panel of an area sets its **Darkness** and its **Fill**. The fill is what the area shows where no light reaches: black, clouds, smoke, mist or stars. The program makes each fill on the GPU, so the fills need no image files. The DM window shows the outline of each area as a dashed line. Press the outline to pick the area.
 

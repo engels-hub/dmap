@@ -433,11 +433,16 @@ pub(super) fn properties_panel(
     frame_box: &mut bool,
     tokens: Tokens,
 ) -> bool {
-    let Views { select, table } = views;
+    let Views {
+        select,
+        table,
+        gaffer,
+    } = views;
     let screen = ctx.content_rect();
     let held = match tool {
         Tool::Table => Held::TvBox,
         Tool::Draw => Held::Draw,
+        Tool::Light => Held::Gaffer,
         Tool::Select => match select
             .only()
             .map(|id| (id, crate::scene::find(frame.scene, id)))
@@ -483,6 +488,9 @@ pub(super) fn properties_panel(
                 box_asked = box_properties(ui, frame.scene.tv_box, tv_width, frame_box, tokens);
             }
             Held::Draw => draw_properties(ui, frame.settings, tokens),
+            Held::Gaffer => {
+                edited = super::light::light_view_properties(ui, gaffer, select, frame, tokens);
+            }
             Held::Map(id, _) => edited = map_properties(ui, *id, select, frame),
             Held::Stroke(id, _) => edited = stroke_properties(ui, *id, select, frame),
             Held::Light(id, _) => edited = light_properties(ui, *id, select, frame),
@@ -511,6 +519,9 @@ enum Held {
     TvBox,
     /// The pen, the shapes, the eraser and the ruler. DESIGN.md 8.3.
     Draw,
+    /// The Light view: what the next click lays, or the wall the DM
+    /// picked.
+    Gaffer,
     /// One stroke the DM drew, by name, with what it is called.
     Stroke(NodeId, String),
     /// One map, by id, with the name of its file. DESIGN.md 8.1.
@@ -529,6 +540,7 @@ impl Held {
         match self {
             Self::TvBox => text::panel_box_title(),
             Self::Draw => text::panel_draw_title(),
+            Self::Gaffer => text::tool_light(),
             Self::Stroke(_, name)
             | Self::Map(_, name)
             | Self::Light(_, name)
@@ -612,6 +624,7 @@ fn group_field(ui: &mut egui::Ui, id: NodeId, scene: &Scene) -> Option<NodeId> {
 pub(super) struct Views<'a> {
     pub(super) select: &'a mut Select,
     pub(super) table: &'a mut Table,
+    pub(super) gaffer: &'a mut super::light::Gaffer,
 }
 
 /// Writes what every measure and every area of effect says about itself.
@@ -670,7 +683,6 @@ fn draw_properties(ui: &mut egui::Ui, settings: &mut Settings, tokens: Tokens) {
     );
     widget::row_label(ui, text::panel_draw_color());
     widget::color_swatch(ui, &mut settings.ink_color);
-    mix_row(ui, &mut settings.ink_mix);
     if settings.ink_nib == Nib::Ruler {
         widget::row_label(ui, text::ruler_rule());
         let cells = settings.cells();
@@ -692,10 +704,15 @@ fn draw_properties(ui: &mut egui::Ui, settings: &mut Settings, tokens: Tokens) {
     if widget::checkbox(ui, &mut snap, text::panel_draw_snap()).clicked() {
         settings.ink_snap = snap;
     }
-    // The pen and the reveal brush each keep their own width, because a
-    // line and a corridor differ by a factor of twenty.
+    width_row(ui, settings, Mix::Blend);
+}
+
+/// The Width row of the pen or of the reveal brush.
+///
+/// Each one keeps its own width, because a line and a corridor differ by
+/// a factor of twenty. Issue #65.
+pub(super) fn width_row(ui: &mut egui::Ui, settings: &mut Settings, mix: Mix) {
     widget::row_label(ui, text::panel_draw_width());
-    let mix = settings.ink_mix;
     let mut width = settings.width_of(mix);
     let shown = text::panel_draw_width_value(format_args!("{width:.2}"));
     if widget::slider(ui, &mut width, width_range(mix), PANEL_SLIDER, &shown)
@@ -703,7 +720,7 @@ fn draw_properties(ui: &mut egui::Ui, settings: &mut Settings, tokens: Tokens) {
     {
         match mix {
             Mix::Blend => settings.ink_width = width,
-            Mix::Reveal => settings.reveal_width = width,
+            Mix::Reveal | Mix::Conceal => settings.reveal_width = width,
         }
     }
 }
@@ -712,29 +729,49 @@ fn draw_properties(ui: &mut egui::Ui, settings: &mut Settings, tokens: Tokens) {
 /// Returns `true` when the DM picked the other one. Issue #65.
 fn mix_row(ui: &mut egui::Ui, mix: &mut Mix) -> bool {
     widget::row_label(ui, text::panel_draw_mix());
-    let choices = [Mix::Blend, Mix::Reveal].map(|one| (one, one.name()));
+    let choices = [Mix::Blend, Mix::Reveal, Mix::Conceal].map(|one| (one, one.name()));
     let changed = widget::segmented(ui, mix, &choices);
     widget::helper(ui, text::panel_draw_mix_helper());
     changed
 }
 
 /// The row of six squares that says what a drag draws. DESIGN.md 8.3.
-fn nib_row(ui: &mut egui::Ui, nib: &mut Nib, nibs: &[Nib], tokens: Tokens) {
+pub(super) fn nib_row(ui: &mut egui::Ui, nib: &mut Nib, nibs: &[Nib], tokens: Tokens) {
+    let squares: Vec<(Nib, Icon, &str)> = nibs
+        .iter()
+        .map(|one| (*one, one.glyph(), one.name()))
+        .collect();
+    square_row(ui, nib, &squares, tokens);
+}
+
+/// A row of squares with a glyph each, of which one is on.
+///
+/// The name of a square shows when the pointer rests on it. A press on a
+/// square turns it on. DESIGN.md 8.3.
+pub(super) fn square_row<T: Copy + PartialEq + std::hash::Hash + std::fmt::Debug>(
+    ui: &mut egui::Ui,
+    held: &mut T,
+    squares: &[(T, Icon, &str)],
+    tokens: Tokens,
+) {
     // One border holds the whole row and a dashed line stands between
     // each pair, as the views do in the toolbar. DESIGN.md 8.3 and 5.2.
-    let width = NIB_SQUARE * nibs.len() as f32;
+    let width = NIB_SQUARE * squares.len() as f32;
     let (whole, _) = ui.allocate_exact_size(egui::vec2(width, NIB_SQUARE), egui::Sense::hover());
     let inside = whole.shrink(1.0);
-    for (place, one) in nibs.iter().copied().enumerate() {
+    for (place, (one, glyph, name)) in squares.iter().copied().enumerate() {
         let square = egui::Rect::from_min_size(
             egui::pos2(whole.left() + place as f32 * NIB_SQUARE, whole.top()),
             egui::Vec2::splat(NIB_SQUARE),
         )
         .intersect(inside);
-        // The name of the nib, not its place, or the same square in two
-        // rows would take the same id.
-        let response = ui.interact(square, ui.id().with(("nib", one)), egui::Sense::click());
-        let on = *nib == one;
+        // The value of the square, not its place, or the same square in
+        // two rows would take the same id. The type goes in too: a field
+        // of no data hashes as its place in its enum, so the third shape
+        // and the third thing to lay would share one id.
+        let id = ui.id().with(("square", std::any::type_name::<T>(), one));
+        let response = ui.interact(square, id, egui::Sense::click());
+        let on = *held == one;
         if on {
             ui.painter().rect_filled(square, 0, tokens.raised);
             ui.painter().rect_filled(
@@ -748,20 +785,20 @@ fn nib_row(ui: &mut egui::Ui, nib: &mut Nib, nibs: &[Nib], tokens: Tokens) {
         } else if response.hovered() {
             ui.painter().rect_filled(square, 0, tokens.field);
         }
-        let response = response.on_hover_text(one.name());
+        let response = response.on_hover_text(name);
         icon::paint(
             ui.painter(),
-            one.glyph(),
+            glyph,
             square.center(),
             widget::SMALL_ICON,
             if on { tokens.accent } else { tokens.ink },
         );
         if response.clicked() {
-            *nib = one;
+            *held = one;
         }
         // The dash tells one square from the next without cutting the row
         // into six controls. DESIGN.md 5.2.
-        if place + 1 < nibs.len() {
+        if place + 1 < squares.len() {
             let edge = whole.left() + (place + 1) as f32 * NIB_SQUARE;
             let line = [
                 egui::pos2(edge, inside.top()),
@@ -862,7 +899,7 @@ fn stroke_properties(
 ///
 /// The reach reads in cells, as the reach of an area of effect does. A
 /// drag on a number is one step of the history. Issue #16.
-fn light_properties(
+pub(super) fn light_properties(
     ui: &mut egui::Ui,
     id: NodeId,
     select: &mut Select,
@@ -945,7 +982,7 @@ fn darken_button(ui: &mut egui::Ui, select: &mut Select, frame: &mut Frame<'_>) 
 /// The panel of one area of darkness: how dark it is, and its fill.
 ///
 /// A drag of the slider is one step of the history. Issue #20.
-fn darkness_properties(
+pub(super) fn darkness_properties(
     ui: &mut egui::Ui,
     id: NodeId,
     select: &mut Select,

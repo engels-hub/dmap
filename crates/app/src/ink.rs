@@ -206,13 +206,13 @@ impl InkLayer {
                 Mix::Blend => add_stroke(&mut mesh, stroke),
                 // A closed shape shows its edge. An open stroke shows
                 // nothing: the hatch of the fog already rims what it opens.
-                Mix::Reveal if stroke.ink.closes() => add_line(
+                Mix::Reveal | Mix::Conceal if stroke.ink.closes() => add_line(
                     &mut mesh,
                     &stroke.polyline(),
                     outline,
                     color_of(stroke.color),
                 ),
-                Mix::Reveal => {}
+                Mix::Reveal | Mix::Conceal => {}
             }
         }
         if mesh.is_empty() {
@@ -277,13 +277,17 @@ pub struct Eye {
     pub reach: f64,
 }
 
+/// The eye of a triangle that conceals. It names no eye at all.
+pub const CONCEAL: u32 = u32::MAX;
+
 /// What the strokes that reveal open, before the walls cut it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Reveal {
     /// The eyes, each one a point the walls hide parts from.
     pub eyes: Vec<Eye>,
-    /// The triangles, three points in a row, in world inches. Each point
-    /// names the eye that opens its triangle.
+    /// The triangles, three points in a row, in world inches, in the
+    /// order of the strokes. Each point names the eye that opens its
+    /// triangle, or [`CONCEAL`] for a triangle that closes it again.
     pub mesh: Vec<([f32; 2], u32)>,
 }
 
@@ -294,12 +298,36 @@ pub struct Reveal {
 /// brush as they stop sight. A shape that closes reveals its inside and
 /// sees from one point: the middle of a box or an ellipse, the middle of
 /// a burst, and the point a cone or a beam starts from.
+///
+/// A stroke that conceals takes the same shape and no eye, and its
+/// triangles keep their place among the others, so the last stroke over
+/// a point decides it.
 pub fn reveal_mesh(strokes: &[&Stroke]) -> Reveal {
     let mut reveal = Reveal::default();
-    for stroke in strokes.iter().filter(|stroke| stroke.mix == Mix::Reveal) {
+    for stroke in strokes.iter().filter(|stroke| stroke.mix.fog()) {
         let line = stroke.polyline();
         let half = (stroke.width / 2.0).max(0.0);
         let mut mesh = Vec::new();
+        if stroke.mix == Mix::Conceal {
+            // Darkness needs no eye: the walls do not stop the hand of
+            // the DM.
+            if stroke.ink.closes() {
+                add_fill(&mut mesh, &line, [1.0; 4]);
+            } else if half > 0.0 {
+                for center in along(&line, half * EYE_STEP) {
+                    add_disc(
+                        &mut mesh,
+                        [center.0 as f32, center.1 as f32],
+                        half as f32,
+                        [1.0; 4],
+                    );
+                }
+            }
+            reveal
+                .mesh
+                .extend(mesh.drain(..).map(|v| ([v[0], v[1]], CONCEAL)));
+            continue;
+        }
         let mut eye = |center: (f64, f64), reach: f64, mesh: &mut Vec<Vertex>| {
             let index = reveal.eyes.len() as u32;
             reveal.eyes.push(Eye { center, reach });
@@ -319,13 +347,13 @@ pub fn reveal_mesh(strokes: &[&Stroke]) -> Reveal {
                     f64::midpoint(first.1, last.1),
                 )
             };
+            // A shape works on what its outline holds and no further, so
+            // the DM sees on their screen just where it reaches.
             let reach = line
                 .iter()
                 .map(|at| (at.0 - center.0).hypot(at.1 - center.1))
-                .fold(0.0, f64::max)
-                + half;
+                .fold(0.0, f64::max);
             add_fill(&mut mesh, &line, [1.0; 4]);
-            add_line(&mut mesh, &line, half as f32, [1.0; 4]);
             eye(center, reach, &mut mesh);
             continue;
         }
@@ -594,7 +622,7 @@ mod tests {
         let reveal = reveal_mesh(&[&room]);
         assert_eq!(reveal.eyes.len(), 1);
         assert_eq!(reveal.eyes[0].center, (2.0, 1.0));
-        assert!((reveal.eyes[0].reach - (5.0_f64.sqrt() + 0.1)).abs() < 1e-9);
+        assert!((reveal.eyes[0].reach - 5.0_f64.sqrt()).abs() < 1e-9);
         // A burst sees from its middle, the first point.
         room.ink = Ink::Burst;
         assert_eq!(reveal_mesh(&[&room]).eyes[0].center, (0.0, 0.0));
@@ -607,5 +635,27 @@ mod tests {
         assert!(reveal_mesh(&[&line]).eyes.len() <= super::MOST_EYES + 1);
         line.mix = Mix::Blend;
         assert_eq!(reveal_mesh(&[&line]), super::Reveal::default());
+    }
+
+    #[test]
+    fn a_conceal_needs_no_eye_and_keeps_its_place_after_a_reveal() {
+        let mut open = stroke(&[(0.0, 0.0), (4.0, 0.0)], 2.0);
+        open.mix = Mix::Reveal;
+        let mut shut = open.clone();
+        shut.mix = Mix::Conceal;
+        let reveal = reveal_mesh(&[&open, &shut]);
+        assert_eq!(reveal.eyes.len(), 9);
+        let first = reveal
+            .mesh
+            .iter()
+            .position(|(_, eye)| *eye == super::CONCEAL)
+            .expect("the conceal has triangles");
+        // Every triangle of the conceal comes after those of the reveal.
+        assert!(reveal.mesh[..first].iter().all(|(_, eye)| *eye < 9));
+        assert!(
+            reveal.mesh[first..]
+                .iter()
+                .all(|(_, eye)| *eye == super::CONCEAL)
+        );
     }
 }

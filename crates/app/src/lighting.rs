@@ -29,7 +29,7 @@ use egui_wgpu::wgpu;
 use serde::{Deserialize, Serialize};
 
 use crate::camera::Camera;
-use crate::ink::Reveal;
+use crate::ink::{CONCEAL, Reveal};
 use crate::scene::{Audience, Node, Scene};
 use crate::sight::{Darkness, Fill, Light, Wall};
 
@@ -154,8 +154,12 @@ pub struct Input {
     /// reveal come after them.
     lamps: usize,
     /// The triangles the strokes that reveal cut out of the darkness: x,
-    /// y, and the row of the eye that opens them.
+    /// y, the row of the eye that opens them, and 1 for a triangle that
+    /// conceals instead.
     reveal: Vec<[f32; 4]>,
+    /// Whether the strokes that conceal are all the scene holds, so the
+    /// rest of the map shows as it is.
+    plain: bool,
 }
 
 /// The most rows the shadow map holds, lamps and eyes together. A texture
@@ -225,7 +229,8 @@ pub fn gather(
             _ => None,
         })
         .collect();
-    if all.is_empty() && areas.is_empty() && reveal.eyes.is_empty() {
+    let plain = all.is_empty() && areas.is_empty() && reveal.eyes.is_empty();
+    if plain && reveal.mesh.is_empty() {
         return None;
     }
     let lights: Vec<&Light> = all
@@ -278,8 +283,11 @@ pub fn gather(
     let reveal = reveal
         .mesh
         .iter()
-        .filter(|(_, eye)| (*eye as usize) < eyes)
-        .map(|(at, eye)| [at[0], at[1], f32::from_bits(lamps as u32 + eye), 0.0])
+        .filter(|(_, eye)| *eye == CONCEAL || (*eye as usize) < eyes)
+        .map(|(at, eye)| match *eye {
+            CONCEAL => [at[0], at[1], 0.0, f32::from_bits(1)],
+            eye => [at[0], at[1], f32::from_bits(lamps as u32 + eye), 0.0],
+        })
         .collect();
     // The areas keep the order of the tree, so the last one that holds a
     // point is the one on top there.
@@ -296,6 +304,7 @@ pub fn gather(
         fills,
         lamps,
         reveal,
+        plain,
     })
 }
 
@@ -471,11 +480,12 @@ struct View {
 @group(0) @binding(3) var<storage, read> zones: array<Zone>;
 @group(0) @binding(4) var lamp_map: texture_2d<f32>;
 @group(0) @binding(5) var lamp_sampler: sampler;
-/// One point of a reveal triangle, and the row of the eye that opens it.
+/// One point of a reveal triangle, the row of the eye that opens it, and
+/// 1 when the triangle conceals instead.
 struct Spot {
     at: vec2<f32>,
     eye: u32,
-    pad: u32,
+    hide: u32,
 };
 
 @group(0) @binding(6) var<storage, read> reveal: array<Spot>;
@@ -658,6 +668,7 @@ fn fs_lamps(lamp_in: Lamp) -> @location(0) vec4<f32> {
 struct Opening {
     @builtin(position) at: vec4<f32>,
     @location(0) @interpolate(flat) eye: u32,
+    @location(1) @interpolate(flat) hide: u32,
 };
 
 /// The reveal pass draws the triangles of the strokes that reveal onto
@@ -667,20 +678,34 @@ fn vs_reveal(@builtin(vertex_index) v: u32) -> Opening {
     let spot = reveal[v];
     let pixel = (spot.at - view.center) * view.pixels_per_inch + view.viewport * 0.5;
     let clip = pixel / view.viewport * 2.0 - 1.0;
-    return Opening(vec4<f32>(clip.x, -clip.y, 0.0, 1.0), spot.eye);
+    return Opening(vec4<f32>(clip.x, -clip.y, 0.0, 1.0), spot.eye, spot.hide);
 }
 
-/// A triangle opens what its eye sees past the walls. Where triangles
-/// overlap, the mask keeps the most.
+/// A triangle opens what its eye sees past the walls. The red channel of
+/// the mask holds what is open, the green one what is concealed.
+///
+/// The mask blends as alpha over what is there, in the order of the
+/// strokes. A reveal of strength `s` takes `s` of the red and lets go of
+/// `s` of the green. A triangle that conceals sets the green and clears
+/// the red.
 @fragment
 fn fs_reveal(opening: Opening) -> @location(0) vec4<f32> {
+    if (opening.hide == 1u) {
+        return vec4<f32>(0.0, 1.0, 0.0, 1.0);
+    }
     let away = world_of(opening.at) - lights[opening.eye].center;
-    return vec4<f32>(sight(opening.eye, away, length(away)));
+    let seen = sight(opening.eye, away, length(away));
+    return vec4<f32>(seen, 0.0, 0.0, seen);
 }
 
 /// 1 where a stroke reveals the screen pixel `at`, else 0.
 fn revealed(at: vec4<f32>) -> f32 {
     return textureLoad(reveal_mask, vec2<u32>(at.xy), 0).r;
+}
+
+/// 1 where a stroke conceals the screen pixel `at`, else 0.
+fn concealed(at: vec4<f32>) -> f32 {
+    return textureLoad(reveal_mask, vec2<u32>(at.xy), 0).g;
 }
 
 /// The lamp light at the screen pixel `at`, from the lamp pass.
@@ -693,9 +718,12 @@ fn lamps_near(at: vec4<f32>) -> vec3<f32> {
 @fragment
 fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let world = world_of(at);
-    let darkness = darkness_at(world, zone_at(world));
+    // A stroke that conceals makes the map fully dark, and puts out the
+    // lamps there too.
+    let hide = concealed(at);
+    let darkness = mix(darkness_at(world, zone_at(world)), 1.0, hide);
     // A stroke that reveals lights the map in full, as a bright lamp does.
-    let lit = lamps_near(at) + revealed(at);
+    let lit = lamps_near(at) * (1.0 - hide) + revealed(at);
     let players = min(view.ambient.rgb * (1.0 - darkness) + lit, vec3<f32>(1.0));
     if (view.marks < 0.5) {
         return vec4<f32>(linear(players), 1.0);
@@ -802,7 +830,7 @@ fn fs_fill(piece: Patch) -> @location(0) vec4<f32> {
     if (zone != piece.zone) {
         discard;
     }
-    let lit = lamps_near(at);
+    let lit = lamps_near(at) * (1.0 - concealed(at));
     let light = min(max(max(max(lit.r, lit.g), lit.b), revealed(at)), 1.0);
     let cover = zones[zone].darkness * view.keep * (1.0 - light);
     return vec4<f32>(linear(pattern(zones[zone].fill, world)), cover);
@@ -989,7 +1017,15 @@ impl LightLayer {
             self.mask = (mask_texture(device, full), full);
             self.regroup(device);
         }
-        let [r, g, b] = mood.ambient.map(|c| f32::from(c) / 255.0);
+        // A scene that only conceals keeps the rest of its map as it is.
+        let ([r, g, b], darkness) = if input.plain {
+            ([1.0; 3], 0.0)
+        } else {
+            (
+                mood.ambient.map(|c| f32::from(c) / 255.0),
+                mood.darkness.clamp(0.0, 1.0) as f32,
+            )
+        };
         // The block mixes floats and counts, in the order of `View`.
         let mut view = bytes(&[
             viewport.0 as f32,
@@ -1001,7 +1037,7 @@ impl LightLayer {
         for count in [input.lights.len(), SAMPLES as usize, input.zones.len()] {
             view.extend((count as u32).to_ne_bytes());
         }
-        view.extend(bytes(&[r, g, b, mood.darkness.clamp(0.0, 1.0) as f32]));
+        view.extend(bytes(&[r, g, b, darkness]));
         let marks = if marks { 1.0 } else { 0.0 };
         view.extend(bytes(&[keep.clamp(0.0, 1.0) as f32, marks, 0.0, 0.0]));
         queue.write_buffer(&self.view, 0, &view);
@@ -1298,11 +1334,6 @@ fn pipelines(
         dst_factor: wgpu::BlendFactor::One,
         operation: wgpu::BlendOperation::Add,
     };
-    let most = wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Max,
-    };
     let lamp_target = wgpu::ColorTargetState {
         format: LAMP_FORMAT,
         blend: Some(wgpu::BlendState {
@@ -1318,6 +1349,8 @@ fn pipelines(
         light_layout,
         lamp_target,
     );
+    // Each triangle lies over the ones before it, so the last stroke over
+    // a point decides it. See `fs_reveal`.
     let reveal_pipeline = pipeline(
         device,
         LIGHT_SHADER,
@@ -1325,10 +1358,7 @@ fn pipelines(
         light_layout,
         wgpu::ColorTargetState {
             format: MASK_FORMAT,
-            blend: Some(wgpu::BlendState {
-                color: most,
-                alpha: most,
-            }),
+            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
             write_mask: wgpu::ColorWrites::ALL,
         },
     );
@@ -1468,8 +1498,9 @@ fn lamp_texture(device: &wgpu::Device, size: (u32, u32)) -> wgpu::TextureView {
     target_texture(device, "lamps", LAMP_FORMAT, size)
 }
 
-/// The format of the reveal mask: one channel, 0 or 1.
-const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+/// The format of the reveal mask: red for what is open, green for what
+/// is concealed, each from 0 to 1.
+const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Unorm;
 
 fn mask_texture(device: &wgpu::Device, size: (u32, u32)) -> wgpu::TextureView {
     target_texture(device, "reveal mask", MASK_FORMAT, size)
@@ -1721,5 +1752,19 @@ mod tests {
         let plain = scene(Vec::new());
         let input = gather(&plain, Audience::Tv, LOOK, VIEW, &reveal).unwrap();
         assert_eq!((input.lamps, input.lights.len()), (0, 1));
+        assert!(!input.plain);
+    }
+
+    #[test]
+    fn a_conceal_alone_draws_and_leaves_the_rest_of_the_map_as_it_is() {
+        let conceal = Reveal {
+            eyes: Vec::new(),
+            mesh: vec![([0.0, 0.0], crate::ink::CONCEAL); 3],
+        };
+        let plain = scene(Vec::new());
+        let input = gather(&plain, Audience::Tv, LOOK, VIEW, &conceal).unwrap();
+        assert!(input.plain);
+        assert_eq!(input.lights.len(), 0);
+        assert!(input.reveal.iter().all(|spot| spot[3].to_bits() == 1));
     }
 }

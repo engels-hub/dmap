@@ -48,6 +48,8 @@ pub enum Icon {
     CornerDownLeft,
     /// The Lucide `delete` glyph.
     Delete,
+    /// The Lucide `door-closed` glyph.
+    DoorClosed,
     /// The Lucide `eraser` glyph.
     Eraser,
     /// The Lucide `eye-off` glyph.
@@ -128,6 +130,7 @@ impl Icon {
             Self::Circle => &CIRCLE,
             Self::CornerDownLeft => &CORNER_DOWN_LEFT,
             Self::Delete => &DELETE,
+            Self::DoorClosed => &DOOR_CLOSED,
             Self::Eraser => &ERASER,
             Self::EyeOff => &EYE_OFF,
             Self::Eye => &EYE,
@@ -669,6 +672,59 @@ static DELETE: [Stroke; 3] = [
     },
     Stroke {
         points: &[(18.000, 9.000), (12.000, 15.000)],
+        closed: false,
+    },
+];
+
+/// The `door-closed` glyph.
+static DOOR_CLOSED: [Stroke; 3] = [
+    Stroke {
+        points: &[(10.000, 12.000), (10.010, 12.000)],
+        closed: false,
+    },
+    Stroke {
+        points: &[
+            (18.000, 20.000),
+            (18.000, 6.000),
+            (17.990, 5.804),
+            (17.962, 5.610),
+            (17.914, 5.419),
+            (17.848, 5.235),
+            (17.764, 5.057),
+            (17.663, 4.889),
+            (17.546, 4.731),
+            (17.414, 4.586),
+            (17.269, 4.454),
+            (17.111, 4.337),
+            (16.943, 4.236),
+            (16.765, 4.152),
+            (16.581, 4.086),
+            (16.390, 4.038),
+            (16.196, 4.010),
+            (16.000, 4.000),
+            (8.000, 4.000),
+            (7.804, 4.010),
+            (7.610, 4.038),
+            (7.419, 4.086),
+            (7.235, 4.152),
+            (7.057, 4.236),
+            (6.889, 4.337),
+            (6.731, 4.454),
+            (6.586, 4.586),
+            (6.454, 4.731),
+            (6.337, 4.889),
+            (6.236, 5.057),
+            (6.152, 5.235),
+            (6.086, 5.419),
+            (6.038, 5.610),
+            (6.010, 5.804),
+            (6.000, 6.000),
+            (6.000, 20.000),
+        ],
+        closed: false,
+    },
+    Stroke {
+        points: &[(2.000, 20.000), (22.000, 20.000)],
         closed: false,
     },
 ];

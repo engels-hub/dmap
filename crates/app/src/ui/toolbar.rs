@@ -25,8 +25,6 @@ pub(super) enum Press {
     Scenes,
     /// Put a map on the canvas.
     AddMap,
-    /// Put a light in the middle of the view. Issue #65.
-    AddLight,
     /// Open the settings dialog.
     Settings,
     /// Hold what the TV shows, or let it go. Issue #76.
@@ -46,12 +44,12 @@ pub(super) fn toolbar(ui: &egui::Ui, tool: Tool, frozen: bool, tokens: Tokens) -
             Icon::MousePointer,
         ),
         (Press::View(Tool::Draw), text::tool_draw(), Icon::Pencil),
+        (Press::View(Tool::Light), text::tool_light(), Icon::Sun),
         (Press::View(Tool::Table), text::tool_table(), Icon::Monitor),
     ];
     let actions = [
         (Press::Scenes, text::tool_scenes(), Icon::Layers),
         (Press::AddMap, text::tool_add_map(), Icon::Plus),
-        (Press::AddLight, text::tool_add_light(), Icon::Sun),
         (
             Press::Settings,
             text::tool_settings(),
