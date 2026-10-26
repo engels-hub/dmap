@@ -78,6 +78,14 @@ impl Wall {
         )
     }
 
+    /// The same wall, with its end `end` moved to `to`.
+    pub fn with_end(self, end: End, to: (f64, f64)) -> Self {
+        match end {
+            End::A => Self { a: to, ..self },
+            End::B => Self { b: to, ..self },
+        }
+    }
+
     /// How far `at` lies from this segment, in inches.
     pub fn distance(&self, at: (f64, f64)) -> f64 {
         let (dx, dy) = (self.b.0 - self.a.0, self.b.1 - self.a.1);
@@ -89,6 +97,15 @@ impl Wall {
         };
         (at.0 - self.a.0 - t * dx).hypot(at.1 - self.a.1 - t * dy)
     }
+}
+
+/// One of the two ends of a wall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum End {
+    /// The end at `a`.
+    A,
+    /// The end at `b`.
+    B,
 }
 
 /// Every wall of one map, as one node in the tree.

@@ -355,8 +355,18 @@ impl Command for SetSight {
             many => text::history_maps_many(many.len()),
         };
         let what = match (self.before.as_slice(), self.after.as_slice()) {
+            ([Node::Walls(was)], [Node::Walls(now)]) if now.segments.len() > was.segments.len() => {
+                text::history_deed_add_wall()
+            }
+            ([Node::Walls(was)], [Node::Walls(now)]) if now.segments.len() < was.segments.len() => {
+                text::history_deed_delete_wall()
+            }
+            ([Node::Walls(was)], [Node::Walls(now)])
+                if same_ends(was, now) && opened(was) == opened(now) =>
+            {
+                text::history_deed_change()
+            }
             ([Node::Walls(was)], [Node::Walls(now)]) if same_ends(was, now) => {
-                let opened = |walls: &Walls| walls.segments.iter().filter(|w| w.is_open()).count();
                 if opened(now) > opened(was) {
                     text::history_deed_open_door()
                 } else {
@@ -370,6 +380,11 @@ impl Command for SetSight {
         };
         Note::new(what, subject, String::new())
     }
+}
+
+/// How many doors of a wall set stand open.
+fn opened(walls: &Walls) -> usize {
+    walls.segments.iter().filter(|wall| wall.is_open()).count()
 }
 
 /// Whether two wall sets stand in the same place, so only a door changed.
@@ -516,6 +531,8 @@ pub enum Deed {
     AddDarkness,
     /// A light joined the scene. Issue #65.
     AddLight,
+    /// A wall set joined the scene with its first wall.
+    AddWalls,
     /// A group joined the tree.
     NewGroup,
     /// A group went, and what it held stayed.
@@ -543,7 +560,8 @@ impl Deed {
             Self::AddMap => text::history_deed_add_map(),
             Self::Import => text::history_deed_import(),
             Self::AddDarkness => text::panel_darkness_add(),
-            Self::AddLight => text::tool_add_light(),
+            Self::AddLight => text::history_deed_add_light(),
+            Self::AddWalls => text::history_deed_add_wall(),
             Self::NewGroup => text::history_deed_new_group(),
             Self::Ungroup => text::history_deed_ungroup(),
             Self::MoveInList => text::history_deed_move_in_list(),

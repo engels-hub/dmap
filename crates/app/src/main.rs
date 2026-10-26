@@ -385,7 +385,7 @@ impl Running {
                 reveal_width: config.reveal_width,
                 ink_nib: config.ink_nib,
                 ink_rule: config.ink_rule,
-                ink_mix: config.ink_mix,
+                reveal_nib: config.reveal_nib,
                 ink_snap: config.ink_snap,
                 ui_scale: crate::theme::clamp_scale(config.ui_scale),
                 grid_kind: config.grid_kind,
@@ -1009,7 +1009,7 @@ impl Running {
         config.reveal_width = self.settings.reveal_width;
         config.ink_nib = self.settings.ink_nib;
         config.ink_rule = self.settings.ink_rule;
-        config.ink_mix = self.settings.ink_mix;
+        config.reveal_nib = self.settings.reveal_nib;
         config.ink_snap = self.settings.ink_snap;
         config.ui_scale = self.settings.ui_scale;
         config.grid_kind = self.settings.grid_kind;

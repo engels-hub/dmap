@@ -74,8 +74,7 @@ Caution: a scale under 100 % takes a button under the 24 px floor of section 6. 
 - Set: Lucide (ISC license). Keep the license text in the repository.
 - Stroke 2 px on a 24 px grid. Round caps and joins. No fills. A star that is set is the one glyph with a fill.
 - Sizes: 18 px in the toolbar, in dialog navigation, in a close button and for the select chevron, 16 px in a panel, a menu and a list row, 14 px for a list twist and for the checkbox check, 13 px in a path line.
-- Glyphs in the toolbar: `mouse-pointer` (Select), `pencil` (Draw), `drafting-compass` (Edit), `monitor` (Table), `layers` (Scenes), `plus` (Add map), `sun` (Add light), `sliders-horizontal` (Settings).
-- Glyphs on the second bar of the Edit view: `brick-wall` (Walls), `door-open` (Doors), `sun` (Light), `cloud-fog` (Fog).
+- Glyphs in the toolbar: `mouse-pointer` (Select), `pencil` (Draw), `sun` (Light), `monitor` (Table), `layers` (Scenes), `plus` (Add map), `sliders-horizontal` (Settings).
 - Glyphs in a dialog: `monitor` (Table tab), `grid-3x3` (Grid tab), `sun` (Light tab), `keyboard` (Shortcuts tab), `info` (About tab), `x` (close), `chevron-down` (select), `check` (checkbox), `import` (Import).
 - Glyphs in a key chip: `arrow-big-up` (Shift), `space`, `corner-down-left` (Enter), `delete` (Backspace), `arrow-left`, `arrow-right`, `arrow-up`, `arrow-down`, `mouse-left`, `mouse-right`, `mouse` (the wheel and the middle button).
 - Glyphs in a panel or a menu: `folder`, `image`, `film`, `eye`, `eye-off`, `monitor-off`, `star`, `search`, `chevron-right`, `arrow-up`, `arrow-down`, `rotate-cw`, `flip-horizontal-2`, `flip-vertical-2`, `ruler`, `trash`, `minus` (line), `square`, `circle`, `eraser`, `play`, `pause`, `undo`, `triangle-alert`.
@@ -106,15 +105,14 @@ The canvas fills the window. The toolbar floats at the bottom. A panel floats at
 - The toolbar floats over the canvas, centered, 12 px from the bottom edge. Background `surface`, 1 px `ink` border, and the hard shadow of the theme.
 - Each entry is 52 px wide and 44 px high: icon 18 px, then the label 13 px, gap 3 px. An entry grows past 52 px when its label needs the room.
 - The toolbar comes in two boxes, 8 px apart. Each box takes the `surface` background, the 1 px `ink` border and the hard shadow.
-- The first box holds the views: Select, Draw, Edit, Table. It is a segmented control, so one of them is always on.
+- The first box holds the views: Select, Draw, Light, Table. It is a segmented control, so one of them is always on.
 - A dashed 1 px line stands between each pair of views, dash and gap 3 px. It takes the `ink` of the box, not the `rule` of section 6: a lighter line beside an `ink` border reads as a seam, not as a join.
 - The dash is what tells the two boxes apart. A solid line would give the views the same divided look as the buttons beside them, and the eye would read one long control in two halves.
-- The second box holds Scenes, Add map, Add light, Settings and Freeze. No rule gathers them into one control. The first four act at once.
-- Add light puts a white light in the middle of the DM view. It reaches 4 cells of bright light and 8 cells of dim light, as a torch does. The light joins the marked group, the Select view comes up, and the DM holds the light.
+- The second box holds Scenes, Add map, Settings and Freeze. No rule gathers them into one control. The first three act at once.
 - Freeze is the one entry of the box that stays on. It takes the `pause` glyph, and the `raised` background, the `accent` bar and the `accent` label of an active view while it stands. The TV holds the frame it had until the DM presses it again. Issue #76.
 - Two boxes say this louder than one rule between two groups. A DM reads the shape before the label.
 - The active entry has background `raised`, a 3 px `accent` bar on its top edge, and `accent` icon and label.
-- The Edit view brings a second bar of the same shape. It sits 8 px over the toolbar and holds Walls, Doors, Light and Fog. The views stay on the screen under it.
+- The Light view needs no second bar. Its panel picks what a click lays.
 
 ### 5.3 Panels and their places
 
@@ -172,7 +170,7 @@ Two rules hold for every control:
 | Segmented control | Segments 28 px high, 10 px horizontal padding, 1 px `rule` border, borders overlap by 1 px. The selected segment has `raised` background, `accent` text and a 3 px `accent` bar on its bottom edge. |
 | Checkbox | 18 px square, 1 px border (`ink` when checked, `rule` when not), `field` background, `check` glyph 14 px in `accent`. Label 14 px to the right, gap 8 px. A label too long for its row wraps under itself. |
 | Slider | Track 2 px `rule`, filled part `ink`, knob 14 px square with 1 px `ink` border and `field` background. Value text in `mute` to the right. |
-| Color swatch | 28 px square, 1 px `rule` border, the hex value 14 px to the right. A click opens the color popover. The popover gives a hue, a shade and an alpha. It gives no other mode. The Mix row of a stroke holds the choice between paint and reveal. The alpha stays above zero, so a stroke is always visible. |
+| Color swatch | 28 px square, 1 px `rule` border, the hex value 14 px to the right. A click opens the color popover. The popover gives a hue, a shade and an alpha. It gives no other mode. The Mix row of a stroke holds the choice between paint, reveal and conceal. The alpha stays above zero, so a stroke is always visible. |
 | Button | Height 28 px, 10 px horizontal padding, 1 px `ink` border, `field` background, 14 px text. A button in a panel is 26 px high. A button in a row is 24 px high. No button goes under 24 px. |
 | Key chip | Height 22 px, 8 px horizontal padding, 1 px `rule` border, `field` background, 14 px text. |
 | Search field | As text input, with a `search` glyph 16 px on the left and an 8 px gap. |
@@ -226,13 +224,15 @@ A row of six 28 px squares holds the pen, the line, the rectangle, the ellipse, 
 
 Under it stands the label Effects and a second row of three squares: the burst, the cone and the beam. They lie over the map instead of marking it, and a row of nine squares outgrows the panel.
 
-Rows below: Color as a swatch, Mix as a segmented control (Paint, Reveal) with a helper line, the checkbox "Start on the grid", Width as a slider, and Measure as a select when the ruler is on. Every one of these is a choice the program keeps, so the next stroke draws as the last one did.
+Rows below: Color as a swatch, the checkbox "Start on the grid", Width as a slider, and Measure as a select when the ruler is on. Every one of these is a choice the program keeps, so the next stroke draws as the last one did.
 
-A stroke on Reveal cuts its shape out of the darkness. The TV shows the map there and no ink. A rectangle, an ellipse and an effect reveal their inside too, and the DM screen shows their edge as a 1.5 px line in the color of the stroke. A pen line and a straight line show no ink on the DM screen. The edge of the fog hatch shows where they reach.
+The reveal brush is in the Light view. See 8.5. A stroke on Reveal cuts its shape out of the darkness. The TV shows the map there and no ink. A rectangle, an ellipse and an effect reveal their inside up to their outline, and the width does not widen them. The DM screen shows their edge as a 1.5 px line in the color of the stroke. A pen line and a straight line show no ink on the DM screen. The edge of the fog hatch shows where they reach.
 
 Walls that block sight stop a reveal. A closed door stops it, and an open door does not. A pen line and a straight line see from each point along their middle, so the brush stops at a wall it does not cross. A rectangle and an ellipse see from their middle. A burst sees from its middle, and a cone and a beam from the point they start from. The rules of the light in Settings do not change this, because a reveal stands for what the players see.
 
-The Width row of a reveal runs from 0.25 in to 12 in and starts at 2 in. The pen keeps its own width from 0.02 in to 0.5 in. A stroke that changes its mix takes the width of the other kind.
+A stroke on Conceal paints the darkness back. The map under it goes fully dark on the TV, over the light of the lamps and over an earlier reveal. Walls do not stop it, because it stands for the hand of the DM. It has no eye. The DM screen shows it as the reveal does. The strokes keep their order: the last reveal or conceal over a point decides it. A scene with conceal strokes and nothing else keeps the rest of its maps as they are.
+
+The Width row of a reveal or a conceal runs from 0.25 in to 12 in and starts at 2 in. The pen keeps its own width from 0.02 in to 0.5 in. A stroke that changes its mix takes the width of the other kind.
 
 A shape starts on a crossing of the grid while that checkbox is on, because a spell lands on a cell. `Shift` holds the snap off for one drag. The ruler takes `Alt` for that instead, because `Shift` there keeps the measure. A free line from the pen never snaps: it follows the hand.
 
@@ -250,7 +250,7 @@ An area of effect and a kept measure come away whole. Each one stands for one th
 
 **The panel of a stroke, in the Select view**
 
-A stroke the DM picked opens a panel of its own, headed with what it is: Pen, Line, Rectangle, Ellipse, Ruler, Burst, Cone or Beam. Rows: Color as a swatch, Mix as a segmented control (Paint, Reveal), Width as a slider, Reach in cells for an area of effect, Across in cells for a beam, and Measure as a select for a ruler. A new reach moves the far point along the line the shape already runs on, so the shape keeps its heading.
+A stroke the DM picked opens a panel of its own, headed with what it is: Pen, Line, Rectangle, Ellipse, Ruler, Burst, Cone or Beam. Rows: Color as a swatch, Mix as a segmented control (Paint, Reveal, Conceal), Width as a slider, Reach in cells for an area of effect, Across in cells for a beam, and Measure as a select for a ruler. A new reach moves the far point along the line the shape already runs on, so the shape keeps its heading.
 
 The footer of the panel holds Delete, as the footer of a map does.
 
@@ -301,6 +301,34 @@ A scene of a hundred thousand assets branches deep. Three things keep the list i
 The footer holds Group and New group, and a helper line that names the picked nodes.
 
 The `Delete` key takes every node the DM holds, from the list and from the canvas alike. A group goes with everything under it. The images stay in the scene folder: an undo has to bring a map back, and two assets may name one file. Issue #71. Two buttons that do not fit one row take a second row, and the list above them gives up the height. A language whose words run long never loses the end of one.
+
+### 8.5 Light panel, in the Light view
+
+The Light view holds all that stops, gives or takes away light: walls, doors, lights, areas of darkness and the reveal brush.
+
+The panel starts with a row of five 28 px squares as in 8.3, headed with the name of the square that is on: Wall (`brick-wall`), Door (`door-closed`), Light (`sun`), Darkness (`moon`) and Reveal or conceal (`eye`). The chosen square sets what a press on an empty part of the canvas lays. A press on a square drops the pick, so the panel shows the rows of that square.
+
+Walls and doors:
+
+- A click starts a wall. Each next click lays one more length from the last point. A dashed `accent` line runs from the last point to the pointer.
+- A double click, a right click or `Escape` ends the chain. A click on the first point of the chain closes it.
+- A point snaps to the end of a wall within 6 pt, then to a crossing of the grid. `Shift` holds both snaps off. A ring of `accent` marks where the point lands.
+- Each end of a wall shows a 6 px square of `surface` with a 1 px `ink` border. A drag of an end moves every wall that meets there. A click on an end without a drag starts a chain from it.
+- A click on a wall picks it. The picked wall draws thick in `accent`.
+- A new wall joins the wall set of the marked group. A group with no wall set gets one.
+- Each length of wall, each drag and each change is one step of the history.
+
+Lights and areas:
+
+- On Light, a click puts a white light at the pointer. It reaches 4 cells of bright light and 8 cells of dim light, as a torch does. The light joins the marked group, and the DM holds it.
+- Only Wall and Door show the squares at the wall ends, and only they take a press on a wall. On the other squares a press on a wall lays what the square lays.
+- On Darkness, a drag lays a box of darkness. The corners snap to the grid, and `Shift` holds the snap off. A dashed `accent` box follows the pointer. The area joins the marked group, and the DM holds it.
+- A press on a light or on the outline of an area picks it, on any square. A drag moves it. A ring of `accent` marks the picked light, and an `accent` line marks the picked area.
+- On Reveal or conceal, the canvas works as the Draw view does. Mix, a segmented control (Reveal, Conceal), sets whether a stroke reveals or conceals. The brush keeps its own square, its own width and the checkbox "Start on the grid". It offers the pen, the line, the rectangle, the ellipse, the burst, the cone and the beam.
+
+With nothing picked, the rows under the squares belong to the chosen square: a helper line, or the Mix, Shape, Width and helper rows of the brush. Scene darkness comes last, as a slider. It is the Darkness of Settings, Light tab, and a drag of it is one step of the history.
+
+A picked light shows its rows under the squares: Bright light and Dim light in cells, Color, Cone in degrees, and Delete. A picked area shows Darkness, Fill and Delete. The `Delete` key takes the picked light or area too. With a wall picked, the panel holds Kind as a segmented control (Wall, Door, Secret), the checkbox Open for a door, the checkboxes Stops light and Stops sight, and Delete. The `Delete` key takes the picked wall too.
 
 ## 9. Dialogs
 

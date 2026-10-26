@@ -177,9 +177,9 @@ pub struct Config {
     /// How a ruler counts its length. Issue #12.
     #[serde(default)]
     pub ink_rule: crate::stroke::Rule,
-    /// How the next stroke mixes with the canvas. Issue #65.
+    /// Which square the reveal brush of the Light view has on. Issue #65.
     #[serde(default)]
-    pub ink_mix: crate::stroke::Mix,
+    pub reveal_nib: crate::ui::Nib,
     /// Whether a shape starts on a crossing of the grid.
     ///
     /// A spell lands on a cell, so this starts on. `Shift` holds it off
@@ -278,7 +278,7 @@ impl Default for Config {
             reveal_width: default_reveal_width(),
             ink_nib: crate::ui::Nib::default(),
             ink_rule: crate::stroke::Rule::default(),
-            ink_mix: crate::stroke::Mix::default(),
+            reveal_nib: crate::ui::Nib::default(),
             ink_snap: yes(),
             paper_light: Paper::default(),
             paper_dark: Paper::default(),
@@ -560,7 +560,7 @@ mod tests {
             reveal_width: 3.0,
             ink_nib: crate::ui::Nib::Ellipse,
             ink_rule: crate::stroke::Rule::Fifth,
-            ink_mix: crate::stroke::Mix::Reveal,
+            reveal_nib: crate::ui::Nib::Rect,
             ink_snap: false,
             paper_light: Paper::default(),
             grid_kind: crate::grid::Kind::default(),

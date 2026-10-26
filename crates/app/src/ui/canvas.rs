@@ -663,7 +663,7 @@ fn ink_at(frame: &Frame<'_>, cursor: (f64, f64)) -> Option<NodeId> {
 ///
 /// A light is small and draws over the map, so it takes a press on its
 /// glyph before the map under it does.
-fn light_at(frame: &Frame<'_>, view: &View, cursor: (f64, f64)) -> Option<NodeId> {
+pub(super) fn light_at(frame: &Frame<'_>, view: &View, cursor: (f64, f64)) -> Option<NodeId> {
     let reach = points_in_inches(view, LIGHT_REACH);
     crate::scene::sight_order(frame.scene, crate::scene::Audience::Dm)
         .into_iter()
@@ -681,7 +681,7 @@ fn light_at(frame: &Frame<'_>, view: &View, cursor: (f64, f64)) -> Option<NodeId
 /// The wall set with a segment under the pointer, and which segment.
 ///
 /// `doors` keeps the search to doors. Issues #16 and #18.
-fn walls_at(
+pub(super) fn walls_at(
     frame: &Frame<'_>,
     view: &View,
     cursor: (f64, f64),
@@ -703,7 +703,7 @@ fn walls_at(
 ///
 /// The outline takes the press and the inside does not, so a press inside
 /// still reaches the map the area covers. Issue #20.
-fn darkness_at(frame: &Frame<'_>, view: &View, cursor: (f64, f64)) -> Option<NodeId> {
+pub(super) fn darkness_at(frame: &Frame<'_>, view: &View, cursor: (f64, f64)) -> Option<NodeId> {
     let reach = points_in_inches(view, WALL_REACH);
     crate::scene::sight_order(frame.scene, crate::scene::Audience::Dm)
         .into_iter()
@@ -756,22 +756,44 @@ const NEW_BRIGHT: f64 = 4.0;
 /// How far the dim light of a new light reaches, in cells.
 const NEW_DIM: f64 = 8.0;
 
-/// Puts a white light the size of a torch in the middle of the DM view.
-/// Returns `true` when it did. Issue #65.
+/// Puts a white light the size of a torch at `at`. Returns `true` when it
+/// did. Issue #65.
 ///
 /// The light joins the group `into`, the one the Objects list marks, and
 /// the DM holds it next, so a drag moves it to its place.
-pub(super) fn add_light(select: &mut Select, frame: &mut Frame<'_>, into: NodeId) -> bool {
+pub(super) fn add_light(
+    select: &mut Select,
+    frame: &mut Frame<'_>,
+    into: NodeId,
+    at: (f64, f64),
+) -> bool {
+    let name = crate::text::sight_light().to_owned();
+    add_sight(select, frame, into, (Deed::AddLight, name), |id| {
+        Node::Light(Light::new(id, at, NEW_BRIGHT, NEW_DIM))
+    })
+}
+
+/// Puts the node `make` gives into the group `into`, as one step named by
+/// `deed`. Returns `true` when it did.
+///
+/// A group that is gone gives way to the root. The DM holds the new node
+/// next.
+pub(super) fn add_sight(
+    select: &mut Select,
+    frame: &mut Frame<'_>,
+    into: NodeId,
+    (deed, name): (Deed, String),
+    make: impl FnOnce(NodeId) -> Node,
+) -> bool {
     let into = if matches!(crate::scene::find(frame.scene, into), Some(Node::Group(_))) {
         into
     } else {
         crate::scene::ROOT_ID
     };
     let id = frame.scene.next_id();
-    let light = Light::new(id, frame.camera.center, NEW_BRIGHT, NEW_DIM);
-    let name = crate::text::sight_light().to_owned();
-    let Some(change) = reshape(frame.scene, Deed::AddLight, name, |scene| {
-        crate::scene::push_into(scene, into, Node::Light(light));
+    let node = make(id);
+    let Some(change) = reshape(frame.scene, deed, name, |scene| {
+        crate::scene::push_into(scene, into, node);
     }) else {
         return false;
     };
@@ -807,7 +829,7 @@ fn box_of(frame: &Frame<'_>, id: NodeId) -> Option<((f64, f64), (f64, f64))> {
 }
 
 /// How many inches `points` of the window cover at this zoom.
-fn points_in_inches(view: &View, points: f64) -> f64 {
+pub(super) fn points_in_inches(view: &View, points: f64) -> f64 {
     points * view.ppp / view.camera.pixels_per_inch
 }
 

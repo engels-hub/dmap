@@ -10,6 +10,7 @@ mod canvas;
 mod dialog;
 mod draw;
 mod finder;
+mod light;
 mod marker;
 mod panel;
 mod shortcuts;
@@ -43,6 +44,7 @@ use canvas::{canvas_area, frame_tv_box, select_tool, table_tool, undo_keys};
 use dialog::{Dialog, history_dialog, scenes_dialog, settings_dialog};
 use draw::{Draw, draw_tool};
 use finder::{Finder, find_the_grid};
+use light::{Gaffer, light_tool};
 use marker::mark_tv_box;
 use panel::{Views, objects_panel, properties_panel, say_lengths};
 use sight::mark_sight;
@@ -204,7 +206,9 @@ const MAX_REVEAL_WIDTH: f64 = 12.0;
 fn width_range(mix: crate::stroke::Mix) -> std::ops::RangeInclusive<f64> {
     match mix {
         crate::stroke::Mix::Blend => MIN_INK_WIDTH..=MAX_INK_WIDTH,
-        crate::stroke::Mix::Reveal => MIN_REVEAL_WIDTH..=MAX_REVEAL_WIDTH,
+        crate::stroke::Mix::Reveal | crate::stroke::Mix::Conceal => {
+            MIN_REVEAL_WIDTH..=MAX_REVEAL_WIDTH
+        }
     }
 }
 
@@ -287,6 +291,8 @@ pub struct DmUi {
     tool: Tool,
     select: Select,
     draw: Draw,
+    /// The state of the Walls view.
+    gaffer: Gaffer,
     table: Table,
     scenes: Scenes,
     tree: Tree,
@@ -326,6 +332,11 @@ pub enum Tool {
     Select,
     /// Draw on the canvas with a pen, a shape, an eraser or a ruler.
     Draw,
+    /// Lay walls, doors, lights and dark areas, and reveal the map.
+    ///
+    /// A build before the view took its name called it the Walls view.
+    #[serde(alias = "walls")]
+    Light,
     /// Drag the box that decides what the TV shows.
     Table,
 }
@@ -424,8 +435,8 @@ pub struct Settings {
     pub ink_nib: Nib,
     /// How a ruler counts its length.
     pub ink_rule: Rule,
-    /// How the next stroke mixes with the canvas. Issue #65.
-    pub ink_mix: crate::stroke::Mix,
+    /// Which square the reveal brush of the Light view has on. Issue #65.
+    pub reveal_nib: Nib,
     /// How wide the next stroke that reveals is, in inches. Issue #65.
     pub reveal_width: f64,
     /// Whether a shape starts on a crossing of the grid.
@@ -461,7 +472,7 @@ impl Settings {
     pub fn width_of(&self, mix: crate::stroke::Mix) -> f64 {
         match mix {
             crate::stroke::Mix::Blend => self.ink_width,
-            crate::stroke::Mix::Reveal => self.reveal_width,
+            crate::stroke::Mix::Reveal | crate::stroke::Mix::Conceal => self.reveal_width,
         }
     }
 
@@ -809,6 +820,7 @@ impl DmUi {
             tool,
             select: Select::default(),
             draw: Draw::default(),
+            gaffer: Gaffer::default(),
             table: Table::default(),
             scenes: Scenes::default(),
             tree: Tree::default(),
@@ -877,6 +889,7 @@ impl DmUi {
         let mut scene = None;
         let select = &mut self.select;
         let draw = &mut self.draw;
+        let gaffer = &mut self.gaffer;
         let table = &mut self.table;
         let tool = &mut self.tool;
         let scenes = &mut self.scenes;
@@ -905,14 +918,31 @@ impl DmUi {
                 *frame_box = false;
                 // Undo works in every view, and before the tools, so a
                 // tool never writes over what it put back this frame.
-                let dragging = select.drag.is_some() || table.drag.is_some() || draw.busy();
+                let dragging =
+                    select.drag.is_some() || table.drag.is_some() || draw.busy() || gaffer.busy();
+                if *tool != Tool::Light {
+                    gaffer.rest();
+                }
                 edited |= undo_keys(ui, &mut frame, dragging);
                 let [marks, outline] = [(); 2].map(|()| ui.painter().add(egui::Shape::Noop));
                 edited |= match *tool {
                     Tool::Select => {
                         select_tool(ui, select, &mut frame, viewport, zoom_goes_to, tokens)
                     }
-                    Tool::Draw => draw_tool(ui, draw, &mut frame, viewport, zoom_goes_to),
+                    Tool::Draw => {
+                        let pen = (frame.settings.ink_nib, crate::stroke::Mix::Blend);
+                        draw_tool(ui, draw, &mut frame, viewport, zoom_goes_to, pen)
+                    }
+                    Tool::Light => light_tool(
+                        ui,
+                        gaffer,
+                        select,
+                        &mut frame,
+                        viewport,
+                        zoom_goes_to,
+                        tree.active,
+                        tokens,
+                    ),
                     Tool::Table => {
                         table_tool(ui, table, &mut frame, viewport, zoom_goes_to, tokens)
                     }
@@ -921,10 +951,15 @@ impl DmUi {
                 // The marker goes over the dim wash of the Table view, so
                 // it paints after the tools. Issues #43 and #44.
                 mark_tv_box(ui, &frame, rect, viewport, (*tool, outline), tokens);
-                say_lengths(ui, &frame, draw.live.as_ref(), viewport, tokens);
+                let live = draw.live.as_ref().or(gaffer.brush.live.as_ref());
+                say_lengths(ui, &frame, live, viewport, tokens);
             }
             edited |= objects_panel(ui.ctx(), &mut frame, select, tree, tokens);
-            let mut views = Views { select, table };
+            let mut views = Views {
+                select,
+                table,
+                gaffer,
+            };
             edited |= properties_panel(ui.ctx(), &mut frame, &mut views, *tool, frame_box, tokens);
             let asked = views.select.find_grid.take();
             edited |= find_the_grid(ui, finder, asked, &mut frame, tokens);
@@ -933,14 +968,7 @@ impl DmUi {
             }
             edited |= history_dialog(ui, history_open, &mut frame, tokens);
             if let Some(press) = toolbar(ui, *tool, *frozen, tokens) {
-                if press == Press::AddLight {
-                    // The DM picks the new light at once, so the Select
-                    // view comes up to move it.
-                    *tool = Tool::Select;
-                    edited |= canvas::add_light(views.select, &mut frame, tree.active);
-                } else {
-                    add_map |= take_press(press, tool, scenes, dialog, frozen);
-                }
+                add_map |= take_press(press, tool, scenes, dialog, frozen);
             }
             every_view_keys(ui, &frame.settings.keys, over, frozen, dialog);
             // A dialog over the canvas takes the keyboard too. egui holds
@@ -980,12 +1008,17 @@ impl DmUi {
         let save = self.dirty
             && self.select.drag.is_none()
             && self.table.drag.is_none()
-            && !self.draw.busy();
+            && !self.draw.busy()
+            && !self.gaffer.busy();
         if save {
             self.dirty = false;
         }
         UiOutput {
-            live: self.draw.live.clone(),
+            live: self
+                .draw
+                .live
+                .clone()
+                .or_else(|| self.gaffer.brush.live.clone()),
             add_map,
             // Both screens draw the canvas, so a setting that changes how
             // it looks reaches the TV as a change to the scene does.
@@ -1008,7 +1041,10 @@ impl DmUi {
     /// A drag of the canvas closes its own step when the button goes up, so
     /// this catches the fields of a panel and the keys.
     fn settle_history(&mut self, ctx: &egui::Context, history: &mut History) {
-        let dragging = self.select.drag.is_some() || self.table.drag.is_some() || self.draw.busy();
+        let dragging = self.select.drag.is_some()
+            || self.table.drag.is_some()
+            || self.draw.busy()
+            || self.gaffer.busy();
         if dragging || ctx.egui_is_using_pointer() || ctx.egui_wants_keyboard_input() {
             return;
         }
@@ -1019,6 +1055,7 @@ impl DmUi {
         self.table.opened = None;
         self.dialog.opened_box = None;
         self.dialog.opened_mood = None;
+        self.gaffer.opened_mood = None;
     }
 
     /// The tool the rail marks, so a new run opens on it.
@@ -1233,7 +1270,6 @@ fn take_press(
         Press::Settings => dialog.open = !dialog.open,
         Press::Freeze => *frozen = !*frozen,
         Press::AddMap => return true,
-        Press::AddLight => {}
     }
     false
 }
@@ -1323,7 +1359,7 @@ mod tests {
             ink_width: 0.1,
             ink_nib: super::Nib::default(),
             ink_rule: crate::stroke::Rule::default(),
-            ink_mix: crate::stroke::Mix::default(),
+            reveal_nib: super::Nib::default(),
             reveal_width: 2.0,
             ink_snap: true,
             ui_scale: theme::DEFAULT_SCALE,
